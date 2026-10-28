@@ -35,6 +35,8 @@ import random
 import argparse
 from collections import defaultdict
 
+import pickle
+
 import numpy as np
 
 from aslite.db import load_features, get_tags_db, get_neg_tags_db, DATA_DIR
@@ -99,7 +101,11 @@ def auc(a, b):
 
 
 def run(args):
-    features = load_features()
+    if args.features:
+        with open(args.features, 'rb') as f:
+            features = pickle.load(f)
+    else:
+        features = load_features()
     known = set(features['pids'])
     profiles = load_profiles(args.source)
     # only keep what we have features for, and profiles with enough likes to split
@@ -202,6 +208,8 @@ if __name__ == '__main__':
     r.add_argument('--alpha', type=float, default=None, help='concat: embedding block scale')
     r.add_argument('--fusion_w', type=float, default=None, help='fusion: weight of the embedding score')
     r.add_argument('--out', default='', help='also write results to this csv')
+    r.add_argument('--features', default='', help='features pickle to use instead of data/features.p, '
+                   'e.g. a copy made with another --embed_model, to compare embedding models')
 
     args = parser.parse_args()
     {'prepare-si': prepare_si, 'run': run}[args.cmd](args)

@@ -533,7 +533,7 @@ def _ranked(opt_rank, opt_q, opt_tags, opt_pid, opt_time_filter, opt_skip_have, 
     }
 
 
-def _notice(opt_rank, opt_tags, res, features_ok):
+def _notice(opt_rank, opt_pid, res, features_ok):
     """why a ranking is empty or incomplete because papers are still being processed"""
     if opt_rank not in SLOW_RANKS:
         return ''
@@ -542,6 +542,8 @@ def _notice(opt_rank, opt_tags, res, features_ok):
             "The recommendation index is still being built (this happens once, after the first start). "
             "Search and the newest papers work meanwhile; recommendations show up when it is done."
         )
+    if opt_rank == 'pid' and opt_pid not in get_papers():
+        return "There's no paper with this id here. Paste its arXiv link on the add page to fetch it."
     if not res['unindexed']:
         return ''
     if opt_rank == 'pid':
@@ -591,6 +593,11 @@ def main():
     # if a query is given, override rank to be of type "search"
     # this allows the user to simply hit ENTER in the search field and have the correct thing happen
     if opt_q:
+        # the search box sits in the same form as the ranking options, so it sends the current
+        # page's filters along: a search from "For you" would only find unrated papers of the
+        # last 30 days. they apply only when "search" is picked under ranking options
+        if request.args.get('rank') != 'search':
+            opt_time_filter, opt_skip_have = '', 'no'
         opt_rank = 'search'
 
     # C from the url, within sane bounds (0, nan or 1e12 would crash the fit or hold a worker
@@ -639,19 +646,22 @@ def main():
 
     # the requested page, rendered to just the information the UI needs
     papers, has_next, words = [], False, []
-    notice = _notice(opt_rank, opt_tags, res, features_ok) if res is not None else ''
+    notice = _notice(opt_rank, opt_pid, res, features_ok) if res is not None else ''
     if res is not None:
         start_index = (page_number - 1) * RET_NUM
         pids = res['pids'][start_index : start_index + RET_NUM]
         has_next = len(res['pids']) > start_index + RET_NUM
         found = get_papers().get_many(pids)
-        papers = [render_pid(pid, found[pid]) for pid in pids if pid in found]
-        for i, p in enumerate(papers):
-            p['weight'] = res['scores'][start_index + i]
+        for i, pid in enumerate(pids, start=start_index):
+            if pid not in found:
+                continue  # e.g. a paper gone from the database: skip it, keeping scores aligned
+            p = render_pid(pid, found[pid])
+            p['weight'] = res['scores'][i]
             if res['pct']:
-                p['pct'] = res['pct'][start_index + i]
+                p['pct'] = res['pct'][i]
             if res['for_tag']:
-                p['for_tag'] = res['for_tag'][start_index + i]  # picked by this tag (see _ranked_tags_in_turns)
+                p['for_tag'] = res['for_tag'][i]  # picked by this tag (see _ranked_tags_in_turns)
+            papers.append(p)
         words = res['words']
     if want_json:
         return {'papers': papers, 'words': words, 'has_next': has_next, 'notice': notice}
@@ -838,6 +848,8 @@ def _check_tag(tag):
         return "error, cannot use the protected tag '%s'" % (tag,)
     if not tag or len(tag) > 100:
         return "error, tags are 1-100 characters"
+    if tag in ('.', '..'):
+        return "error, a tag can't be named '.' or '..'"  # browsers rewrite them in /add/<pid>/<tag> urls
     if any(c in tag for c in '/,') or not tag.isprintable():
         # '/' can't go through the /add/<pid>/<tag> routes, ',' separates tags in ?tags=
         return "error, tags can't contain '/' or ','"
@@ -1020,7 +1032,7 @@ def import_papers():
         else:
             r[2] = 'not found on arXiv'
             r[1] = None
-        if r[1]:
+        if r[1] in have or r[1] in fetched:  # not the ones over the limit or not reached: they'd have no paper
             db.tag_paper(g.user, pid, tag)
     found = pdb.get_many([r[1] for r in results if r[1]])
     context['results'] = [

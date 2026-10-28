@@ -160,6 +160,7 @@ def test_import_papers(client, corpus, monkeypatch):
     r = client.post('/import', data={'text': '2502.00001\n2502.00002\n1706.03762', 'tag': 'reading'})
     assert 'over the daily fetch limit' in r.data.decode()
     assert calls[-1] == ['2502.00001']
+    assert '2502.00002' not in db.get_tags('alice')['reading']  # not fetched: not tagged either
 
 
 def test_rate_limits(client, corpus, monkeypatch):
@@ -363,3 +364,23 @@ def test_shared_links(client, corpus):
     db.set_public('bob', False)
     assert vision[0] not in client.get('/?u=bob&rank=saved&tags=cv').data.decode()
     assert client.post('/copy_tag', data={'owner': 'bob', 'tag': 'cv'}).status_code == 404
+
+
+def test_search_ignores_the_pages_filters(client, corpus):
+    login(client)
+    pid = next(iter(corpus))
+    client.post(f'/add/{pid}/cv')
+    title = corpus[pid]['title']
+    # the search box sends the page's filters along (here: those of "For you"); they don't apply
+    r = client.get('/?' + 'q=' + title.split()[0] + '&rank=tags&time_filter=1&skip_have=yes')
+    assert pid in r.data.decode()
+    # unless search is picked explicitly
+    r = client.get('/?q=' + title.split()[0] + '&rank=search&skip_have=yes')
+    assert f'"id": "{pid}"' not in r.data.decode()
+
+
+def test_unknown_paper_and_odd_tag_names(client, corpus):
+    login(client)
+    assert 'no paper with this id' in client.get('/?rank=pid&pid=2999.99999&format=json').get_json()['notice']
+    for bad in ('.', '..'):
+        assert client.post('/import', data={'text': next(iter(corpus)), 'tag': bad}).status_code == 400

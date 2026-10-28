@@ -49,19 +49,20 @@ def last_slot(now, schedule=DIGEST_SCHEDULE):
 
 
 def due(now):
-    """for --if-due: whether a scheduled digest is due now; records it if so"""
+    """
+    for --if-due: whether a scheduled digest is due now. the caller records the send with
+    db.set_last_digest once it went out, so a run that fails (SMTP down) is tried again
+    """
     last = db.get_last_digest()
     if last is None:
         db.set_last_digest(now)
         print(f"digest schedule started ({DIGEST_SCHEDULE}), the first one goes out at the next slot")
         return False
-    if last >= last_slot(now):
-        return False
-    db.set_last_digest(now)
-    return True
+    return last < last_slot(now)
 
 
-PUBLIC_URL = os.environ.get('PUBLIC_URL', 'http://localhost:5000').rstrip('/')
+# `or`: docker compose passes unset variables as empty strings
+PUBLIC_URL = (os.environ.get('PUBLIC_URL') or 'http://localhost:5000').rstrip('/')
 
 
 def unsubscribe_url(user):
@@ -140,21 +141,31 @@ if __name__ == "__main__":
     parser.add_argument('--model', type=str, default='auto', help='auto|svm|logreg (see aslite/rank.py)')
     parser.add_argument('--if-due', action='store_true', help='only send when the DIGEST_SCHEDULE slot has passed')
     args = parser.parse_args()
-    if args.if_due and not due(time.time()):
+    started = time.time()
+    if args.if_due and not due(started):
         raise SystemExit(0)
     print(args)
+    if not args.dry_run and not os.environ.get('PUBLIC_URL'):
+        # every link in the mail would point at localhost
+        print("PUBLIC_URL is not set, not sending (set it to the site's address, e.g. https://sanity.example.org)")
+        raise SystemExit(1)
 
     emails = get_emails()
     if args.user:
         emails = {u: e for u, e in emails.items() if u == args.user}
-    if not emails or not db.features_exist():
-        print("nobody to send to" if not emails else "no features yet, run compute.py")
+    if not emails:
+        print("nobody to send to")
+        if args.if_due:
+            db.set_last_digest(started)
+        raise SystemExit(0)
+    if not db.features_exist():
+        print("no features yet, run compute.py")  # due again on the next try
         raise SystemExit(0)
     features = load_features()
     pdb = get_papers_db()
     times = pdb.times()
 
-    num_sent = 0
+    num_sent = num_failed = 0
     for user, email in sorted(emails.items()):
         sections = digest.compute_for(
             user, features, times, args.time_delta, args.per_tag, feats=args.feats, model=args.model
@@ -172,9 +183,16 @@ if __name__ == "__main__":
             send(formataddr((user, email)), subject, text, body, user, args.dry_run)
         except (smtplib.SMTPException, OSError) as e:
             print(f"failed to send to {user}: {e}")
+            num_failed += 1
             continue
         num_sent += 1
         print(f"{'composed' if args.dry_run else 'sent'} digest for {user}: {subject}")
         time.sleep(0.5)  # no need to burst
 
-    print(f"done, {num_sent} {'composed' if args.dry_run else 'sent'}")
+    print(f"done, {num_sent} {'composed' if args.dry_run else 'sent'}, {num_failed} failed")
+    if args.if_due:
+        if num_sent or not num_failed:
+            db.set_last_digest(started)  # this slot is done (those that failed amid successes wait a week)
+        else:
+            print("every send failed: trying again on the next run")
+            raise SystemExit(1)

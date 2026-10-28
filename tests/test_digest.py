@@ -130,7 +130,9 @@ def test_if_due_waits_for_the_next_slot(features, monkeypatch):
     assert not send_emails.due(t0)  # first run: only starts the clock
     assert not send_emails.due(t0 + 3600)  # same week
     assert send_emails.due(t0 + 7 * 86400)  # a sunday slot has passed
-    assert not send_emails.due(t0 + 7 * 86400 + 600)  # but only once
+    assert send_emails.due(t0 + 7 * 86400 + 600)  # still due until a run records that it went out
+    db.set_last_digest(t0 + 7 * 86400 + 600)
+    assert not send_emails.due(t0 + 7 * 86400 + 1200)  # then only once
 
 
 def test_neutral_hides_without_training(client, corpus):

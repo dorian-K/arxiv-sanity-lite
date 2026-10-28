@@ -59,6 +59,7 @@ var move_page = function(int_offset) {
                     <select name="rank" id="rank_select">
                         <option value="tags" {{ gvars.rank == 'tags' and 'selected' }} title="Best matches for the tags below: a model learns from the papers you saved (and marked 'not for this tag') and scores every paper">recommended for tags</option>
                         <option value="saved" {{ gvars.rank == 'saved' and 'selected' }} title="The papers you saved to the tags below, newest first">saved in tags</option>
+                        <option value="down" {{ gvars.rank == 'down' and 'selected' }} title="The papers you marked as not for the tags below, newest first">not for tags</option>
                         <option value="pid" {{ gvars.rank == 'pid' and 'selected' }} title="Papers most like the one paper id below">similar to paper</option>
                         <option value="search" {{ gvars.rank == 'search' and 'selected' }} title="Full-text search of titles, authors and abstracts">search</option>
                         <option value="time" {{ gvars.rank == 'time' and 'selected' }} title="Everything, newest first">newest</option>

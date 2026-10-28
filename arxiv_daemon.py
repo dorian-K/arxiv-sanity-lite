@@ -9,9 +9,42 @@ import time
 import random
 import logging
 import argparse
+import urllib.error
 
 from aslite.arxiv import get_response, parse_response
-from aslite.db import get_papers_db
+from aslite.db import get_papers_db, arxiv_slot
+
+MAX_TRIES = 5  # per page; then this run gives up, and the next one tries again
+
+
+def fetch_page(q, k):
+    """
+    one page of results, politely: every call waits for its slot (>= 3.5 s apart, across
+    processes), errors and empty pages back off exponentially, a 503 waits as long as
+    Retry-After says. a short page is retried once, then taken as it is
+    """
+    short = None
+    for attempt in range(MAX_TRIES):
+        wait = 10 * 2**attempt + random.uniform(0, 5)
+        try:
+            with arxiv_slot():
+                papers = parse_response(get_response(search_query=q, start_index=k))
+            if len(papers) == 100 or (short is not None and papers):
+                return papers
+            if papers:
+                short = papers
+            logging.warning("got %d papers instead of 100", len(papers))
+        except urllib.error.HTTPError as e:
+            retry_after = e.headers.get('Retry-After', '') if e.headers else ''
+            if retry_after.isdigit():
+                wait = max(wait, int(retry_after))
+            logging.warning("arxiv answered %s", e.code)
+        except Exception as e:  # network trouble, timeouts
+            logging.warning(e)
+        logging.warning("trying again in %d s", wait)
+        time.sleep(wait)
+    return short
+
 
 if __name__ == '__main__':
     logging.basicConfig(
@@ -51,23 +84,10 @@ if __name__ == '__main__':
     for k in range(args.start, args.start + args.num, 100):
         logging.info('querying arxiv api for query %s at start_index %d' % (q, k))
 
-        # attempt to fetch a batch of papers from arxiv api
-        ntried = 0
-        while True:
-            try:
-                resp = get_response(search_query=q, start_index=k)
-                papers = parse_response(resp)
-                time.sleep(0.5)
-                if len(papers) == 100:
-                    break  # otherwise we have to try again
-            except Exception as e:
-                logging.warning(e)
-                logging.warning("will try again in a bit...")
-                ntried += 1
-                if ntried > 1000:
-                    logging.error("ok we tried 1,000 times, something is srsly wrong. exitting.")
-                    sys.exit()
-                time.sleep(2 + random.uniform(0, 4))
+        papers = fetch_page(q, k)
+        if not papers:
+            logging.error("no papers from arxiv after %d tries, giving up for this run", MAX_TRIES)
+            sys.exit(2 if total_updated == 0 else 0)
 
         # process the batch of retrieved papers
         nhad, nnew, nreplace = 0, 0, 0
@@ -111,5 +131,5 @@ if __name__ == '__main__':
         # zzz
         time.sleep(3 + random.uniform(0, 3))  # arXiv asks for >= 3s between requests
 
-    # exit with OK status if anything at all changed, but if nothing happened then raise 1
+    # exit with OK status if anything at all changed, 1 if nothing did, 2 if arxiv failed us
     sys.exit(0 if total_updated > 0 else 1)

@@ -15,27 +15,24 @@ logger = logging.getLogger(__name__)
 
 
 def get_response(search_query, start_index=0):
-    """pings arxiv.org API to fetch a batch of 100 papers"""
-    # fetch raw response
-    base_url = 'http://export.arxiv.org/api/query?'
+    """
+    pings arxiv.org API to fetch a batch of 100 papers. raises on http errors (a 503 carries
+    Retry-After); callers space calls >= 3s (see db.arxiv_slot)
+    """
+    base_url = 'https://export.arxiv.org/api/query?'
     add_url = 'search_query=%s&sortBy=lastUpdatedDate&start=%d&max_results=100' % (search_query, start_index)
-    # add_url = 'search_query=%s&sortBy=submittedDate&start=%d&max_results=100' % (search_query, start_index)
-    search_query = base_url + add_url
-    logger.debug(f"Searching arxiv for {search_query}")
-    with urllib.request.urlopen(search_query) as url:
-        response = url.read()
-
-    if url.status != 200:
-        logger.error("arxiv did not return status 200 response")
-
-    return response
+    logger.debug(f"Searching arxiv for {base_url + add_url}")
+    req = urllib.request.Request(base_url + add_url, headers={'User-Agent': USER_AGENT})
+    with urllib.request.urlopen(req, timeout=60) as url:
+        return url.read()
 
 
 def get_response_ids(id_list):
     """pings arxiv.org API to fetch specific papers by id (up to ~100 per call)"""
-    base_url = 'http://export.arxiv.org/api/query?'
+    base_url = 'https://export.arxiv.org/api/query?'
     add_url = 'id_list=%s&max_results=%d' % (','.join(id_list), len(id_list))
-    with urllib.request.urlopen(base_url + add_url, timeout=60) as url:
+    req = urllib.request.Request(base_url + add_url, headers={'User-Agent': USER_AGENT})
+    with urllib.request.urlopen(req, timeout=60) as url:
         response = url.read()
     return response
 
@@ -102,7 +99,7 @@ def filter_latest_version(idvs):
 ARXIV_ID_RE = re.compile(r'(?<![\d])(\d{4}\.\d{4,5})(?:v\d+)?(?![\d])')
 # old-style ids like hep-th/0408218, which we can't store (the id has a slash)
 OLD_ARXIV_ID_RE = re.compile(r'\b[a-z-]+(?:\.[A-Z]{2})?/\d{7}\b')
-USER_AGENT = 'arxiv-resanity (self-hosted; fetches single papers on user request, >= 3s apart)'
+USER_AGENT = 'arxiv-resanity (self-hosted; daily update and papers on user request, >= 3s apart)'
 
 
 def find_arxiv_id(text):

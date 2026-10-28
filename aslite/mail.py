@@ -13,7 +13,7 @@ import smtplib
 from email.message import EmailMessage
 from email.utils import make_msgid, parseaddr
 
-MAIL_FROM = os.environ.get('MAIL_FROM', 'Arxiv Resanity <digest@localhost>')
+MAIL_FROM = os.environ.get('MAIL_FROM') or 'Arxiv Resanity <digest@localhost>'  # compose passes unset as ''
 
 
 def message(to, subject, text, html=None, headers=None):

@@ -3,13 +3,16 @@
 {% block content %}
 <div class="page">
     <section class="card">
-        {% if done %}
+        {% if state == 'done' %}
         <h1>Unsubscribed</h1>
         <p>No more digests for {{ name }}. You can add your email again on your <a href="/profile">profile</a> any time.</p>
+        {% elif state == 'stale' %}
+        <h1>Already unsubscribed</h1>
+        <p>This link belongs to an address that was removed or changed since; nothing more will be sent to it.</p>
         {% else %}
         <h1>Unsubscribe</h1>
         <p>Stop the digest emails for {{ name }}?</p>
-        <form method="post" action="/unsubscribe/{{ token }}">
+        <form method="post" action="/unsubscribe?token={{ token | urlencode }}">
             <button type="submit" class="btn btn-primary">Unsubscribe</button>
         </form>
         {% endif %}

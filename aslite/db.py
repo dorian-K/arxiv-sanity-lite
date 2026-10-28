@@ -520,6 +520,26 @@ def arxiv_slot(pause=3.5):
             fcntl.flock(f, fcntl.LOCK_UN)
 
 
+LAST_DIGEST_FILE = os.path.join(DATA_DIR, 'last_digest')
+
+
+def get_last_digest():
+    """unix time of the last scheduled digest send, or None before the first (send_emails.py)"""
+    try:
+        with open(LAST_DIGEST_FILE) as f:
+            return float(f.read().strip())
+    except (FileNotFoundError, ValueError):
+        return None
+
+
+def set_last_digest(t):
+    os.makedirs(DATA_DIR, exist_ok=True)
+    tmp = LAST_DIGEST_FILE + '.tmp'
+    with open(tmp, 'w') as f:
+        f.write(str(t))
+    os.replace(tmp, LAST_DIGEST_FILE)  # atomic: a crash can't leave an empty file behind
+
+
 def request_compute():
     with open(COMPUTE_FLAG_FILE, 'w') as f:
         f.write(str(time.time()))

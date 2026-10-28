@@ -43,7 +43,9 @@ services:
       WEB_THREADS: ${WEB_THREADS:-4}
       FETCH_LIMIT_USER: ${FETCH_LIMIT_USER:-200}  # papers per user per day that /import may fetch from arXiv
       FETCH_LIMIT_TOTAL: ${FETCH_LIMIT_TOTAL:-2000}
-      # the web service mails the confirmation links of the double opt-in
+      # the web service mails the confirmation links of the double opt-in; links use
+      # PUBLIC_URL, and requests for other hosts are refused once it is set
+      PUBLIC_URL: ${PUBLIC_URL:-}
       MAIL_FROM: ${MAIL_FROM:-}
       SMTP_HOST: ${SMTP_HOST:-mail}
       SMTP_PORT: ${SMTP_PORT:-25}

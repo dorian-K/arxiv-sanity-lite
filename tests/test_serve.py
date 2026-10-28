@@ -42,6 +42,33 @@ def test_passwords(client):
     assert login(client, user='bad name!').status_code == 400
 
 
+def test_sessions_end_when_the_password_changes(client):
+    from werkzeug.security import generate_password_hash
+
+    from aslite import db
+
+    login(client)
+    assert client.post('/add/2601.00001/x').data.startswith(b'ok')
+    db.set_password('alice', generate_password_hash('another password'))  # e.g. flask set-password
+    assert client.post('/add/2601.00001/x').data.startswith(b'error, not logged in')
+
+
+def test_accounts_without_password_cant_be_claimed(client):
+    from aslite import db
+
+    db.tag_paper('legacy', '2601.00001', 'x')  # from before passwords existed
+    assert login(client, user='legacy').status_code == 403
+    assert client.post('/add/2601.00001/x').data.startswith(b'error, not logged in')
+
+
+def test_tag_names_and_query_params_are_checked(client, corpus):
+    login(client)
+    for bad in ('a,b', 'tab%09here'):
+        assert client.post(f'/add/2601.00001/{bad}').data.startswith(b'error')
+    for q in ('svm_c=1e300', 'svm_c=nan', 'rank=evil', 'time_filter=-5', 'time_filter=1e9'):
+        assert client.get('/?' + q).status_code == 200
+
+
 def test_state_changes_need_same_site_posts(client):
     login(client)
     assert client.get('/add/2601.00001/x').status_code == 405  # no more GET <img src=...> tricks

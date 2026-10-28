@@ -58,7 +58,7 @@ docker compose logs -f updater
 
 `DATA_PATH` can point at a corpus prepared on the host, for example `./data/5y` from `import_snapshot.py` with embeddings from `gpu_embed.sh`. The updater then only embeds each day's new papers, on CPU. `EMBED_MODEL` has to match the model that corpus was embedded with, or the next run re-embeds every paper. `HF_TOKEN` is only needed for gated models; EmbeddingGemma 2 downloads without one.
 
-Accounts have passwords. With `ALLOW_SIGNUP=1`, anyone can create one. A username that has tags from before passwords existed is claimed by the first password set for it. With `ALLOW_SIGNUP=0`, create accounts yourself:
+Accounts have passwords. With `ALLOW_SIGNUP=1`, anyone can create one. A username that has tags from before passwords existed can't be claimed from the login form; give it a password with `flask set-password`. With `ALLOW_SIGNUP=0`, create accounts yourself:
 
 ```bash
 docker compose exec web flask --app serve set-password alice

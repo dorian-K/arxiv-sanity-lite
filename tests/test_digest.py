@@ -55,7 +55,7 @@ def test_emails_and_unsubscribe(features, corpus, monkeypatch, tmp_path):
     assert r.returncode == 0, r.stderr
     assert 'composed digest for alice' in r.stdout
     body = out.read_text()
-    assert 'https://sanity.example.org/digest' in body and '/unsubscribe/' in body
+    assert 'https://sanity.example.org/digest' in body and '/unsubscribe?token=' in body
     assert db.get_digest('alice')['sections'][0]['tag'] == 'cv'  # stored for the page
 
     # the unsubscribe link works without logging in, one-click POST included
@@ -65,11 +65,16 @@ def test_emails_and_unsubscribe(features, corpus, monkeypatch, tmp_path):
 
     importlib.reload(serve)
     c = serve.app.test_client()
-    token = body.split('/unsubscribe/')[1].split('"')[0]
-    assert b'Stop the digest emails' in c.get(f'/unsubscribe/{token}').data
-    assert c.post(f'/unsubscribe/{token}').status_code == 200
+    path = '/unsubscribe?token=' + body.split('/unsubscribe?token=')[1].split('"')[0]
+    assert b'Stop the digest emails' in c.get(path).data
+    assert b'Unsubscribed' in c.post(path).data
     assert db.get_user('alice')['email'] == ''
-    assert c.post('/unsubscribe/forged').status_code == 400
+    assert c.post('/unsubscribe?token=forged').status_code == 400
+    # an old link can't touch an address confirmed later
+    db.request_email('alice', 'new@example.org')
+    db.confirm_email('alice', 'new@example.org')
+    assert b'Already unsubscribed' in c.post(path).data
+    assert db.get_user('alice')['email'] == 'new@example.org'
 
 
 def test_smtp_message(monkeypatch):
@@ -160,14 +165,14 @@ def test_double_opt_in(client, corpus, monkeypatch):
     assert db.get_user('alice')['pending_email'] == 'alice@example.org'
     (msg,) = sent
     assert msg['To'] == 'alice@example.org'
-    link = next(w for w in msg.get_content().split() if '/confirm_email/' in w)
-    path = link[link.index('/confirm_email/') :]
+    link = next(w for w in msg.get_content().split() if '/confirm_email?token=' in w)
+    path = link[link.index('/confirm_email') :]
     # opening the link (or a mail scanner prefetching it) only shows a button
     assert b'Yes, send me the digest' in client.get(path).data and db.get_emails() == {}
     assert b'Confirmed' in client.post(path).data
     assert db.get_emails() == {'alice': 'alice@example.org'} and db.get_user('alice')['email_confirmed']
     assert b'Nothing to confirm' in client.post(path).data  # a link works once
-    assert client.post('/confirm_email/forged').status_code == 400
+    assert client.post('/confirm_email?token=forged').status_code == 400
     # removing the address works at once and needs no confirmation
     client.post('/register_email', data={'email': ''})
     assert db.get_emails() == {} and db.get_user('alice')['email'] == ''

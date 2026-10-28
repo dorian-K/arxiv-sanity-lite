@@ -4,7 +4,7 @@
     {% if state == 'ask' %}
     <h1>Confirm your email</h1>
     <p>Send the weekly Arxiv Resanity digest to <b>{{ email }}</b>?</p>
-    <form method="post" action="/confirm_email/{{ token }}">
+    <form method="post" action="/confirm_email?token={{ token | urlencode }}">
         <button type="submit" class="btn btn-primary">Yes, send me the digest</button>
     </form>
     <p class="muted small">Every digest has an unsubscribe link, and you can remove the address on your profile any time.</p>

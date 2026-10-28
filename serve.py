@@ -10,6 +10,8 @@ ideas:
 import os
 import re
 import json
+import hashlib
+from urllib.parse import urlparse
 import time
 import threading
 from random import shuffle
@@ -54,6 +56,12 @@ if int(os.environ.get('TRUST_PROXY', '0')) > 0:
     n = int(os.environ['TRUST_PROXY'])
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=n, x_proto=n, x_host=n, x_prefix=n)
 ALLOW_SIGNUP = os.environ.get('ALLOW_SIGNUP', '1') == '1'
+# where the site is reachable, for links in mails. when set, requests for any other host are
+# refused, so a forged Host / X-Forwarded-Host header can't put another domain into them
+PUBLIC_URL = os.environ.get('PUBLIC_URL', '').rstrip('/')
+if PUBLIC_URL:
+    # localhost too, for the docker healthcheck
+    app.config['TRUSTED_HOSTS'] = [urlparse(PUBLIC_URL).hostname, 'localhost', '127.0.0.1']
 # papers a user (and everyone together) may fetch from arXiv per day via /import, so the
 # server can't be used to hammer arXiv. papers we already have don't count
 FETCH_LIMIT_USER = int(os.environ.get('FETCH_LIMIT_USER', '200'))
@@ -161,6 +169,19 @@ def get_times():
         return _times_cache['times'], _times_cache['order']
 
 
+def _session_version(user):
+    """ties a session to the account's current password hash (and so to this very account)"""
+    return hashlib.sha256((user['pw_hash'] or '').encode()).hexdigest()[:16]
+
+
+def _start_session(user, readonly=False):
+    session.clear()
+    session.permanent = True
+    session.update(user=user['name'], v=_session_version(user))
+    if readonly:
+        session['readonly'] = True
+
+
 @app.before_request
 def before_request():
     # everything that changes state is a POST. SameSite=Lax already keeps the session
@@ -171,14 +192,18 @@ def before_request():
     g.user = session.get('user', None)
     g.readonly = bool(session.get('readonly'))
 
+    if g.user:
+        # a session is only as good as the account it was made for: deleting the account,
+        # changing its password or a new account under the same name ends it
+        u = db.get_user(g.user)
+        if not u or session.get('v') != _session_version(u) or (g.readonly and not u['public']):
+            session.clear()
+            g.user, g.readonly = None, False
+
     if g.user and g.readonly:
         # a read-only view of someone's tags (login without password, if they allow it):
         # ends as soon as they stop sharing, and can't change anything
-        u = db.get_user(g.user)
-        if not u or not u['public']:
-            session.clear()
-            g.user, g.readonly = None, False
-        elif request.method == 'POST' and request.endpoint not in ('login', 'logout', 'confirm_email', 'unsubscribe'):
+        if request.method == 'POST' and request.endpoint not in ('login', 'logout', 'confirm_email', 'unsubscribe'):
             return "error, this is a read-only view: log in with the password to make changes", 403
     elif g.user:
         # record activity on this user so we can reserve periodic
@@ -328,11 +353,20 @@ def main():
     if opt_q:
         opt_rank = 'search'
 
-    # try to parse opt_svm_c into something sensible (a float); None means "per-model default"
+    # C from the url, within sane bounds (0, nan or 1e12 would crash the fit or hold a worker
+    # for a long time); None means the tuned per-model default
     try:
         C = float(opt_svm_c)
+        if not (1e-4 <= C <= 1e4):
+            C = None
     except ValueError:
         C = None
+    if opt_rank not in ('search', 'tags', 'pid', 'time', 'random'):
+        opt_rank = default_rank
+    try:
+        opt_time_filter = str(min(36500, max(1, int(opt_time_filter)))) if opt_time_filter else ''
+    except ValueError:
+        opt_time_filter = ''
     features_ok = features_exist()
     if opt_model not in MODELS:
         opt_model = 'auto'
@@ -537,6 +571,9 @@ def _check_tag(tag):
         return "error, cannot use the protected tag '%s'" % (tag,)
     if not tag or len(tag) > 100:
         return "error, tags are 1-100 characters"
+    if any(c in tag for c in '/,') or not tag.isprintable():
+        # '/' can't go through the /add/<pid>/<tag> routes, ',' separates tags in ?tags=
+        return "error, tags can't contain '/' or ','"
     return None
 
 
@@ -785,22 +822,33 @@ def digest_page():
 
 
 def _unsubscribe_user(token):
+    """
+    the user an unsubscribe link is for, while it is still current: the token names the
+    user and when their address was confirmed (see send_emails.unsubscribe_url), so it stops
+    working once they unsubscribe, change the address or the account is deleted
+    """
     try:
-        return URLSafeSerializer(app.secret_key, salt='unsubscribe').loads(token)
-    except BadSignature:
-        return None
+        user, confirmed = URLSafeSerializer(app.secret_key, salt='unsubscribe').loads(token)
+    except (BadSignature, ValueError, TypeError):
+        return None, False
+    u = db.get_user(user)
+    return user, bool(u and u['email_confirmed'] is not None and u['email_confirmed'] == confirmed)
 
 
-@app.route('/unsubscribe/<token>', methods=['GET', 'POST'])
-def unsubscribe(token):
+# tokens travel in the query string, not the path: the access log records paths only
+@app.route('/unsubscribe', methods=['GET', 'POST'])
+def unsubscribe():
     """the link in every digest email; POST is also the one-click unsubscribe of RFC 8058"""
-    user = _unsubscribe_user(token)
+    token = request.args.get('token', '')
+    user, current = _unsubscribe_user(token)
     if user is None:
         return "This unsubscribe link is invalid.", 400
+    if not current:  # already unsubscribed, or the address changed since that mail
+        return render_template('unsubscribe.html', state='stale', **default_context())
     if request.method == 'POST':
         db.set_email(user, '')
-        return render_template('unsubscribe.html', done=True, name=user, **default_context())
-    return render_template('unsubscribe.html', done=False, name=user, token=token, **default_context())
+        return render_template('unsubscribe.html', state='done', name=user, **default_context())
+    return render_template('unsubscribe.html', state='ask', name=user, token=token, **default_context())
 
 
 # -----------------------------------------------------------------------------
@@ -811,8 +859,9 @@ def unsubscribe(token):
 def login():
     username = request.form.get('username', '').strip()
     password = request.form.get('password', '')
-    # per ip, and per account so guessing one password from many ips is slow too
-    if rate_limited('login', 'ip:' + str(request.remote_addr)) or rate_limited('login', 'name:' + username):
+    # every attempt counts per ip; failures also per account and ip (below), so nobody can
+    # lock a user out by failing logins under their name from somewhere else
+    if rate_limited('login', 'ip:' + str(request.remote_addr)):
         return profile(error="Too many login attempts, please wait a few minutes."), 429
     if not USERNAME_RE.match(username):
         return profile(error="Usernames are 1-40 letters, digits, '.', '_' or '-'."), 400
@@ -821,26 +870,28 @@ def login():
     if password == '':
         # no password: a read-only view, if this user shares their tags (off by default)
         if user and user['public']:
-            session.clear()
-            session.permanent = True
-            session.update(user=username, readonly=True)
+            _start_session(user, readonly=True)
             return redirect(url_for('main'))
         return profile(error="Enter the password. (Without one you can only view accounts that are shared.)"), 403
-    if user is None or user['pw_hash'] is None:
-        # a new account, or one made before passwords existed: the first password set
-        # claims it. with signups closed, only `flask set-password` can create accounts
+    legacy = user['pw_hash'] is None if user else bool(db.get_tags(username) or db.get_tags(username, neg=True))
+    if legacy:
+        # made before passwords existed (tags, but no password): claiming it by just picking a password would let
+        # anyone take it over, so only the admin can give it one (`flask set-password`)
+        return profile(error="This account has no password yet. Ask the admin of this site to set one."), 403
+    if user is None:
+        # a new account. with signups closed, only `flask set-password` can create accounts
         if not ALLOW_SIGNUP:
             return profile(error="Signups are closed on this server."), 403
         if len(password) < MIN_PASSWORD:
             return profile(error=f"Choose a password of at least {MIN_PASSWORD} characters."), 400
         db.set_password(username, generate_password_hash(password))
-        print("registered user %s%s" % (username, " (existing data)" if user else ""))
+        print("registered user %s" % (username,))
     elif not check_password_hash(user['pw_hash'], password):
+        if rate_limited('login', f'fail:{username}:{request.remote_addr}'):
+            return profile(error="Too many login attempts, please wait a few minutes."), 429
         return profile(error="Wrong username or password."), 403
 
-    session.clear()
-    session.permanent = True
-    session['user'] = username
+    _start_session(db.get_user(username))
     return redirect(url_for('main'))
 
 
@@ -892,7 +943,8 @@ def register_email():
         return profile(error="Too many confirmation mails today, please try again tomorrow."), 429
     db.request_email(g.user, email)
     token = _confirm_serializer().dumps([g.user, email])
-    link = url_for('confirm_email', token=token, _external=True)
+    # PUBLIC_URL, not the request's Host header, which a client could set to their own domain
+    link = (PUBLIC_URL or request.host_url.rstrip('/')) + url_for('confirm_email', token=token)
     text = (
         f"Hi {g.user},\n\nplease confirm that you want the weekly Arxiv Resanity digest at this address:\n\n"
         f"{link}\n\nThe link works for 3 days. If you didn't ask for this, ignore this mail: "
@@ -906,13 +958,14 @@ def register_email():
     return redirect(url_for('profile'))
 
 
-@app.route('/confirm_email/<token>', methods=['GET', 'POST'])
-def confirm_email(token):
+@app.route('/confirm_email', methods=['GET', 'POST'])
+def confirm_email():
     """the link in the confirmation mail. GET only shows a button, so link scanners that
     open every link in a mail can't confirm on the owner's behalf"""
+    token = request.args.get('token', '')
     try:
         user, email = _confirm_serializer().loads(token, max_age=CONFIRM_MAX_AGE)
-    except BadSignature:  # also covers expired links
+    except (BadSignature, ValueError, TypeError):  # BadSignature also covers expired links
         return render_template('confirm_email.html', state='invalid', **default_context()), 400
     if request.method == 'POST':
         ok = db.confirm_email(user, email)
@@ -936,7 +989,7 @@ def delete_account():
     if g.user is None:
         return redirect(url_for('profile'))
     user = db.get_user(g.user)
-    if user and user['pw_hash'] and not check_password_hash(user['pw_hash'], request.form.get('password', '')):
+    if not user or not user['pw_hash'] or not check_password_hash(user['pw_hash'], request.form.get('password', '')):
         return profile(error="Wrong password, the account was not deleted."), 403
     db.delete_user(g.user)
     print("deleted user %s" % (g.user,))

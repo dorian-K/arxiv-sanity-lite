@@ -31,7 +31,6 @@ from aslite import db, digest, mail
 from aslite.db import load_features, get_papers_db, get_emails, get_secret_key
 
 DIGEST_SCHEDULE = os.environ.get('DIGEST_SCHEDULE', 'sun 08:00 Europe/Berlin')
-LAST_DIGEST_FILE = os.path.join(db.DATA_DIR, 'last_digest')
 DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
 
 
@@ -51,17 +50,14 @@ def last_slot(now, schedule=DIGEST_SCHEDULE):
 
 def due(now):
     """for --if-due: whether a scheduled digest is due now; records it if so"""
-    if not os.path.isfile(LAST_DIGEST_FILE):
-        with open(LAST_DIGEST_FILE, 'w') as f:
-            f.write(str(now))
+    last = db.get_last_digest()
+    if last is None:
+        db.set_last_digest(now)
         print(f"digest schedule started ({DIGEST_SCHEDULE}), the first one goes out at the next slot")
         return False
-    with open(LAST_DIGEST_FILE) as f:
-        last = float(f.read().strip() or 0)
     if last >= last_slot(now):
         return False
-    with open(LAST_DIGEST_FILE, 'w') as f:
-        f.write(str(now))
+    db.set_last_digest(now)
     return True
 
 
@@ -69,8 +65,10 @@ PUBLIC_URL = os.environ.get('PUBLIC_URL', 'http://localhost:5000').rstrip('/')
 
 
 def unsubscribe_url(user):
-    token = URLSafeSerializer(get_secret_key(), salt='unsubscribe').dumps(user)
-    return f'{PUBLIC_URL}/unsubscribe/{token}'
+    """a link that works until the user unsubscribes or confirms another address (see serve.py)"""
+    confirmed = (db.get_user(user) or {}).get('email_confirmed')
+    token = URLSafeSerializer(get_secret_key(), salt='unsubscribe').dumps([user, confirmed])
+    return f'{PUBLIC_URL}/unsubscribe?token={token}'
 
 
 def render(user, sections, papers, days):

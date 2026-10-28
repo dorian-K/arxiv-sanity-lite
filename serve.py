@@ -16,6 +16,7 @@ import time
 import threading
 from random import shuffle
 from collections import OrderedDict
+from itertools import zip_longest
 
 import numpy as np
 
@@ -31,7 +32,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from aslite import db, digest, mail
 from aslite.db import get_papers_db, get_secret_key, load_features, features_exist, PAPERS_DB_FILE
 from aslite.arxiv import find_arxiv_id, fetch_papers_by_id, OLD_ARXIV_ID_RE
-from aslite.rank import rank, holdout_ranks, resolve_feats, resolve_model, has_embeddings, FEATS, MODELS
+from aslite.rank import rank, holdout_ranks, resolve_feats, resolve_model, has_embeddings, FEATS, MODELS, DEFAULT_C
 
 # -----------------------------------------------------------------------------
 # inits and globals
@@ -415,8 +416,57 @@ def _tags_fingerprint():
     )
 
 
-def _ranked(opt_rank, opt_q, opt_tags, opt_pid, opt_time_filter, opt_skip_have, C, opt_feats, opt_model):
+def _filtered(pids, opt_time_filter, skip_have):
+    """indices of the papers that pass the time window and, with skip_have, aren't rated yet"""
+    keep = range(len(pids))
+    if opt_time_filter:
+        times = get_times()[0]
+        tnow = time.time()
+        deltat = int(opt_time_filter) * 60 * 60 * 24  # allowed time delta in seconds
+        keep = [i for i in keep if (tnow - times.get(pids[i], 0)) < deltat]
+    if skip_have:
+        have = set().union(*get_tags().values(), *get_neg_tags().values(), *get_seen_tags().values())
+        keep = [i for i in keep if pids[i] not in have]
+    return list(keep)
+
+
+def _ranked_tags_in_turns(tag_names, opt_time_filter, opt_skip_have, C, opt_feats, opt_model):
+    """
+    several tags (or all) with mix=turns: one model per tag, and the tags take turns picking
+    their next best paper. the default, one model trained on all the tags at once, is one
+    ranking instead of one per tag, but with unrelated tags it likes papers halfway between
+    topics. merging per-tag lists by score would let small tags crowd out big ones
+    """
+    lists, unindexed, n_pos = [], 0, 0
+    for t in sorted(tag_names):
+        pids, scores, _, u, n = svm_rank(tags=t, C=C, feats=opt_feats, model=opt_model)
+        unindexed, n_pos = unindexed + u, n_pos + n
+        if pids:
+            keep = _filtered(pids, opt_time_filter, opt_skip_have == 'yes')
+            lists.append([(pids[i], scores[i], (i + 1) / len(pids), t) for i in keep])
+    out, seen = [], set()
+    for row in zip_longest(*lists):
+        for item in row:
+            if item is not None and item[0] not in seen:
+                seen.add(item[0])
+                out.append(item)
+    return {
+        'pids': [x[0] for x in out],
+        'scores': [float(x[1]) for x in out],
+        'pct': [x[2] for x in out],
+        'for_tag': [x[3] for x in out],
+        'words': [],
+        'unindexed': unindexed,
+        'n_pos': n_pos,
+    }
+
+
+def _ranked(opt_rank, opt_q, opt_tags, opt_pid, opt_time_filter, opt_skip_have, C, opt_feats, opt_model, opt_mix):
     """the ranked and filtered results of a query: see main()"""
+    if opt_rank == 'tags' and opt_mix == 'turns':
+        tag_names = set(get_tags()) if opt_tags == 'all' else {t for t in opt_tags.split(',') if t}
+        if len(tag_names) > 1:
+            return _ranked_tags_in_turns(tag_names, opt_time_filter, opt_skip_have, C, opt_feats, opt_model)
     words, unindexed, n_pos = [], 0, 0  # words: only for model rankings
     if opt_rank == 'search':
         pids, scores = search_rank(q=opt_q)
@@ -432,27 +482,13 @@ def _ranked(opt_rank, opt_q, opt_tags, opt_pid, opt_time_filter, opt_skip_have, 
         pids, scores = random_rank()
 
     # where each paper landed among all papers, before filters: shown as "top 0.3%"
-    n_ranked = len(pids)
-    keep = range(len(pids))
-
-    # filter by time
-    if opt_time_filter:
-        times = get_times()[0]
-        tnow = time.time()
-        deltat = int(opt_time_filter) * 60 * 60 * 24  # allowed time delta in seconds
-        keep = [i for i in keep if (tnow - times.get(pids[i], 0)) < deltat]
-
-    # optionally hide papers we already have (tagged, downvoted or marked neutral)
-    if opt_skip_have == 'yes' and opt_rank != 'saved':
-        have = set().union(*get_tags().values(), *get_neg_tags().values(), *get_seen_tags().values())
-        keep = [i for i in keep if pids[i] not in have]
-
-    keep = list(keep)
-    pct = [(i + 1) / n_ranked for i in keep] if opt_rank in SLOW_RANKS else None
+    keep = _filtered(pids, opt_time_filter, opt_skip_have == 'yes' and opt_rank != 'saved')
+    pct = [(i + 1) / len(pids) for i in keep] if opt_rank in SLOW_RANKS else None
     return {
         'pids': [pids[i] for i in keep],
         'scores': [float(scores[i]) for i in keep],
         'pct': pct,
+        'for_tag': None,
         'words': words,
         'unindexed': unindexed,
         'n_pos': n_pos,
@@ -494,7 +530,9 @@ def main():
     default_tags = ''
     default_time_filter = ''
     default_skip_have = 'no'
-    if not request.args and get_tags():
+    # (format and page_number don't count: the page fetches its results as /?format=json, and
+    # page 2 of the default is /?page_number=2; both have to stay "For you")
+    if not (set(request.args) - {'format', 'page_number'}) and get_tags():
         # the main use: a user with tags lands on the best recent papers for them (FOR_YOU_DAYS)
         default_rank, default_tags, default_time_filter, default_skip_have = 'tags', 'all', str(FOR_YOU_DAYS), 'yes'
 
@@ -508,6 +546,7 @@ def main():
     opt_svm_c = request.args.get('svm_c', '')  # C (inverse regularization) of the ranking model, '' = default
     opt_feats = request.args.get('feats', 'auto')  # auto|tfidf|emb|concat|fusion, see aslite/rank.py
     opt_model = request.args.get('model', 'auto')  # auto|svm|logreg, see aslite/rank.py
+    opt_mix = request.args.get('mix', 'one')  # several tags: one model on all of them, or one per tag taking turns
     opt_page_number = request.args.get('page_number', '1')  # page number for pagination
     want_json = request.args.get('format') == 'json'  # the page fetching slow results, see SLOW_RANKS
 
@@ -537,13 +576,15 @@ def main():
     features_ok = features_exist()
     if opt_model not in MODELS:
         opt_model = 'auto'
+    if opt_mix not in ('one', 'turns'):
+        opt_mix = 'one'
     if opt_feats not in FEATS or (features_ok and opt_feats != 'tfidf' and not has_embeddings(load_features())):
         opt_feats = 'auto'  # e.g. embeddings were asked for but not computed
     eff_feats = resolve_feats(load_features(), opt_feats) if features_ok else 'tfidf'
     eff_model = resolve_model(load_features(), opt_model) if features_ok else 'svm'
 
     # rank and filter, from the cache if this user asked the same recently
-    query = (opt_rank, opt_q, opt_tags, opt_pid, opt_time_filter, opt_skip_have, C, opt_feats, opt_model)
+    query = (opt_rank, opt_q, opt_tags, opt_pid, opt_time_filter, opt_skip_have, C, opt_feats, opt_model, opt_mix)
     cacheable = opt_rank in ('search', 'tags', 'pid') and page_number * RET_NUM <= RANK_CACHE_RESULTS
     key = (g.user, query, features_ok and db.features_version(), db.db_mtime(PAPERS_DB_FILE), _tags_fingerprint())
     res = _rank_cache_get(key) if cacheable else None
@@ -554,7 +595,8 @@ def main():
         res = _ranked(*query)
         if cacheable:
             res['pids'], res['scores'] = res['pids'][:RANK_CACHE_RESULTS], res['scores'][:RANK_CACHE_RESULTS]
-            res['pct'] = res['pct'] and res['pct'][:RANK_CACHE_RESULTS]
+            for k in ('pct', 'for_tag'):
+                res[k] = res[k] and res[k][:RANK_CACHE_RESULTS]
             _rank_cache_put(key, res)
 
     # the requested page, rendered to just the information the UI needs
@@ -570,13 +612,17 @@ def main():
             p['weight'] = res['scores'][start_index + i]
             if res['pct']:
                 p['pct'] = res['pct'][start_index + i]
+            if res['for_tag']:
+                p['for_tag'] = res['for_tag'][start_index + i]  # picked by this tag (see _ranked_tags_in_turns)
         words = res['words']
     if want_json:
         return {'papers': papers, 'words': words, 'has_next': has_next, 'notice': notice}
 
-    # the user's tags. all of them together are "For you" and "Saved" in the nav, not a chip
+    # the user's tags, and 'all' for all of them together (the "For you" page)
     tags = get_tags()
     rtags = [{'name': t, 'n': len(pids)} for t, pids in tags.items()]
+    if rtags:
+        rtags.append({'name': 'all'})
 
     # build the page context information and render
     context = default_context()
@@ -607,8 +653,15 @@ def main():
     context['gvars']['svm_c'] = '' if C is None else str(C)
     context['gvars']['feats'] = opt_feats
     context['gvars']['model'] = opt_model
+    context['gvars']['mix'] = opt_mix
     context['gvars']['eff_feats'] = eff_feats
     context['gvars']['eff_model'] = eff_model
+    # the C the model uses when the field is empty (fusion trains two models, one C each)
+    context['gvars']['default_c'] = (
+        f"{DEFAULT_C[(eff_model, 'tfidf')]:g} / {DEFAULT_C[(eff_model, 'emb')]:g}"
+        if eff_feats == 'fusion'
+        else f"{DEFAULT_C[(eff_model, eff_feats)]:g}"
+    )
     context['gvars']['has_emb'] = features_ok and has_embeddings(load_features())
     context['gvars']['page_number'] = str(page_number)
     context['gvars']['has_next'] = has_next

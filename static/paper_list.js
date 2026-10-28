@@ -3,7 +3,7 @@
 // the user's tag names, for autocompletion in the tag editor
 // logged in with the password (not a read-only view of a shared account)
 const canEdit = Boolean(user) && !readonly;
-const userTagNames = (typeof tags !== 'undefined' ? tags : []).map(t => t.name);
+const userTagNames = (typeof tags !== 'undefined' ? tags : []).map(t => t.name).filter(n => n !== 'all');
 
 // calls one of the tag endpoints; resolves on "ok...", otherwise shows the server's message
 function tagRequest(path) {
@@ -156,9 +156,10 @@ const Paper = ({ paper: p, quickTag }) => {
     const fit = ho.tag && utags.includes(ho.tag) ? ho.ranks[p.id] : undefined;
     const long = p.summary.length > 360;
     const showScore = SHOW_SCORE.includes(gvars.rank);
-    const score = p.pct !== undefined
+    const score = html`${p.pct !== undefined
         ? html`<span class="rel_score" title=${'rank among all papers (model score ' + p.weight.toFixed(2) + ')'}>${fmtPct(p.pct)}</span>`
-        : showScore ? html`<span class="rel_score" title="search score">${p.weight.toFixed(2)}</span>` : null;
+        : showScore ? html`<span class="rel_score" title="search score">${p.weight.toFixed(2)}</span>` : null}${p.for_tag ? html`
+        <a class="rel_for" href=${tagUrl(p.for_tag)} title=${'recommended for your tag ' + p.for_tag}>${p.for_tag}</a>` : null}`;
     const state = quickTag && (utags.includes(quickTag) ? 'like' : ntags.includes(quickTag) ? 'down' : stags.includes(quickTag) ? 'seen' : null);
     // the server keeps one state per paper and tag, so the others are gone now
     const onVote = v => {
@@ -238,7 +239,9 @@ const PaperList = ({ papers }) => {
         return html`<div class="empty">${EMPTY[gvars.rank] || 'No papers here. Try another search or a longer time window.'}</div>`;
     }
     const quickTag = quickTagOf();
-    return html`<div id="paperList" class="rel_papers">${papers.map(p => html`<${Paper} key=${p.id} paper=${p} quickTag=${quickTag} />`)}</div>`;
+    // on "For you", each paper was picked by one tag: its votes go to that tag
+    const voteTag = p => (canEdit && p.for_tag ? p.for_tag : quickTag);
+    return html`<div id="paperList" class="rel_papers">${papers.map(p => html`<${Paper} key=${p.id} paper=${p} quickTag=${voteTag(p)} />`)}</div>`;
 };
 
 // what the page waits for when the results are computed in the background (see SLOW_RANKS)
@@ -286,11 +289,11 @@ const Tag = ({ tag: t }) => {
         if (!confirm("delete the tag '" + t.name + "' and its downvotes? the papers stay in the database")) return;
         tagRequest('/del/' + encodeURIComponent(t.name)).then(() => window.location.reload()).catch(() => {});
     };
-    const active = gvars.rank === 'tags' && gvars.tags.split(',').includes(t.name);
+    const active = (gvars.rank === 'tags' || gvars.rank === 'saved') && gvars.tags.split(',').includes(t.name);
     return html`
-        <span class=${'chip chip-tag chip-count' + (active ? ' active' : '')}>
+        <span class=${'chip chip-tag chip-count' + (t.name === 'all' ? ' rel_utag_all' : '') + (active ? ' active' : '')}>
             <a href=${tagUrl(t.name)}>${t.name}${t.n !== undefined ? html` <small>${t.n}</small>` : null}</a>
-            ${canEdit ? html`<button class="chip-x" title=${'delete tag ' + t.name} aria-label=${'delete tag ' + t.name} onClick=${del}>×</button>` : null}
+            ${t.name !== 'all' && canEdit ? html`<button class="chip-x" title=${'delete tag ' + t.name} aria-label=${'delete tag ' + t.name} onClick=${del}>×</button>` : null}
         </span>`;
 };
 

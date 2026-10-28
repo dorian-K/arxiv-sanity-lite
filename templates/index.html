@@ -43,7 +43,7 @@ var move_page = function(int_offset) {
 
         <!-- everything that changes how papers are ranked; open whenever it is in use -->
         <!-- collapsed by default; open when a non-default model setting is in use -->
-        <details id="options" {{ 'open' if gvars.svm_c or gvars.feats != 'auto' or gvars.model != 'auto' }}>
+        <details id="options" {{ 'open' if gvars.svm_c or gvars.feats != 'auto' or gvars.model != 'auto' or gvars.mix != 'one' }}>
             <summary>Ranking options
                 <span class="optsummary">
                     {%- if gvars.rank == 'tags' %} · tags: {{ gvars.tags }}{% elif gvars.rank == 'pid' %} · similar to {{ gvars.pid }}{% elif gvars.rank == 'random' %} · random{% elif gvars.rank == 'time' %} · newest{% endif -%}
@@ -94,8 +94,15 @@ var move_page = function(int_offset) {
                     <small>what learns from your papers; auto is tuned</small>
                 </label>
                 <label title="How closely the model follows your saved papers. Lower: smoother, broader matches. Higher: sticks closer to exactly what you saved. Empty = tuned default">regularization C
-                    <input name="svm_c" type="text" id="svm_c_field" value="{{ gvars.svm_c }}" placeholder="default">
-                    <small>lower = broader matches</small>
+                    <input name="svm_c" type="text" id="svm_c_field" value="{{ gvars.svm_c }}" placeholder="default: {{ gvars.default_c }}">
+                    <small>{{ gvars.eff_feats }} + {{ gvars.eff_model }} uses {{ gvars.default_c }}{{ ' (tfidf / emb)' if gvars.eff_feats == 'fusion' }} by default; lower = broader matches</small>
+                </label>
+                <label title="How several tags (or all) are combined. One model: trained on the papers of all the tags together, one ranking (fast). Per tag, in turns: one model per tag, and the tags take turns picking their best paper, each labeled with its tag; better with unrelated topics, but takes a few seconds per tag">several tags
+                    <select name="mix" id="mix_select">
+                        <option value="one" {{ gvars.mix == 'one' and 'selected' }}>one model</option>
+                        <option value="turns" {{ gvars.mix == 'turns' and 'selected' }}>per tag, in turns</option>
+                    </select>
+                    <small>per tag: better for unrelated topics, slower</small>
                 </label>
                 <label title="Leave out papers you already saved, marked 'not for me' or neutral, so only new ones are listed">hide papers I rated
                     <select name="skip_have" id="skip_have_select">
@@ -131,14 +138,20 @@ var move_page = function(int_offset) {
 <section id="taghead">
     <h1>{{ 'For you' if all else gvars.tags }}</h1>
     <nav class="tabs" aria-label="{{ gvars.tags }}">
-        <a href="/?rank=tags&tags={{ gvars.tags | urlencode }}&skip_have=yes{{ '&time_filter=%d' % for_you_days if all }}" class="{{ 'active' if gvars.rank == 'tags' }}">Recommended</a>
+        <a href="/?rank=tags&tags={{ gvars.tags | urlencode }}&skip_have=yes{{ '&time_filter=%d' % for_you_days if all }}{{ '&mix=turns' if gvars.mix == 'turns' }}" class="{{ 'active' if gvars.rank == 'tags' }}">Recommended</a>
         <a href="/?rank=saved&tags={{ gvars.tags | urlencode }}" class="{{ 'active' if gvars.rank == 'saved' }}">Saved ({{ n_saved }})</a>
     </nav>
     <p class="muted">
         {% if gvars.rank == 'tags' %}
+        {% if all %}
+        The best papers{% if gvars.time_filter %} of the last {{ gvars.time_filter }} days{% endif %} for
+        {% if gvars.mix == 'turns' %}each of your tags, the tags taking turns. The label on each paper says which tag picked it{% if not readonly %}, and its 👍 / 👎 teach that tag{% endif %}.
+        {% else %}all your tags together. "Ranking options" → "several tags" can rank each tag on its own instead.{% endif %}
+        {% else %}
         Papers{% if gvars.time_filter %} from the last {{ gvars.time_filter }} days{% endif %}, ranked by how well they match
         the {{ n_saved }} papers you saved{{ where }}{% if gvars.skip_have == 'yes' %}; the saved ones themselves are under "Saved"{% endif %}.
-        {% if not readonly %}{{ '👍 / 👎 on each paper' if not all else '"+ Save" and "✗ Not for me"' }} teach it what you want.{% endif %}
+        {% if not readonly %}👍 / 👎 on each paper teach it what you want.{% endif %}
+        {% endif %}
         {% else %}
         All papers you saved{{ where }}, newest first.
         {% endif %}

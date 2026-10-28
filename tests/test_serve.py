@@ -246,6 +246,14 @@ def test_tag_pages_and_landing(client, corpus):
     # with tags, the main page is the best recent papers for them
     page = client.get('/').data.decode()
     assert '"rank": "tags"' in page and '"tags": "all"' in page and '"time_filter": "30"' in page
+    # the page fetches its results as /?format=json, page 2 is /?page_number=2: both still "For you"
+    # (they once fell back to the newest papers, which looked like random recommendations)
+    import serve
+
+    pct = [p.get('pct') for p in client.get('/?format=json').get_json()['papers']]
+    assert pct and all(pct)
+    assert '"rank": "tags"' in client.get('/?page_number=2').data.decode()
+    assert serve.FOR_YOU_DAYS == 30
     # every tag has a page with its saved papers, newest first
     page = client.get('/?rank=saved&tags=cv').data.decode()
     assert 'Saved (3)' in page and all(p in page for p in vision[:3]) and vision[3] not in page
@@ -276,3 +284,26 @@ def test_import_needs_a_tag(client, corpus):
     login(client)
     r = client.post('/import', data={'text': next(iter(corpus))})
     assert r.status_code == 400 and b'Pick a tag' in r.data
+
+
+def test_for_you_can_let_each_tag_pick_in_turns(client, corpus):
+    login(client)
+    vision = [p for p in corpus if corpus[p]['tags'][0]['term'] == 'cs.CV']
+    language = [p for p in corpus if corpus[p]['tags'][0]['term'] != 'cs.CV']
+    for p in vision[:4]:
+        client.post(f'/add/{p}/cv')
+    for p in language[:4]:
+        client.post(f'/add/{p}/nlp')
+    # the default: one model on all tags together, no per-tag labels
+    papers = client.get('/?rank=tags&tags=all&skip_have=yes&format=json').get_json()['papers']
+    assert papers and not any(p.get('for_tag') for p in papers)
+    papers = client.get('/?rank=tags&tags=all&skip_have=yes&mix=turns&format=json').get_json()['papers']
+    # one model per tag, taking turns: every paper says which tag picked it, and both get a say
+    assert [p['for_tag'] for p in papers[:4]] == ['cv', 'nlp', 'cv', 'nlp']
+    assert all(corpus[p['id']]['tags'][0]['term'] == 'cs.CV' for p in papers[:6] if p['for_tag'] == 'cv')
+    assert len({p['id'] for p in papers}) == len(papers)
+    # the C used by default is shown
+    from aslite.rank import DEFAULT_C
+
+    page = client.get('/?rank=time&model=logreg&feats=tfidf').data.decode()
+    assert f'placeholder="default: {DEFAULT_C[("logreg", "tfidf")]:g}"' in page

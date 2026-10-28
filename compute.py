@@ -1,14 +1,18 @@
 """
-Extracts tfidf features from all paper abstracts and saves them to disk.
+Extracts tfidf features (and optionally dense embeddings) from all paper
+abstracts and saves them to disk.
 """
 
+import os
 import argparse
 from random import shuffle
 
 import numpy as np
+from sklearn.decomposition import PCA
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 from aslite.db import get_papers_db, save_features
+from aslite.embed import embed_papers
 
 # -----------------------------------------------------------------------------
 
@@ -19,6 +23,9 @@ if __name__ == '__main__':
     parser.add_argument('--min_df', type=int, default=5, help='min df')
     parser.add_argument('--max_df', type=float, default=0.1, help='max df')
     parser.add_argument('--max_docs', type=int, default=-1, help='maximum number of documents to use when training tfidf, or -1 to disable')
+    parser.add_argument('--embed_model', type=str, default=os.environ.get('EMBED_MODEL', ''),
+                        help="also compute dense embeddings, e.g. 'st:BAAI/bge-small-en-v1.5' or 'api:text-embedding-3-small' (see aslite/embed.py). empty = tfidf only. defaults to $EMBED_MODEL")
+    parser.add_argument('--emb_dims', type=int, default=256, help='reduce embeddings to this many dims with PCA (0 = keep all)')
     args = parser.parse_args()
     print(args)
 
@@ -57,11 +64,27 @@ if __name__ == '__main__':
     x = v.transform(make_corpus(training=False)).astype(np.float32)
     print(x.shape)
 
-    print("saving to features to disk...")
+    pids = list(pdb.keys())
     features = {
-        'pids': list(pdb.keys()),
+        'pids': pids,
         'x': x,
         'vocab': v.vocabulary_,
-        'idf': v._tfidf.idf_,
+        'idf': v.idf_,
     }
+
+    if args.embed_model:
+        print("computing embeddings...")
+        x_emb = embed_papers(pids, pdb, args.embed_model)
+        if 0 < args.emb_dims < x_emb.shape[1]:
+            # Scholar Inbox found 256 PCA dims lose ~nothing for recommendation,
+            # while making the per-request classifier faster and the file smaller
+            pca = PCA(n_components=args.emb_dims, random_state=0)
+            x_emb = pca.fit_transform(x_emb).astype(np.float32)
+            x_emb /= np.linalg.norm(x_emb, axis=1, keepdims=True) + 1e-12
+            print(f"PCA to {args.emb_dims} dims keeps {pca.explained_variance_ratio_.sum():.1%} of variance")
+        features['x_emb'] = x_emb
+        features['emb_model'] = args.embed_model
+        print(x_emb.shape)
+
+    print("saving to features to disk...")
     save_features(features)

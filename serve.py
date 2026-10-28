@@ -13,15 +13,15 @@ import time
 from random import shuffle
 
 import numpy as np
-from sklearn import svm
 
 from flask import Flask, request, redirect, url_for
 from flask import render_template
 from flask import g # global session-level object
 from flask import session
 
-from aslite.db import get_papers_db, get_metas_db, get_tags_db, get_last_active_db, get_email_db
+from aslite.db import get_papers_db, get_metas_db, get_tags_db, get_neg_tags_db, get_last_active_db, get_email_db
 from aslite.db import load_features
+from aslite.rank import rank, resolve_feats, has_embeddings, DEFAULT_C, FEATS, MODELS
 
 # -----------------------------------------------------------------------------
 # inits and globals
@@ -51,6 +51,15 @@ def get_tags():
             tags_dict = tags_db[g.user] if g.user in tags_db else {}
         g._tags = tags_dict
     return g._tags
+
+def get_neg_tags():
+    if g.user is None:
+        return {}
+    if not hasattr(g, '_neg_tags'):
+        with get_neg_tags_db() as neg_db:
+            neg_dict = neg_db[g.user] if g.user in neg_db else {}
+        g._neg_tags = neg_dict
+    return g._neg_tags
 
 def get_papers():
     if not hasattr(g, '_pdb'):
@@ -87,6 +96,7 @@ def render_pid(pid):
     # render a single paper with just the information we need for the UI
     pdb = get_papers()
     tags = get_tags()
+    neg_tags = get_neg_tags()
     thumb_path = 'static/thumb/' + pid + '.jpg'
     thumb_url = thumb_path if os.path.isfile(thumb_path) else ''
     d = pdb[pid]
@@ -98,6 +108,7 @@ def render_pid(pid):
         authors = ', '.join(a['name'] for a in d['authors']),
         tags = ', '.join(t['term'] for t in d['tags']),
         utags = [t for t, pids in tags.items() if pid in pids],
+        ntags = [t for t, pids in neg_tags.items() if pid in pids],
         summary = d['summary'],
         thumb_url = thumb_url,
     )
@@ -117,57 +128,30 @@ def time_rank():
     scores = [(tnow - v['_time'])/60/60/24 for k, v in ms] # time delta in days
     return pids, scores
 
-def svm_rank(tags: str = '', pid: str = '', C: float = 0.01):
+def svm_rank(tags: str = '', pid: str = '', C=None, feats='auto', model='svm'):
 
     # tag can be one tag or a few comma-separated tags or 'all' for all tags we have in db
     # pid can be a specific paper id to set as positive for a kind of nearest neighbor search
     if not (tags or pid):
         return [], [], []
 
-    # load all of the features
     features = load_features()
-    x, pids = features['x'], features['pids']
-    n, d = x.shape
-    ptoi, itop = {}, {}
-    for i, p in enumerate(pids):
-        ptoi[p] = i
-        itop[i] = p
 
-    # construct the positive set
-    y = np.zeros(n, dtype=np.float32)
+    # construct the positive set, and the negative set from the user's downvotes
+    pos, neg = set(), set()
     if pid:
-        y[ptoi[pid]] = 1.0
+        pos.add(pid)
     elif tags:
-        tags_db = get_tags()
-        tags_filter_to = tags_db.keys() if tags == 'all' else set(tags.split(','))
+        tags_db, neg_db = get_tags(), get_neg_tags()
+        tags_filter_to = set(tags_db.keys()) | set(neg_db.keys()) if tags == 'all' else set(tags.split(','))
         for tag, pids in tags_db.items():
             if tag in tags_filter_to:
-                for pid in pids:
-                    y[ptoi[pid]] = 1.0
+                pos |= pids
+        for tag, pids in neg_db.items():
+            if tag in tags_filter_to:
+                neg |= pids
 
-    if y.sum() == 0:
-        return [], [], [] # there are no positives?
-
-    # classify
-    clf = svm.LinearSVC(class_weight='balanced', verbose=False, max_iter=10000, tol=1e-6, C=C)
-    clf.fit(x, y)
-    s = clf.decision_function(x)
-    sortix = np.argsort(-s)
-    pids = [itop[ix] for ix in sortix]
-    scores = [100*float(s[ix]) for ix in sortix]
-
-    # get the words that score most positively and most negatively for the svm
-    ivocab = {v:k for k,v in features['vocab'].items()} # index to word mapping
-    weights = clf.coef_[0] # (n_features,) weights of the trained svm
-    sortix = np.argsort(-weights)
-    words = []
-    for ix in list(sortix[:40]) + list(sortix[-20:]):
-        words.append({
-            'word': ivocab[ix],
-            'weight': weights[ix],
-        })
-
-    return pids, scores, words
+    return rank(features, pos, neg, feats=feats, model=model, C=C)
 
 def search_rank(q: str = ''):
     if not q:
@@ -216,7 +200,9 @@ def main():
     opt_pid = request.args.get('pid', '')  # pid to find nearest neighbors to
     opt_time_filter = request.args.get('time_filter', default_time_filter) # number of days to filter by
     opt_skip_have = request.args.get('skip_have', default_skip_have) # hide papers we already have?
-    opt_svm_c = request.args.get('svm_c', '') # svm C parameter
+    opt_svm_c = request.args.get('svm_c', '') # C (inverse regularization) of the ranking model, '' = default
+    opt_feats = request.args.get('feats', 'auto') # auto|tfidf|emb|concat|fusion, see aslite/rank.py
+    opt_model = request.args.get('model', 'svm') # svm|logreg, see aslite/rank.py
     opt_page_number = request.args.get('page_number', '1') # page number for pagination
 
     # if a query is given, override rank to be of type "search"
@@ -224,20 +210,26 @@ def main():
     if opt_q:
         opt_rank = 'search'
 
-    # try to parse opt_svm_c into something sensible (a float)
+    # try to parse opt_svm_c into something sensible (a float); None means "per-model default"
     try:
         C = float(opt_svm_c)
     except ValueError:
-        C = 0.01 # sensible default, i think
+        C = None
+    features_ok = os.path.isfile('data/features.p')
+    if opt_model not in MODELS:
+        opt_model = 'svm'
+    if opt_feats not in FEATS or (features_ok and opt_feats != 'tfidf' and not has_embeddings(load_features())):
+        opt_feats = 'auto' # e.g. embeddings were asked for but not computed
+    eff_feats = resolve_feats(load_features(), opt_feats) if features_ok else 'tfidf'
 
     # rank papers: by tags, by time, by random
     words = [] # only populated in the case of svm rank
     if opt_rank == 'search':
         pids, scores = search_rank(q=opt_q)
     elif opt_rank == 'tags':
-        pids, scores, words = svm_rank(tags=opt_tags, C=C)
+        pids, scores, words = svm_rank(tags=opt_tags, C=C, feats=opt_feats, model=opt_model)
     elif opt_rank == 'pid':
-        pids, scores, words = svm_rank(pid=opt_pid, C=C)
+        pids, scores, words = svm_rank(pid=opt_pid, C=C, feats=opt_feats, model=opt_model)
     elif opt_rank == 'time':
         pids, scores = time_rank()
     elif opt_rank == 'random':
@@ -254,10 +246,9 @@ def main():
         keep = [i for i,pid in enumerate(pids) if (tnow - kv[pid]['_time']) < deltat]
         pids, scores = [pids[i] for i in keep], [scores[i] for i in keep]
 
-    # optionally hide papers we already have
+    # optionally hide papers we already have (tagged or downvoted)
     if opt_skip_have == 'yes':
-        tags = get_tags()
-        have = set().union(*tags.values())
+        have = set().union(*get_tags().values(), *get_neg_tags().values())
         keep = [i for i,pid in enumerate(pids) if pid not in have]
         pids, scores = [pids[i] for i in keep], [scores[i] for i in keep]
 
@@ -287,7 +278,10 @@ def main():
     context['papers'] = papers
     context['tags'] = rtags
     context['words'] = words
-    context['words_desc'] = "Here are the top 40 most positive and bottom 20 most negative weights of the SVM. If they don't look great then try tuning the regularization strength hyperparameter of the SVM, svm_c, above. Lower C is higher regularization."
+    context['words_desc'] = ("Here are the top 40 most positive and bottom 20 most negative tfidf word weights of the model. "
+                             "If they don't look great then try tuning the regularization strength hyperparameter, svm_c, above. "
+                             "Lower C is higher regularization."
+                             + (" (With feats=fusion these are from the tfidf half; the embedding half has no words to show.)" if eff_feats == 'fusion' else ""))
     context['gvars'] = {}
     context['gvars']['rank'] = opt_rank
     context['gvars']['tags'] = opt_tags
@@ -295,7 +289,11 @@ def main():
     context['gvars']['time_filter'] = opt_time_filter
     context['gvars']['skip_have'] = opt_skip_have
     context['gvars']['search_query'] = opt_q
-    context['gvars']['svm_c'] = str(C)
+    context['gvars']['svm_c'] = '' if C is None else str(C)
+    context['gvars']['feats'] = opt_feats
+    context['gvars']['model'] = opt_model
+    context['gvars']['eff_feats'] = eff_feats
+    context['gvars']['has_emb'] = features_ok and has_embeddings(load_features())
     context['gvars']['page_number'] = str(page_number)
     return render_template('index.html', **context)
 
@@ -371,32 +369,35 @@ def about():
 # -----------------------------------------------------------------------------
 # tag related endpoints: add, delete tags for any paper
 
-@app.route('/add/<pid>/<tag>')
-def add(pid=None, tag=None):
+def _update_membership(get_db, pid, tag, present):
+    """ add (present=True) or remove pid from the user's tag in the given tags-like db """
+    with get_db(flag='c') as db:
+        d = db[g.user] if g.user in db else {}
+        if present:
+            d.setdefault(tag, set()).add(pid)
+        elif tag in d and pid in d[tag]:
+            d[tag].remove(pid)
+            if len(d[tag]) == 0: # if this was the last paper in this tag, also delete the tag
+                del d[tag]
+        else:
+            return d, False
+        db[g.user] = d
+    return d, True
+
+def _check_tag(tag):
     if g.user is None:
         return "error, not logged in"
-    if tag == 'all':
-        return "error, cannot add the protected tag 'all'"
-    elif tag == 'null':
-        return "error, cannot add the protected tag 'null'"
+    if tag in ('all', 'null'):
+        return "error, cannot use the protected tag '%s'" % (tag, )
+    return None
 
-    with get_tags_db(flag='c') as tags_db:
-
-        # create the user if we don't know about them yet with an empty library
-        if not g.user in tags_db:
-            tags_db[g.user] = {}
-
-        # fetch the user library object
-        d = tags_db[g.user]
-
-        # add the paper to the tag
-        if tag not in d:
-            d[tag] = set()
-        d[tag].add(pid)
-
-        # write back to database
-        tags_db[g.user] = d
-
+@app.route('/add/<pid>/<tag>')
+def add(pid=None, tag=None):
+    err = _check_tag(tag)
+    if err:
+        return err
+    d, _ = _update_membership(get_tags_db, pid, tag, True)
+    _update_membership(get_neg_tags_db, pid, tag, False) # a paper can't be both liked and downvoted
     print("added paper %s to tag %s for user %s" % (pid, tag, g.user))
     return "ok: " + str(d) # return back the user library for debugging atm
 
@@ -404,34 +405,30 @@ def add(pid=None, tag=None):
 def sub(pid=None, tag=None):
     if g.user is None:
         return "error, not logged in"
+    _, changed = _update_membership(get_tags_db, pid, tag, False)
+    if not changed:
+        return "user doesn't have paper %s in tag %s" % (pid, tag)
+    return "ok removed pid %s from tag %s" % (pid, tag)
 
-    with get_tags_db(flag='c') as tags_db:
+@app.route('/addneg/<pid>/<tag>')
+def addneg(pid=None, tag=None):
+    """ downvote: this paper is NOT what the tag is about. used as an explicit negative """
+    err = _check_tag(tag)
+    if err:
+        return err
+    d, _ = _update_membership(get_neg_tags_db, pid, tag, True)
+    _update_membership(get_tags_db, pid, tag, False)
+    print("downvoted paper %s for tag %s for user %s" % (pid, tag, g.user))
+    return "ok: " + str(d)
 
-        # if the user doesn't have any tags, there is nothing to do
-        if not g.user in tags_db:
-            return "user has no library of tags ¯\_(ツ)_/¯"
-
-        # fetch the user library object
-        d = tags_db[g.user]
-
-        # add the paper to the tag
-        if tag not in d:
-            return "user doesn't have the tag %s" % (tag, )
-        else:
-            if pid in d[tag]:
-
-                # remove this pid from the tag
-                d[tag].remove(pid)
-
-                # if this was the last paper in this tag, also delete the tag
-                if len(d[tag]) == 0:
-                    del d[tag]
-
-                # write back the resulting dict to database
-                tags_db[g.user] = d
-                return "ok removed pid %s from tag %s" % (pid, tag)
-            else:
-                return "user doesn't have paper %s in tag %s" % (pid, tag)
+@app.route('/subneg/<pid>/<tag>')
+def subneg(pid=None, tag=None):
+    if g.user is None:
+        return "error, not logged in"
+    _, changed = _update_membership(get_neg_tags_db, pid, tag, False)
+    if not changed:
+        return "user hasn't downvoted paper %s for tag %s" % (pid, tag)
+    return "ok removed downvote of pid %s for tag %s" % (pid, tag)
 
 @app.route('/del/<tag>')
 def delete_tag(tag=None):
@@ -453,6 +450,13 @@ def delete_tag(tag=None):
 
         # write back to database
         tags_db[g.user] = d
+
+    # and its downvotes, if any
+    with get_neg_tags_db(flag='c') as neg_db:
+        if g.user in neg_db and tag in neg_db[g.user]:
+            nd = neg_db[g.user]
+            del nd[tag]
+            neg_db[g.user] = nd
 
     print("deleted tag %s for user %s" % (tag, g.user))
     return "ok: " + str(d) # return back the user library for debugging atm

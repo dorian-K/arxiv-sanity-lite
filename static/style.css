@@ -114,6 +114,17 @@ body {
     width: 12px;
     text-align: center;
 }
+.rel_utag_neg { /* downvotes a paper for a tag */
+    cursor: pointer;
+    background-color: #fbb;
+    width: 12px;
+    text-align: center;
+}
+.rel_ntag { /* a tag this paper is downvoted for */
+    cursor: pointer;
+    background-color: #fdd;
+    text-decoration: line-through;
+}
 .rel_utag a {
     color: white;
     text-decoration: none;

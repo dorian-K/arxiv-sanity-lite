@@ -62,6 +62,19 @@ var move_page = function(int_offset) {
                 <label for="svm_c">svm_c: </label>
                 <input name="svm_c" type="text" id="svm_c_field" value="{{ gvars.svm_c }}">
 
+                <!-- which features and model rank papers for tags/pid, see aslite/rank.py -->
+                <label for="feats">feats: </label>
+                <select name="feats" id="feats_select">
+                    {% for f in (['auto', 'tfidf', 'emb', 'concat', 'fusion'] if gvars.has_emb else ['tfidf']) %}
+                    <option value="{{ f }}" {{ gvars.feats == f and 'selected' }}>{{ f }}{{ ' (' + gvars.eff_feats + ')' if f == 'auto' else '' }}</option>
+                    {% endfor %}
+                </select>
+                <label for="model">model: </label>
+                <select name="model" id="model_select">
+                    <option value="svm" {{ gvars.model == 'svm' and 'selected' }}>svm</option>
+                    <option value="logreg" {{ gvars.model == 'logreg' and 'selected' }}>logreg</option>
+                </select>
+
                 <!-- current skip_have: one of yes or no -->
                 <label for="skip_have">skip_have: </label>
                 <select name="skip_have" id="skip_have_select">

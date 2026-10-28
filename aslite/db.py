@@ -5,6 +5,7 @@ Any of the file system I/O and the associated settings are in this single file.
 """
 
 import os
+import re
 import sqlite3, zlib, pickle, tempfile
 from sqlitedict import SqliteDict
 from contextlib import contextmanager
@@ -119,6 +120,14 @@ def get_tags_db(flag='r', autocommit=True):
     tdb = CompressedSqliteDict(DICT_DB_FILE, tablename='tags', flag=flag, autocommit=autocommit)
     return tdb
 
+def get_neg_tags_db(flag='r', autocommit=True):
+    """ like tags, but for explicit downvotes: user -> {tag: set(pids)} """
+    assert flag in ['r', 'c']
+    # always 'c': existing installs don't have this table yet, and a read-only open of a
+    # missing table raises, which would break every page for users who never downvoted
+    ntdb = CompressedSqliteDict(DICT_DB_FILE, tablename='neg_tags', flag='c', autocommit=autocommit)
+    return ntdb
+
 def get_last_active_db(flag='r', autocommit=True):
     assert flag in ['r', 'c']
     ladb = SqliteDict(DICT_DB_FILE, tablename='last_active', flag=flag, autocommit=autocommit)
@@ -127,6 +136,16 @@ def get_last_active_db(flag='r', autocommit=True):
 def get_email_db(flag='r', autocommit=True):
     assert flag in ['r', 'c']
     edb = SqliteDict(DICT_DB_FILE, tablename='email', flag=flag, autocommit=autocommit)
+    return edb
+
+# caches dense embeddings of papers, one table per embedding model
+EMBEDDINGS_DB_FILE = os.path.join(DATA_DIR, 'embeddings.db')
+
+def get_embeddings_db(model, flag='r', autocommit=True):
+    """ pid -> float16 embedding vector, for the given model string """
+    assert flag in ['r', 'c']
+    tablename = 'emb_' + re.sub(r'[^A-Za-z0-9]+', '_', model)
+    edb = SqliteDict(EMBEDDINGS_DB_FILE, tablename=tablename, flag=flag, autocommit=autocommit)
     return edb
 
 # -----------------------------------------------------------------------------
@@ -141,8 +160,17 @@ def save_features(features):
     """ takes the features dict and save it to disk in a simple pickle file """
     safe_pickle_dump(features, FEATURES_FILE)
 
+_features_cache = {'mtime': None, 'features': None}
+
 def load_features():
-    """ loads the features dict from disk """
-    with open(FEATURES_FILE, 'rb') as f:
-        features = pickle.load(f)
-    return features
+    """
+    loads the features dict from disk. the result is cached in memory and only
+    re-read when compute.py has written a new file, so serving a request does not
+    re-unpickle the whole feature matrix every time.
+    """
+    mtime = os.path.getmtime(FEATURES_FILE)
+    if _features_cache['mtime'] != mtime:
+        with open(FEATURES_FILE, 'rb') as f:
+            _features_cache['features'] = pickle.load(f)
+        _features_cache['mtime'] = mtime
+    return _features_cache['features']

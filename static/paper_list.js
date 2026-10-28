@@ -12,6 +12,21 @@ const UTag = props => {
     )
 }
 
+const NTag = props => {
+    // a tag this paper was downvoted for; clicking it removes the downvote
+    const tag_name = props.tag;
+    const undo = () => {
+        if (confirm("remove downvote of this paper for tag '" + tag_name + "'?")) {
+            fetch("/subneg/" + props.pid + "/" + tag_name).then(response => console.log(response.text()));
+        }
+    };
+    return (
+        <div class='rel_utag rel_ntag' title="downvoted for this tag, click to undo" onClick={undo}>
+            {tag_name}
+        </div>
+    )
+}
+
 const Paper = props => {
     const p = props.paper;
 
@@ -19,7 +34,10 @@ const Paper = props => {
                         .then(response => console.log(response.text()));
     const subber = () => fetch("/sub/" + p.id + "/" + prompt("tag to subtract from this paper:"))
                         .then(response => console.log(response.text()));
+    const downvoter = () => fetch("/addneg/" + p.id + "/" + prompt("downvote this paper for tag (it is NOT what the tag is about):"))
+                        .then(response => console.log(response.text()));
     const utags = p.utags.map((utxt, ix) => <UTag key={ix} tag={utxt} />);
+    const ntags = p.ntags.map((ntxt, ix) => <NTag key={ix} tag={ntxt} pid={p.id} />);
     const similar_url = "/?rank=pid&pid=" + p.id;
     const inspect_url = "/inspect?pid=" + p.id;
     const thumb_img = p.thumb_url === '' ? null : <div class='rel_img'><img src={p.thumb_url} /></div>;
@@ -30,7 +48,9 @@ const Paper = props => {
             <div class='rel_utags'>
                 <div class="rel_utag rel_utag_add" onClick={adder}>+</div>
                 <div class="rel_utag rel_utag_sub" onClick={subber}>-</div>
+                <div class="rel_utag rel_utag_neg" title="downvote for a tag" onClick={downvoter}>&#10007;</div>
                 {utags}
+                {ntags}
             </div>
         )
     }

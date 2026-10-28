@@ -26,6 +26,14 @@ def get_response(search_query, start_index=0):
 
     return response
 
+def get_response_ids(id_list):
+    """ pings arxiv.org API to fetch specific papers by id (up to ~100 per call) """
+    base_url = 'http://export.arxiv.org/api/query?'
+    add_url = 'id_list=%s&max_results=%d' % (','.join(id_list), len(id_list))
+    with urllib.request.urlopen(base_url + add_url, timeout=60) as url:
+        response = url.read()
+    return response
+
 def encode_feedparser_dict(d):
     """ helper function to strip feedparser objects using a deep copy """
     if isinstance(d, feedparser.FeedParserDict) or isinstance(d, dict):

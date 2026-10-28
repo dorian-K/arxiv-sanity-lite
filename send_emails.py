@@ -14,8 +14,6 @@ import time
 import random
 import argparse
 
-import numpy as np
-from sklearn import svm
 
 import sendgrid
 from sendgrid.helpers.mail import Email, To, Content, Mail
@@ -25,6 +23,8 @@ from aslite.db import get_tags_db
 from aslite.db import get_metas_db
 from aslite.db import get_papers_db
 from aslite.db import get_email_db
+from aslite.db import get_neg_tags_db
+from aslite.rank import rank, resolve_feats
 
 # -----------------------------------------------------------------------------
 # the html template for the email
@@ -81,51 +81,34 @@ To stop these emails remove your email in your <a href="https://arxiv-sanity-lit
 
 def calculate_recommendation(
     tags,
+    neg_tags,
     time_delta = 3, # how recent papers are we recommending? in days
     ):
 
-    # a bit of preprocessing
-    x, pids = features['x'], features['pids']
-    n, d = x.shape
-    ptoi, itop = {}, {}
-    for i, p in enumerate(pids):
-        ptoi[p] = i
-        itop[i] = p
-
     # loop over all the tags
     all_pids, all_scores = {}, {}
+    have = set().union(*tags.values(), *neg_tags.values())
     for tag, pids in tags.items():
 
         if len(pids) == 0:
             continue
 
-        # construct the positive set for this tag
-        y = np.zeros(n, dtype=np.float32)
-        for pid in pids:
-            y[ptoi[pid]] = 1.0
-
-        # classify
-        clf = svm.LinearSVC(class_weight='balanced', verbose=False, max_iter=10000, tol=1e-6, C=0.01)
-        clf.fit(x, y)
-        s = clf.decision_function(x)
-        sortix = np.argsort(-s)
-        pids = [itop[ix] for ix in sortix]
-        scores = [100*float(s[ix]) for ix in sortix]
+        # rank all papers for this tag, with its downvotes as explicit negatives
+        pids, scores, _ = rank(features, pids, neg_tags.get(tag, set()),
+                               feats=args.feats, model=args.model)
 
         # filter by time to only recent papers
         deltat = time_delta*60*60*24 # allowed time delta in seconds
         keep = [i for i,pid in enumerate(pids) if (tnow - metas[pid]['_time']) < deltat]
         pids, scores = [pids[i] for i in keep], [scores[i] for i in keep]
 
-        # finally exclude the papers we already have tagged
-        have = set().union(*tags.values())
+        # finally exclude the papers we already have tagged or downvoted
         keep = [i for i,pid in enumerate(pids) if pid not in have]
         pids, scores = [pids[i] for i in keep], [scores[i] for i in keep]
 
         # store results
         all_pids[tag] = pids
         all_scores[tag] = scores
-
 
     return all_pids, all_scores
 
@@ -185,7 +168,7 @@ def render_recommendations(user, tags, tag_pids, tag_scores):
     tags_str = ', '.join(['"%s" (%d)' % (t, len(pids)) for t, pids in tags.items()])
     stats = f"We took the {num_papers_tagged} papers across your {len(tags)} tags ({tags_str}) and \
               ranked {len(pids)} papers that showed up on arxiv over the last \
-              {args.time_delta} days using tfidf SVMs over paper abstracts. Below are the \
+              {args.time_delta} days using {resolve_feats(features, args.feats)} {args.model} models over paper abstracts. Below are the \
               top {args.num_recommendations} papers. Remember that the more you tag, \
               the better this gets:"
     out = out.replace('__STATS__', stats)
@@ -227,6 +210,8 @@ if __name__ == "__main__":
     parser.add_argument('-t', '--time-delta', type=int, default=3, help='how recent papers to recommended, in days')
     parser.add_argument('-d', '--dry-run', type=int, default=0, help='if set to 1 do not actually send the emails')
     parser.add_argument('-u', '--user', type=str, default='', help='restrict recommendations only to a single given user (used for debugging)')
+    parser.add_argument('--feats', type=str, default='auto', help='features to rank with: auto|tfidf|emb|concat|fusion (see aslite/rank.py)')
+    parser.add_argument('--model', type=str, default='svm', help='ranking model: svm|logreg (see aslite/rank.py)')
     parser.add_argument('-m', '--min-papers', type=int, default=1, help='user must have at least this many papers for us to send recommendations')
     args = parser.parse_args()
     print(args)
@@ -237,6 +222,9 @@ if __name__ == "__main__":
     # read entire db simply into RAM
     with get_tags_db() as tags_db:
         tags = {k:v for k,v in tags_db.items()}
+
+    with get_neg_tags_db() as neg_db:
+        all_neg_tags = {k:v for k,v in neg_db.items()}
 
     # read entire db simply into RAM
     with get_metas_db() as mdb:
@@ -275,7 +263,7 @@ if __name__ == "__main__":
         # tags['all'] = set().union(*tags.values())
 
         # calculate the recommendations
-        pids, scores = calculate_recommendation(tags, time_delta=args.time_delta)
+        pids, scores = calculate_recommendation(tags, all_neg_tags.get(user, {}), time_delta=args.time_delta)
         if all(len(lst) == 0 for tag, lst in pids.items()):
             print("skipping user %s, no recommendations were produced" % (user, ))
             continue

@@ -153,6 +153,17 @@ The word list under "inspect" still shows the tfidf words, also for `concat` and
 
 **Embed on a GPU machine.** `./gpu_embed.sh user@host [model] [data dir]` copies the code and `papers.sqlite` over ssh, runs `compute.py` there with CUDA torch (`uv sync --extra embed-gpu`), and copies `embeddings.sqlite` and `features/` back. Accounts and tags (`users.sqlite`) stay local. EmbeddingGemma 2 over 500k papers takes minutes on an H100, against days on a CPU. Afterwards the daily CPU run only embeds new papers.
 
+If logging in to the GPU machine needs a password or 2FA code (typical for university clusters), the script can't type it. Let ssh share one connection instead. Add this to `~/.ssh/config`:
+
+```
+Host gpuhost
+  ControlMaster auto
+  ControlPath ~/.ssh/cm-%r@%h:%p
+  ControlPersist 8h
+```
+
+Then run `ssh gpuhost` once in a terminal and log in. For the next 8 hours, the script's connections reuse that one without asking. `GPU=<MIG-uuid or index>` pins the run to one GPU or MIG slice; `nvidia-smi -L` lists them.
+
 **Fetch specific papers.** `uv run python fetch_papers.py <arxiv ids>` (or `--file ids.txt`) adds papers by id, e.g. older papers you want to tag. Run `compute.py` afterwards.
 
 **Compare the variants.** `eval.py` holds out some of the liked papers of each tag and checks where they land in the ranking, for every feature set and model. Run it on your own tags with `uv run python eval.py run --source tags`, or on the public [Scholar Inbox ratings](https://github.com/avg-dev/scholar_inbox_datasets) (thumbs up/down from thousands of researchers):

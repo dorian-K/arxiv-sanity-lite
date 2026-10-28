@@ -40,8 +40,15 @@ if [ -f "$data/embeddings.sqlite" ]; then snap "$data/embeddings.sqlite" "$out/e
 # non-interactive ssh shells often lack ~/.local/bin, where the uv installer puts uv
 rpath='export PATH=$HOME/.local/bin:$HOME/.cargo/bin:$PATH'
 echo "== checking $host"
+# the script connects about ten times, so logins must not prompt. with password/2FA logins
+# (e.g. university clusters), share one connection: see "Embed on a GPU machine" in README
+if ! ssh -o BatchMode=yes -o ConnectTimeout=20 "$host" true; then
+    echo "can't log in to $host without a prompt. use an ssh key, or log in once in another"
+    echo "terminal with ControlMaster/ControlPersist set for $host in ~/.ssh/config (see README)"
+    exit 1
+fi
 ssh "$host" "$rpath; for c in uv rsync nvidia-smi; do command -v \$c >/dev/null || { echo \"missing on remote: \$c\"; exit 1; }; done" || {
-    echo "install uv with: curl -LsSf https://astral.sh/uv/install.sh | sh"; exit 1; }
+    echo "install uv on $host with: curl -LsSf https://astral.sh/uv/install.sh | sh"; exit 1; }
 
 echo "== copying code and $data to $host:$remote"
 ssh "$host" "mkdir -p $remote/$data"

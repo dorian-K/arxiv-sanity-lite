@@ -98,3 +98,30 @@ def test_smtp_message(monkeypatch):
     assert (host, port) == ('localhost', 25)
     assert msg['To'] == 'Alice <a@example.org>' and msg['List-Unsubscribe-Post'] == 'List-Unsubscribe=One-Click'
     assert {p.get_content_type() for p in msg.iter_parts()} == {'text/plain', 'text/html'}
+
+
+def test_schedule_is_sunday_8_berlin_time():
+    import datetime
+    import zoneinfo
+
+    from send_emails import last_slot
+
+    tz = zoneinfo.ZoneInfo('Europe/Berlin')
+    at = lambda *a: datetime.datetime(*a, tzinfo=tz).timestamp()  # noqa: E731
+    sched = 'sun 08:00 Europe/Berlin'
+    # sunday 2026-11-01 (winter time, CET) and sunday 2026-03-29, the day summer time starts
+    assert last_slot(at(2026, 11, 1, 8, 0), sched) == at(2026, 11, 1, 8, 0)
+    assert last_slot(at(2026, 11, 1, 7, 59), sched) == at(2026, 10, 25, 8, 0)
+    assert last_slot(at(2026, 11, 4, 12, 0), sched) == at(2026, 11, 1, 8, 0)  # a wednesday
+    assert last_slot(at(2026, 3, 29, 9, 0), sched) == at(2026, 3, 29, 8, 0)  # 08:00 CEST, not 09:00
+    assert datetime.datetime.fromtimestamp(last_slot(at(2026, 3, 30, 0, 0), sched), tz).hour == 8
+
+
+def test_if_due_waits_for_the_next_slot(features, monkeypatch):
+    import send_emails
+
+    t0 = 1793000000.0  # a monday morning
+    assert not send_emails.due(t0)  # first run: only starts the clock
+    assert not send_emails.due(t0 + 3600)  # same week
+    assert send_emails.due(t0 + 7 * 86400)  # a sunday slot has passed
+    assert not send_emails.due(t0 + 7 * 86400 + 600)  # but only once

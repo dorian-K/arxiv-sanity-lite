@@ -65,9 +65,10 @@ services:
       DAEMON_NUM: ${DAEMON_NUM:-2000}
       UPDATE_INTERVAL: ${UPDATE_INTERVAL:-86400}
       COMPUTE_MIN_INTERVAL: ${COMPUTE_MIN_INTERVAL:-3600}  # features for papers users added, at most this often
-      # digest emails every this many seconds (604800 = weekly). off by default: turn it on
-      # once the mail DNS records are in place and a test mail passes (see README)
-      DIGEST_INTERVAL: ${DIGEST_INTERVAL:-0}
+      # weekly digest emails at DIGEST_SCHEDULE. off by default: turn it on once the mail DNS
+      # records are in place and a test mail passes (see README)
+      DIGEST_ENABLED: ${DIGEST_ENABLED:-0}
+      DIGEST_SCHEDULE: ${DIGEST_SCHEDULE:-sun 08:00 Europe/Berlin}
       DIGEST_DAYS: ${DIGEST_DAYS:-7}
       PUBLIC_URL: ${PUBLIC_URL:-}
       MAIL_FROM: ${MAIL_FROM:-}

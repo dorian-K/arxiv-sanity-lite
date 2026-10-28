@@ -12,6 +12,12 @@ Mail goes out over plain SMTP, configured with environment variables:
     PUBLIC_URL     where the site is reachable, e.g. https://sanity.example.org
 
     uv run python send_emails.py --dry-run 1 -u alice --save digest.html   # preview
+    uv run python send_emails.py --if-due   # what the docker updater runs every few minutes
+
+--if-due sends only when the weekly slot in DIGEST_SCHEDULE (default "sun 08:00
+Europe/Berlin", local time, so summer time included) has passed since the last scheduled
+send, kept in data/last_digest. The first --if-due run only starts that clock: enabling the
+digest never mails everyone on the spot. Manual runs (without --if-due) don't touch it.
 """
 
 import os
@@ -19,6 +25,8 @@ import time
 import html
 import argparse
 import smtplib
+import datetime
+import zoneinfo
 from email.message import EmailMessage
 from email.utils import make_msgid, formataddr, parseaddr
 
@@ -26,6 +34,41 @@ from itsdangerous import URLSafeSerializer
 
 from aslite import db, digest
 from aslite.db import load_features, get_papers_db, get_emails, get_secret_key
+
+DIGEST_SCHEDULE = os.environ.get('DIGEST_SCHEDULE', 'sun 08:00 Europe/Berlin')
+LAST_DIGEST_FILE = os.path.join(db.DATA_DIR, 'last_digest')
+DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
+
+
+def last_slot(now, schedule=DIGEST_SCHEDULE):
+    """unix time of the latest weekly slot at or before now, e.g. 'sun 08:00 Europe/Berlin'"""
+    day, hhmm, tz = schedule.split()
+    hour, minute = map(int, hhmm.split(':'))
+    local = datetime.datetime.fromtimestamp(now, zoneinfo.ZoneInfo(tz))
+    slot = local.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    slot -= datetime.timedelta(days=(local.weekday() - DAYS.index(day.lower()[:3])) % 7)
+    if slot > local:
+        slot -= datetime.timedelta(days=7)
+    # rebuild from the wall-clock time, so a slot across a summer-time switch stays at 08:00
+    slot = datetime.datetime(slot.year, slot.month, slot.day, hour, minute, tzinfo=zoneinfo.ZoneInfo(tz))
+    return slot.timestamp()
+
+
+def due(now):
+    """for --if-due: whether a scheduled digest is due now; records it if so"""
+    if not os.path.isfile(LAST_DIGEST_FILE):
+        with open(LAST_DIGEST_FILE, 'w') as f:
+            f.write(str(now))
+        print(f"digest schedule started ({DIGEST_SCHEDULE}), the first one goes out at the next slot")
+        return False
+    with open(LAST_DIGEST_FILE) as f:
+        last = float(f.read().strip() or 0)
+    if last >= last_slot(now):
+        return False
+    with open(LAST_DIGEST_FILE, 'w') as f:
+        f.write(str(now))
+    return True
+
 
 PUBLIC_URL = os.environ.get('PUBLIC_URL', 'http://localhost:5000').rstrip('/')
 MAIL_FROM = os.environ.get('MAIL_FROM', 'arxiv-sanity <digest@localhost>')
@@ -116,7 +159,10 @@ if __name__ == "__main__":
     parser.add_argument('--save', type=str, default='', help='also write the html of the (last) email to this file')
     parser.add_argument('--feats', type=str, default='auto', help='auto|tfidf|emb|concat|fusion (see aslite/rank.py)')
     parser.add_argument('--model', type=str, default='auto', help='auto|svm|logreg (see aslite/rank.py)')
+    parser.add_argument('--if-due', action='store_true', help='only send when the DIGEST_SCHEDULE slot has passed')
     args = parser.parse_args()
+    if args.if_due and not due(time.time()):
+        raise SystemExit(0)
     print(args)
 
     emails = get_emails()

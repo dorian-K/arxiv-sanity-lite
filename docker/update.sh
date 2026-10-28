@@ -20,23 +20,13 @@ compute() {
 last_daily=0
 last_compute=0
 
-# the weekly digest emails (send_emails.py), when DIGEST_INTERVAL > 0. the time of the last
-# one is kept in data/, so restarting the container doesn't send another. when there is
-# none yet, the clock starts now: turning the digest on never mails everyone on the spot
-# (send a test with `docker compose exec updater python send_emails.py -u <you>` instead)
+# the weekly digest emails, when DIGEST_ENABLED=1: send_emails.py --if-due sends at the
+# DIGEST_SCHEDULE slot (default sunday 08:00 Europe/Berlin) and otherwise exits right away.
+# its first run only starts the clock, so turning the digest on never mails everyone on the
+# spot (send a test with `docker compose exec updater python send_emails.py -u <you>`)
 digest() {
-    [ "${DIGEST_INTERVAL:-0}" -gt 0 ] || return 0
-    if [ ! -f data/last_digest ]; then
-        date +%s > data/last_digest
-        echo "digest enabled: the first one goes out in ${DIGEST_INTERVAL}s"
-        return 0
-    fi
-    last=$(cat data/last_digest)
-    if [ $(($(date +%s) - last)) -ge "$DIGEST_INTERVAL" ]; then
-        echo "== $(date -u) sending digests"
-        date +%s > data/last_digest
-        python send_emails.py --time-delta "${DIGEST_DAYS:-7}" || echo "send_emails.py failed"
-    fi
+    [ "${DIGEST_ENABLED:-0}" = 1 ] || return 0
+    python send_emails.py --if-due --time-delta "${DIGEST_DAYS:-7}" || echo "send_emails.py failed"
 }
 while true; do
     now=$(date +%s)
@@ -51,11 +41,11 @@ while true; do
         else
             echo "no new papers (or arXiv unreachable)"
         fi
-        digest
     elif [ -f data/compute_requested ] && [ $((now - last_compute)) -ge "${COMPUTE_MIN_INTERVAL:-3600}" ]; then
         echo "== $(date -u) users added papers"
         rm -f data/compute_requested  # before computing, so papers added meanwhile trigger another run
         compute
     fi
+    digest
     sleep 300
 done

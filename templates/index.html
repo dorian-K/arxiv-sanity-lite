@@ -31,12 +31,12 @@ var move_page = function(int_offset) {
 
         <!-- everything that changes how papers are ranked; open whenever it is in use -->
         <!-- collapsed by default; open when a non-default model setting is in use -->
-        <details id="options" {{ 'open' if gvars.svm_c or gvars.feats != 'auto' or gvars.model != 'svm' }}>
+        <details id="options" {{ 'open' if gvars.svm_c or gvars.feats != 'auto' or gvars.model != 'auto' }}>
             <summary>Ranking options
                 <span class="optsummary">
                     {%- if gvars.rank == 'tags' %} · tags: {{ gvars.tags }}{% elif gvars.rank == 'pid' %} · similar to {{ gvars.pid }}{% elif gvars.rank == 'random' %} · random{% elif gvars.rank == 'time' %} · newest{% endif -%}
                     {%- if gvars.time_filter %} · last {{ gvars.time_filter }} days{% endif -%}
-                    {%- if gvars.rank in ('tags', 'pid') %} · {{ gvars.eff_feats }} + {{ gvars.model }}{% endif -%}
+                    {%- if gvars.rank in ('tags', 'pid') %} · {{ gvars.eff_feats }} + {{ gvars.eff_model }}{% endif -%}
                 </span>
             </summary>
             <div id="optgrid">
@@ -68,8 +68,9 @@ var move_page = function(int_offset) {
                 </label>
                 <label>model
                     <select name="model" id="model_select">
-                        <option value="svm" {{ gvars.model == 'svm' and 'selected' }}>svm</option>
-                        <option value="logreg" {{ gvars.model == 'logreg' and 'selected' }}>logreg</option>
+                        {% for m in ['auto', 'svm', 'logreg'] %}
+                        <option value="{{ m }}" {{ gvars.model == m and 'selected' }}>{{ m }}{{ ' (' + gvars.eff_model + ')' if m == 'auto' else '' }}</option>
+                        {% endfor %}
                     </select>
                 </label>
                 <label title="C: inverse regularization strength, lower is smoother. empty = tuned default">regularization C

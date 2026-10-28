@@ -23,7 +23,7 @@ from aslite.db import get_metas_db
 from aslite.db import get_papers_db
 from aslite.db import get_email_db
 from aslite.db import get_neg_tags_db
-from aslite.rank import rank, resolve_feats
+from aslite.rank import rank, resolve_feats, resolve_model
 
 # -----------------------------------------------------------------------------
 # the html template for the email
@@ -169,7 +169,7 @@ def render_recommendations(user, tags, tag_pids, tag_scores):
     tags_str = ', '.join(['"%s" (%d)' % (t, len(pids)) for t, pids in tags.items()])
     stats = f"We took the {num_papers_tagged} papers across your {len(tags)} tags ({tags_str}) and \
               ranked {len(pids)} papers that showed up on arxiv over the last \
-              {args.time_delta} days using {resolve_feats(features, args.feats)} {args.model} models over paper abstracts. Below are the \
+              {args.time_delta} days using {resolve_feats(features, args.feats)} {resolve_model(features, args.model)} models over paper abstracts. Below are the \
               top {args.num_recommendations} papers. Remember that the more you tag, \
               the better this gets:"
     out = out.replace('__STATS__', stats)
@@ -227,7 +227,7 @@ if __name__ == "__main__":
         default='auto',
         help='features to rank with: auto|tfidf|emb|concat|fusion (see aslite/rank.py)',
     )
-    parser.add_argument('--model', type=str, default='svm', help='ranking model: svm|logreg (see aslite/rank.py)')
+    parser.add_argument('--model', type=str, default='auto', help='ranking model: auto|svm|logreg (see aslite/rank.py)')
     parser.add_argument(
         '-m',
         '--min-papers',

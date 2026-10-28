@@ -20,8 +20,8 @@ from flask import g  # global session-level object
 from flask import session
 
 from aslite.db import get_papers_db, get_metas_db, get_tags_db, get_neg_tags_db, get_last_active_db, get_email_db
-from aslite.db import load_features
-from aslite.rank import rank, resolve_feats, has_embeddings, FEATS, MODELS
+from aslite.db import load_features, FEATURES_FILE
+from aslite.rank import rank, resolve_feats, resolve_model, has_embeddings, FEATS, MODELS
 
 # -----------------------------------------------------------------------------
 # inits and globals
@@ -139,7 +139,7 @@ def time_rank():
     return pids, scores
 
 
-def svm_rank(tags: str = '', pid: str = '', C=None, feats='auto', model='svm'):
+def svm_rank(tags: str = '', pid: str = '', C=None, feats='auto', model='auto'):
 
     # tag can be one tag or a few comma-separated tags or 'all' for all tags we have in db
     # pid can be a specific paper id to set as positive for a kind of nearest neighbor search
@@ -217,7 +217,7 @@ def main():
     opt_skip_have = request.args.get('skip_have', default_skip_have)  # hide papers we already have?
     opt_svm_c = request.args.get('svm_c', '')  # C (inverse regularization) of the ranking model, '' = default
     opt_feats = request.args.get('feats', 'auto')  # auto|tfidf|emb|concat|fusion, see aslite/rank.py
-    opt_model = request.args.get('model', 'svm')  # svm|logreg, see aslite/rank.py
+    opt_model = request.args.get('model', 'auto')  # auto|svm|logreg, see aslite/rank.py
     opt_page_number = request.args.get('page_number', '1')  # page number for pagination
 
     # if a query is given, override rank to be of type "search"
@@ -230,12 +230,13 @@ def main():
         C = float(opt_svm_c)
     except ValueError:
         C = None
-    features_ok = os.path.isfile('data/features.p')
+    features_ok = os.path.isfile(FEATURES_FILE)
     if opt_model not in MODELS:
-        opt_model = 'svm'
+        opt_model = 'auto'
     if opt_feats not in FEATS or (features_ok and opt_feats != 'tfidf' and not has_embeddings(load_features())):
         opt_feats = 'auto'  # e.g. embeddings were asked for but not computed
     eff_feats = resolve_feats(load_features(), opt_feats) if features_ok else 'tfidf'
+    eff_model = resolve_model(load_features(), opt_model) if features_ok else 'svm'
 
     # rank papers: by tags, by time, by random
     words = []  # only populated in the case of svm rank
@@ -314,6 +315,7 @@ def main():
     context['gvars']['feats'] = opt_feats
     context['gvars']['model'] = opt_model
     context['gvars']['eff_feats'] = eff_feats
+    context['gvars']['eff_model'] = eff_model
     context['gvars']['has_emb'] = features_ok and has_embeddings(load_features())
     context['gvars']['page_number'] = str(page_number)
     return render_template('index.html', **context)

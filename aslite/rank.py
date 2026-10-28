@@ -9,7 +9,7 @@ Feature sets ("feats"):
     emb     dense embeddings from compute.py --embed_model
     concat  tfidf and embeddings side by side in one model; alpha scales the embedding block
     fusion  one model per feature set, scores z-normalized and mixed: w*emb + (1-w)*tfidf
-    auto    fusion if embeddings were computed, else tfidf
+    auto    concat if embeddings were computed, else tfidf (best in eval.py, see README)
 
 Models ("model"):
     svm     the original arxiv-sanity-lite LinearSVC: every untagged paper is a negative,
@@ -18,6 +18,9 @@ Models ("model"):
             regression on positives, downvotes and a random sample of other papers,
             with class weights set by S (total negative weight) and V (share of the
             negative weight that goes to downvotes rather than random papers).
+            Its training set doesn't grow with the corpus, so it stays fast on 100k+ papers.
+    auto    logreg if embeddings were computed, else svm (so without embeddings nothing
+            changes from the original arxiv-sanity-lite)
 """
 
 import zlib
@@ -28,7 +31,7 @@ from sklearn import svm
 from sklearn.linear_model import LogisticRegression
 
 FEATS = ('auto', 'tfidf', 'emb', 'concat', 'fusion')
-MODELS = ('svm', 'logreg')
+MODELS = ('auto', 'svm', 'logreg')
 
 # default regularization per (model, feature set); C is "inverse regularization"
 # so lower = smoother. the tfidf svm value is the original arxiv-sanity-lite one; the
@@ -62,12 +65,20 @@ def has_embeddings(features):
 
 def resolve_feats(features, feats):
     if feats in (None, '', 'auto'):
-        return 'fusion' if has_embeddings(features) else 'tfidf'
+        return 'concat' if has_embeddings(features) else 'tfidf'
     if feats not in FEATS:
         raise ValueError(f"unknown feats {feats!r}, options: {FEATS}")
     if feats != 'tfidf' and not has_embeddings(features):
         raise ValueError(f"feats={feats!r} needs embeddings: run compute.py with --embed_model")
     return feats
+
+
+def resolve_model(features, model):
+    if model in (None, '', 'auto'):
+        return 'logreg' if has_embeddings(features) else 'svm'
+    if model not in MODELS:
+        raise ValueError(f"unknown model {model!r}, options: {MODELS}")
+    return model
 
 
 def _matrix(features, feats, alpha):
@@ -137,7 +148,7 @@ def _top_words(features, coef_tfidf):
     return [{'word': ivocab[ix], 'weight': float(coef_tfidf[ix])} for ix in list(sortix[:40]) + list(sortix[-20:])]
 
 
-def rank(features, pos_pids, neg_pids=(), feats='auto', model='svm', C=None, **kwargs):
+def rank(features, pos_pids, neg_pids=(), feats='auto', model='auto', C=None, **kwargs):
     """
     Returns (pids, scores, words): all papers sorted by score, and the tfidf words
     with the most positive / negative weight (empty if no tfidf model was trained).
@@ -145,6 +156,7 @@ def rank(features, pos_pids, neg_pids=(), feats='auto', model='svm', C=None, **k
     opts = dict(DEFAULTS)
     opts.update({k: v for k, v in kwargs.items() if v is not None})
     feats = resolve_feats(features, feats)
+    model = resolve_model(features, model)
 
     pids = features['pids']
     ptoi = {p: i for i, p in enumerate(pids)}

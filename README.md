@@ -67,8 +67,10 @@ You can also set `EMBED_MODEL` in the environment instead of passing `--embed_mo
 
 **Pick features and model per request.** The front page gets two new options, also usable as URL parameters and as `send_emails.py --feats/--model`:
 
-- `feats`: `tfidf`, `emb` (embeddings only), `concat` (both in one model), `fusion` (one model each, scores averaged) or `auto` (fusion if embeddings exist, else tfidf).
-- `model`: `svm` (the original) or `logreg`, the recipe from [Scholar Inbox](https://arxiv.org/abs/2504.08385): logistic regression on your liked papers, your downvotes and 5000 random other papers, with tuned class weights.
+- `feats`: `tfidf`, `emb` (embeddings only), `concat` (both in one model), `fusion` (one model each, scores averaged) or `auto` (concat if embeddings exist, else tfidf).
+- `model`: `svm` (the original), `logreg`, the recipe from [Scholar Inbox](https://arxiv.org/abs/2504.08385): logistic regression on your liked papers, your downvotes and 5000 random other papers, with tuned class weights, or `auto` (logreg if embeddings exist, else svm). svm trains on every paper in the corpus, so it gets slow on 100k+ papers; logreg doesn't.
+
+Without embeddings both `auto`s give the original tfidf + svm, so nothing changes until you run `compute.py --embed_model`.
 
 The word list under "inspect" still shows the tfidf words, also for `concat` and `fusion`. With `feats=emb` there are no words to show.
 
@@ -86,10 +88,28 @@ The word list under "inspect" still shows the tfidf words, also for `concat` and
 uv run python eval.py prepare-si --ratings path/to/rated_papers.csv --users 60
 uv run python fetch_papers.py --file data/si_ids.txt
 uv run python compute.py --embed_model st:BAAI/bge-small-en-v1.5
-uv run python eval.py run --source si
+uv run python eval.py run --source si --pool rated
 ```
 
-The defaults in `aslite/rank.py` (`DEFAULT_C`, `DEFAULTS`) are starting points; tune them with `eval.py` once you have results.
+`--pool rated` ranks only among papers some profile rated. Without it, papers fetched by `arxiv_daemon.py` are newer than every rating, and a model can push them down by date-specific vocabulary alone, which inflates `auc_rand` and `top1pct`. `--train_pos 5` trains on only 5 likes per profile, like a new tag.
+
+**Results** on 60 Scholar Inbox users (20–150 likes and downvotes each, 6,877 papers), 3-fold, with the tuned defaults in `aslite/rank.py`. `auc_rand`: a held-out liked paper scores above a random rated paper. `auc_hard`: it scores above a held-out *downvoted* paper. `top1pct`: share of held-out likes in the top 1%. Standard errors are about ±0.004 / ±0.012 / ±0.03; every variant is scored on the same profiles, so differences between rows are more reliable than those errors suggest.
+
+| feats:model | bge-small: auc_rand | auc_hard | top1pct | EmbeddingGemma 2: auc_rand | auc_hard | top1pct | 5 likes only (Gemma): auc_rand | auc_hard |
+|---|---|---|---|---|---|---|---|---|
+| tfidf:svm (original) | .965 | .788 | .394 | .965 | .788 | .394 | .912 | .723 |
+| emb:svm | .959 | .814 | .406 | .961 | .818 | .409 | .919 | .753 |
+| concat:svm | .966 | .817 | .408 | .968 | **.822** | .410 | .932 | .760 |
+| fusion:svm | .968 | .809 | .416 | **.969** | .811 | .410 | .932 | .752 |
+| tfidf:logreg | .964 | .784 | .409 | .964 | .784 | .409 | .916 | .724 |
+| emb:logreg | .961 | .810 | .412 | .963 | .816 | .426 | .933 | .764 |
+| **concat:logreg (auto)** | .965 | .815 | .416 | .967 | .819 | .420 | .938 | **.766** |
+| fusion:logreg | .968 | .803 | .429 | .969 | .805 | **.429** | **.939** | .756 |
+
+- Adding embeddings to tfidf helps most at telling liked papers from near misses (`auc_hard` .79 → .82) and for small tags (.72 → .77). `concat` and `fusion` are within noise of each other; `auto` picks `concat` because one model also explains the ranking ("why these papers?").
+- EmbeddingGemma 2 (`st:google/embeddinggemma-2`, 270M) beats bge-small (33M) in almost every cell, but only by about .002–.006, a small gain for about 8× the embedding cost on a CPU.
+- With tuned C, `logreg` and `svm` are about equal. `auto` picks `logreg` because its cost doesn't grow with the corpus.
+- The original default C for logreg (1.0) was far too strong a regularizer; the tuned values are in `DEFAULT_C`.
 
 #### Todos
 

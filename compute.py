@@ -36,6 +36,9 @@ if __name__ == '__main__':
     parser.add_argument(
         '--emb_dims', type=int, default=256, help='reduce embeddings to this many dims with PCA (0 = keep all)'
     )
+    parser.add_argument(
+        '--embed_batch', type=int, default=32, help='papers per embedding batch; 32 suits a CPU, use 512+ on a big GPU'
+    )
     args = parser.parse_args()
     print(args)
 
@@ -95,7 +98,7 @@ if __name__ == '__main__':
 
     if args.embed_model:
         print("computing embeddings...")
-        x_emb = embed_papers(pids, pdb, args.embed_model)
+        x_emb = embed_papers(pids, pdb, args.embed_model, batch_size=args.embed_batch)
         if 0 < args.emb_dims < x_emb.shape[1]:
             # Scholar Inbox found 256 PCA dims lose ~nothing for recommendation,
             # while making the per-request classifier faster and the file smaller

@@ -74,6 +74,10 @@ The word list under "inspect" still shows the tfidf words, also for `concat` and
 
 **Downvote papers.** The new ✗ button on a paper asks for a tag and marks the paper as *not* what that tag is about. Downvotes are used as explicit negatives when ranking that tag, hidden by `skip_have`, and shown as crossed-out tags on the paper (click one to undo). Liking a paper for a tag removes its downvote for that tag and vice versa.
 
+**Import years of papers.** `uv run python harvest_papers.py --years 5` bulk-imports through arXiv's OAI-PMH interface (~1300 records per request, one request every ~16s, resumable), filtered to the same categories as `arxiv_daemon.py`. 5 years is roughly 500k papers and a few hours. Set `ARXIV_SANITY_DATA=data/5y` to keep it apart from your main corpus.
+
+**Embed on a GPU machine.** `./gpu_embed.sh user@host [model] [data dir]` copies the code and `papers.db` over ssh, runs `compute.py` there with CUDA torch (`uv sync --extra embed-gpu`), and copies `embeddings.db` and `features.p` back. EmbeddingGemma 2 over 500k papers takes minutes on an H100, against days on a CPU. Afterwards the daily CPU run only embeds new papers.
+
 **Fetch specific papers.** `uv run python fetch_papers.py <arxiv ids>` (or `--file ids.txt`) adds papers by id, e.g. older papers you want to tag. Run `compute.py` afterwards.
 
 **Compare the variants.** `eval.py` holds out some of the liked papers of each tag and checks where they land in the ranking, for every feature set and model. Run it on your own tags with `uv run python eval.py run --source tags`, or on the public [Scholar Inbox ratings](https://github.com/avg-dev/scholar_inbox_datasets) (thumbs up/down from thousands of researchers):

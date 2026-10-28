@@ -66,7 +66,7 @@ class SentenceTransformerBackend:
 
     def encode(self, texts):
         x = self.model.encode(
-            texts, batch_size=32, normalize_embeddings=True, show_progress_bar=False, convert_to_numpy=True
+            texts, batch_size=len(texts), normalize_embeddings=True, show_progress_bar=False, convert_to_numpy=True
         )
         return x.astype(np.float32)
 

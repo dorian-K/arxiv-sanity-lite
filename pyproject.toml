@@ -18,6 +18,8 @@ dependencies = [
 # local embeddings (compute.py --embed_model st:...); not needed for api:/Ollama embeddings
 # (pillow + torchvision: multimodal models such as embeddinggemma-2 load their image processor even for text)
 embed = ["sentence-transformers>=6.0", "torch>=2.6", "torchvision", "pillow"]
+# the same with CUDA torch, for a GPU machine (see gpu_embed.sh); can't be combined with embed
+embed-gpu = ["sentence-transformers>=6.0", "torch>=2.6", "torchvision", "pillow"]
 # send_emails.py
 email = ["sendgrid>=6.12"]
 # thumb_daemon.py (also needs ImageMagick's `convert` on PATH)
@@ -30,16 +32,29 @@ dev = ["pytest>=9.0", "ruff>=0.14"]
 # a collection of scripts run from the repo root, not an installable package
 package = false
 
-# the embed extra pulls in torch; on Linux take the CPU build instead of the multi-GB
-# CUDA one. with a GPU, delete the torch source below and run `uv lock`
+conflicts = [[{ extra = "embed" }, { extra = "embed-gpu" }]]
+
+# the embed extra takes the CPU build of torch on Linux instead of the multi-GB CUDA one;
+# embed-gpu takes the CUDA 12.6 build, which also runs on older drivers
 [[tool.uv.index]]
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
 explicit = true
 
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
 [tool.uv.sources]
-torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
-torchvision = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+torch = [
+    { index = "pytorch-cpu", extra = "embed", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cu126", extra = "embed-gpu", marker = "sys_platform == 'linux'" },
+]
+torchvision = [
+    { index = "pytorch-cpu", extra = "embed", marker = "sys_platform == 'linux'" },
+    { index = "pytorch-cu126", extra = "embed-gpu", marker = "sys_platform == 'linux'" },
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

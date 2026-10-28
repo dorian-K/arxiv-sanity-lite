@@ -13,7 +13,8 @@ from contextlib import contextmanager
 # -----------------------------------------------------------------------------
 # global configuration
 
-DATA_DIR = 'data'
+# override to keep several corpora apart, e.g. ARXIV_SANITY_DATA=data/5y for a bulk import
+DATA_DIR = os.environ.get('ARXIV_SANITY_DATA', 'data')
 
 # -----------------------------------------------------------------------------
 # utilities for safe writing of a pickle file

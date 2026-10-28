@@ -65,9 +65,21 @@ class SentenceTransformerBackend:
             self.model.max_seq_length = cfg['max_seq_length']
 
     def encode(self, texts):
-        x = self.model.encode(
-            texts, batch_size=len(texts), normalize_embeddings=True, show_progress_bar=False, convert_to_numpy=True
-        )
+        import torch
+
+        try:
+            x = self.model.encode(
+                texts, batch_size=len(texts), normalize_embeddings=True, show_progress_bar=False, convert_to_numpy=True
+            )
+        except torch.OutOfMemoryError:
+            # batches are sorted by length, so the last ones are the biggest: rather than
+            # crash near the end of a long run, split the batch and try the halves
+            if len(texts) == 1:
+                raise
+            torch.cuda.empty_cache()
+            mid = len(texts) // 2
+            print(f"  out of GPU memory on a batch of {len(texts)}, splitting it")
+            return np.concatenate([self.encode(texts[:mid]), self.encode(texts[mid:])])
         return x.astype(np.float32)
 
 

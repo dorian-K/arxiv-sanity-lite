@@ -4,6 +4,7 @@ Utils for dealing with arxiv API and related processing
 
 import re
 import time
+import calendar
 import logging
 import urllib.request
 import feedparser
@@ -73,7 +74,7 @@ def parse_response(response):
         j['_idv'] = idv
         j['_id'] = rawid
         j['_version'] = version
-        j['_time'] = time.mktime(j['updated_parsed'])
+        j['_time'] = calendar.timegm(j['updated_parsed'])  # a UTC struct_time; mktime would read it as local
         j['_time_str'] = time.strftime('%b %d %Y', j['updated_parsed'])
         # delete apparently spurious and redundant information
         del j['summary_detail']
@@ -128,7 +129,7 @@ def fetch_papers_by_id(ids):
             if not j.get('title') or not j.get('updated_parsed'):
                 continue  # arXiv's placeholder for an id it doesn't have
             j.update(_idv=idv, _id=rawid, _version=version)
-            j['_time'] = time.mktime(j['updated_parsed'])
+            j['_time'] = calendar.timegm(j['updated_parsed'])
             j['_time_str'] = time.strftime('%b %d %Y', j['updated_parsed'])
             out[rawid] = j
         except (AssertionError, KeyError, ValueError):
@@ -158,7 +159,7 @@ def make_paper(pid, version_dates, title, abstract, authors, categories, comment
         '_id': pid,
         '_idv': f'{pid}v{v}',
         '_version': v,
-        '_time': time.mktime(updated),  # same convention as parse_response
+        '_time': calendar.timegm(updated),  # same as parse_response: true unix time of the UTC date
         '_time_str': time.strftime('%b %d %Y', updated),
         'id': f'http://arxiv.org/abs/{pid}v{v}',
         'title': ' '.join(title.split()),

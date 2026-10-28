@@ -12,6 +12,8 @@ def test_upsert_keeps_the_newest_version(corpus):
         assert pdb[pid]['title'] == p['title']
         # an older version is ignored, a newer one replaces it, and search follows along
         assert pdb.upsert([dict(p, title='stale', _time=p['_time'] - 10)]) == 0
+        # same version with a time an hour later (another machine's timezone): not an update either
+        assert pdb.upsert([dict(p, title='same version', _time=p['_time'] + 3600)]) == 0
         assert pdb.upsert([dict(p, title='zebra crossing', _version=2, _time=p['_time'] + 10)]) == 1
         assert pdb[pid]['_idv'] == pid + 'v2'
         assert pdb.search('zebra')[0] == [pid]

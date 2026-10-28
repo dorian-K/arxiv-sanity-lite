@@ -23,6 +23,7 @@ import os
 import sys
 import json
 import time
+import calendar
 import hashlib
 import argparse
 import urllib.request
@@ -155,7 +156,7 @@ if __name__ == '__main__':
         should, have = 0, 0
         with get_papers_db(ref) as rdb:
             for pid, p in rdb.items():
-                first = time.mktime(time.strptime(p['published'], '%Y-%m-%dT%H:%M:%SZ'))
+                first = calendar.timegm(time.strptime(p['published'], '%Y-%m-%dT%H:%M:%SZ'))
                 # in the window, in our categories, and old enough to be in the snapshot
                 if since <= first <= newest - 86400 and CATEGORIES & {t['term'] for t in p['tags']}:
                     should += 1

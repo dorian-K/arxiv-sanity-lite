@@ -207,14 +207,15 @@ class PapersDB:
     def upsert(self, papers):
         """
         stores papers that are new, or newer versions of ones we have, in one transaction.
-        returns how many were written
+        returns how many were written. "newer" goes by version number, not time: times
+        stored before calendar.timegm was used can be off by the fetching machine's utc offset
         """
         with self.con:
             cur = self.con.executemany(
                 f"INSERT INTO papers ({_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(id) DO UPDATE SET "
                 + ', '.join(f'{c} = excluded.{c}' for c in _COLS.split(', ')[1:])
-                + " WHERE excluded.time > papers.time",
+                + " WHERE excluded.version > papers.version",
                 (_paper_to_row(p) for p in papers),
             )
         return cur.rowcount  # counts papers only, not the search index rows the triggers write

@@ -74,7 +74,9 @@ if __name__ == '__main__':
         for p in papers:
             pid = p['_id']
             if pid in pdb:
-                if p['_time'] > pdb[pid]['_time']:
+                # a new version, not a newer timestamp: stored times may differ by the timezone
+                # offset of the machine that once fetched them (see calendar.timegm in aslite/arxiv.py)
+                if int(p['_version']) > int(pdb[pid]['_version']):
                     # replace, this one is newer
                     store(p)
                     nreplace += 1

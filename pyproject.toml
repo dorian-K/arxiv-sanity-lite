@@ -1,0 +1,33 @@
+[project]
+name = "arxiv-sanity-lite"
+version = "0.1.0"
+description = "Tag arxiv papers and get tfidf/embedding-based recommendations in a small Flask UI"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+dependencies = [
+    "feedparser>=6.0.14",
+    "flask>=3.1",
+    "numpy>=2.0",
+    "scikit-learn>=1.9",
+    "scipy>=1.18",
+    "sqlitedict>=2.1",
+]
+
+[project.optional-dependencies]
+# local embeddings (compute.py --embed_model st:...); not needed for api:/Ollama embeddings
+embed = ["sentence-transformers>=6.0"]
+# send_emails.py
+email = ["sendgrid>=6.12"]
+# thumb_daemon.py (also needs ImageMagick's `convert` on PATH)
+thumbs = ["requests>=2.32"]
+
+[dependency-groups]
+dev = ["pytest>=9.0"]
+
+[tool.uv]
+# a collection of scripts run from the repo root, not an installable package
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

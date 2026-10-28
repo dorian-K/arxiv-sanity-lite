@@ -1,5 +1,0 @@
-# only needed for local embeddings (compute.py --embed_model st:...).
-# not needed if you use an embeddings API or Ollama (--embed_model api:...).
-# on a CPU-only machine install torch first, from the CPU index, to avoid the large CUDA build:
-#   pip install torch --index-url https://download.pytorch.org/whl/cpu
-sentence-transformers>=3.0

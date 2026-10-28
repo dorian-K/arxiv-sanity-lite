@@ -1,0 +1,56 @@
+import numpy as np
+import pytest
+
+from aslite.rank import rank, resolve_feats, FEATS, MODELS
+
+
+def with_fake_embeddings(features):
+    """ adds an x_emb block that separates the two topics, as a real embedding would """
+    f = dict(features)
+    rng = np.random.default_rng(0)
+    is_vision = np.array([int(p.split('.')[1]) % 2 == 0 for p in f['pids']])
+    emb = rng.normal(size=(len(f['pids']), 16)).astype(np.float32)
+    emb[:, 0] += np.where(is_vision, 3.0, -3.0)
+    f['x_emb'] = emb / np.linalg.norm(emb, axis=1, keepdims=True)
+    return f
+
+
+def vision_pids(features):
+    return [p for p in features['pids'] if int(p.split('.')[1]) % 2 == 0]
+
+
+def test_auto_falls_back_to_tfidf_without_embeddings(features):
+    assert resolve_feats(features, 'auto') == 'tfidf'
+    with pytest.raises(ValueError):
+        resolve_feats(features, 'emb')
+
+
+@pytest.mark.parametrize('model', MODELS)
+@pytest.mark.parametrize('feats', [f for f in FEATS if f != 'auto'])
+def test_liked_topic_ranks_first(features, feats, model):
+    f = with_fake_embeddings(features)
+    vision = vision_pids(f)
+    pids, scores, words = rank(f, pos_pids=vision[:5], feats=feats, model=model)
+
+    assert len(pids) == len(f['pids'])
+    assert scores == sorted(scores, reverse=True)
+    # the top half should be (almost) all vision papers
+    top = pids[:len(pids) // 2]
+    assert sum(p in vision for p in top) >= 0.9 * len(top)
+    if feats == 'emb':
+        assert words == []
+    else:
+        assert words
+
+
+def test_downvotes_push_papers_down(features):
+    vision = vision_pids(features)
+    pos, neg = vision[:5], vision[5:8]
+    base, _, _ = rank(features, pos)
+    down, _, _ = rank(features, pos, neg_pids=neg)
+    for p in neg:
+        assert down.index(p) > base.index(p)
+
+
+def test_no_positives_returns_empty(features):
+    assert rank(features, pos_pids=[]) == ([], [], [])

@@ -2,24 +2,36 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Working rules (from the user, keep these)
+
+- Commit on your own after every substantial change, without waiting to be asked. Use a brief title and explain the reasons in the commit body. Don't push; the user reviews and pushes.
+- Whenever the user gives guidance or corrects a mistake, add it to this section so it doesn't happen again, and commit that too.
+- Git author is `Dorian Koch <do.ko1605.dk@gmail.com>`, set in the repo's local git config.
+- Ranking work happens on the `embeddings-hybrid-ranking` branch.
+
 ## Commands
 
-There is no test suite, linter or build step. Every script runs from the repo root, because paths such as `data/`, `static/thumb` and `secret_key.txt` are relative to it.
+Dependencies are managed with uv (`pyproject.toml` + `uv.lock`, Python 3.12+, `package = false`). Every script runs from the repo root, because paths such as `data/`, `static/thumb` and `secret_key.txt` are relative to it.
 
 ```bash
-pip install -r requirements.txt            # core
-pip install -r requirements-embed.txt      # only for local embeddings (compute.py --embed_model st:...)
+uv sync                                    # core + dev (pytest); --extra embed|email|thumbs for optional deps
+uv sync --extra embed                      # sentence-transformers for compute.py --embed_model st:...
+                                           # (uv sync drops extras you don't list, so pass every one you need)
+uv run pytest                              # smoke tests, synthetic corpus in a temp dir, no network
+uv run pytest tests/test_rank.py -k logreg # single test
 
-python3 arxiv_daemon.py --num 2000         # pull new papers from the arxiv API into data/papers.db
-python3 compute.py                         # rebuild data/features.p (tfidf); add --embed_model to also embed
-python3 fetch_papers.py <arxiv ids>        # add specific papers by id, then rerun compute.py
-export FLASK_APP=serve.py; flask run       # web UI (make fun); `make up` = daemon + compute
-python3 send_emails.py --dry-run 1 -u <user>   # check recommendation emails without sending
-python3 thumb_daemon.py                    # paper thumbnails into static/thumb
-python3 eval.py run --source tags          # compare ranking variants on held-out liked papers
+uv run python arxiv_daemon.py --num 2000   # pull new papers from the arxiv API into data/papers.db
+uv run python compute.py                   # rebuild data/features.p (tfidf); add --embed_model to also embed
+uv run python fetch_papers.py <arxiv ids>  # add specific papers by id, then rerun compute.py
+uv run flask --app serve run               # web UI (make fun); `make up` = daemon + compute
+uv run python send_emails.py --dry-run 1 -u <user>   # check recommendation emails without sending
+uv run python thumb_daemon.py              # paper thumbnails into static/thumb (needs ImageMagick `convert`)
+uv run python eval.py run --source tags    # compare ranking variants on held-out liked papers
 ```
 
-`eval.py` is the closest thing to a test for ranking changes. It compares every feature set × model combination by checking where held-out positives land in the ranking.
+Tests (`tests/conftest.py`) chdir into a temp dir with 60 fake papers from two separable topics, then run the real `compute.py` there. Before every commit, run them. Because the tests tag papers before loading any page, they don't catch fresh-install crashes, so check those against a live `flask run` on an empty `data/dict.db`.
+
+`eval.py` measures ranking quality. It compares every feature set × model combination by checking where held-out positives land in the ranking.
 
 ## Architecture
 
@@ -34,7 +46,7 @@ The pipeline runs in batch through cron jobs, and the web server only reads its 
 
 All file I/O and DB access goes through **`aslite/db.py`**. Scripts don't touch the filesystem directly, so add new storage there.
 - Every store is a `sqlitedict` table. `data/dict.db` holds user state: `tags` and `neg_tags` (both `user -> {tag: set(pids)}`), `last_active` and `email`.
-- `get_neg_tags_db` always opens with `flag='c'` on purpose, because older installs don't have that table yet.
+- sqlitedict tables only exist after their first write, and a read-only open of a missing table raises. `_flag()` in `db.py` therefore upgrades `'r'` to `'c'` when the file or table is missing. Route every new opener through it.
 - `load_features()` caches the pickle in memory and reloads it only when the file's mtime changes. `save_features` writes atomically, so `compute.py` can run while the server is up.
 - `rank.py` has its own `_concat_cache` keyed on `id(features)`.
 

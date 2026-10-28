@@ -247,6 +247,7 @@ def test_tag_pages_and_landing(client, corpus):
     # with tags, the main page is the best recent papers for them
     page = client.get('/').data.decode()
     assert '"rank": "tags"' in page and '"tags": "all"' in page and '"time_filter": "30"' in page
+    assert all(f'For you · {d}d' in page for d in (7, 30, 90))
     # the page fetches its results as /?format=json, page 2 is /?page_number=2: both still "For you"
     # (they once fell back to the newest papers, which looked like random recommendations)
     import serve

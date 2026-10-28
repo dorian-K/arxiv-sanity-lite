@@ -122,7 +122,10 @@ var move_page = function(int_offset) {
     <!-- some hand-coded common choices for faster and more convenient operation -->
     <nav id="cbox_fast" aria-label="shortcuts">
         {% if tags %}
-        <a href="/?rank=tags&tags=all&time_filter={{ for_you_days }}&skip_have=yes" class="{{ 'active' if gvars.rank == 'tags' and gvars.tags == 'all' }}">For you</a>
+        {% for days in (7, 30, 90) %}
+        <a href="/?rank=tags&tags=all&time_filter={{ days }}&skip_have=yes" class="{{ 'active' if gvars.rank == 'tags' and gvars.tags == 'all' and gvars.time_filter == days | string }}"
+           title="the best papers of the last {{ days }} days for your tags">For you · {{ days }}d</a>
+        {% endfor %}
         <a href="/?rank=saved&tags=all" class="{{ 'active' if gvars.rank == 'saved' and gvars.tags == 'all' }}">Saved</a>
         {% endif %}
         <a href="/?rank=time" class="{{ 'active' if gvars.rank == 'time' and not gvars.time_filter }}">Newest</a>

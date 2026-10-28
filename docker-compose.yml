@@ -59,7 +59,7 @@ services:
       # must match the model the features were computed with, or a run embeds the whole
       # corpus again (on CPU). empty = tfidf only
       EMBED_MODEL: ${EMBED_MODEL-st:google/embeddinggemma-2}
-      HF_TOKEN: ${HF_TOKEN:-}  # embeddinggemma is gated: accept its license on huggingface.co first
+      HF_TOKEN: ${HF_TOKEN:-}  # only for gated models; embeddinggemma-2 downloads without one
       COMPUTE_ARGS: ${COMPUTE_ARGS:---max_docs 100000}
       DAEMON_NUM: ${DAEMON_NUM:-2000}
       UPDATE_INTERVAL: ${UPDATE_INTERVAL:-86400}

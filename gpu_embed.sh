@@ -28,13 +28,19 @@ snap "$data/papers.sqlite" "$out/papers.sqlite"
 # reuse whatever is already embedded, so only missing papers are computed
 if [ -f "$data/embeddings.sqlite" ]; then snap "$data/embeddings.sqlite" "$out/embeddings.sqlite"; fi
 
+# non-interactive ssh shells often lack ~/.local/bin, where the uv installer puts uv
+rpath='export PATH=$HOME/.local/bin:$HOME/.cargo/bin:$PATH'
+echo "== checking $host"
+ssh "$host" "$rpath; for c in uv rsync nvidia-smi; do command -v \$c >/dev/null || { echo \"missing on remote: \$c\"; exit 1; }; done" || {
+    echo "install uv with: curl -LsSf https://astral.sh/uv/install.sh | sh"; exit 1; }
+
 echo "== copying code and $data to $host:$remote"
 ssh "$host" "mkdir -p $remote/$data"
 git ls-files -z | rsync -az --from0 --files-from=- ./ "$host:$remote/"
 rsync -az --info=progress2 "$out/" "$host:$remote/$data/"
 
 echo "== embedding on $host with $model"
-ssh -t "$host" "cd $remote && nvidia-smi --query-gpu=name,memory.total --format=csv,noheader && \
+ssh -t "$host" "$rpath; cd $remote && nvidia-smi --query-gpu=name,memory.total --format=csv,noheader && \
     uv sync --extra embed-gpu --no-dev && \
     ARXIV_SANITY_DATA=$data uv run --no-sync python compute.py --embed_model '$model' --embed_batch $batch"
 

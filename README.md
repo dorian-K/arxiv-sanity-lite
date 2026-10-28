@@ -34,6 +34,60 @@ All of the database will be stored inside the `data` directory. Finally, if you'
 
 (Optional) Finally, if you'd like to send periodic emails to users about new papers, see the `send_emails.py` script. Install its dependency with `uv sync --extra email`. I run this script in a daily cron job.
 
+#### Serve it publicly (Docker)
+
+`docker-compose.yml` runs two services that share the data directory:
+- **web:** gunicorn, listening on `127.0.0.1:8000`.
+- **updater:** once a day, fetches new papers and recomputes the features. The web service picks up the new ones without a restart.
+
+TLS is left to a reverse proxy in front.
+
+```bash
+cp .env.example .env        # DATA_PATH, port, signups, embedding model, HF token
+docker compose up -d --build
+docker compose logs -f updater
+```
+
+`DATA_PATH` can point at a corpus prepared on the host, for example `./data/5y` from `import_snapshot.py` with embeddings from `gpu_embed.sh`. The updater then only embeds each day's new papers, on CPU. `EMBED_MODEL` has to match the model that corpus was embedded with, or the next run re-embeds every paper. EmbeddingGemma is gated on Hugging Face, so accept its license there and put a token in `HF_TOKEN`.
+
+Accounts have passwords. With `ALLOW_SIGNUP=1`, anyone can create one. A username that has tags from before passwords existed is claimed by the first password set for it. With `ALLOW_SIGNUP=0`, create accounts yourself:
+
+```bash
+docker compose exec web flask --app serve set-password alice
+```
+
+Example nginx config for the proxy. The `X-Forwarded-*` headers are required, because the app takes the scheme, host and client IP from them (`TRUST_PROXY=1`), and session cookies are https-only (`SECURE_COOKIES=1`):
+
+```nginx
+# in the http block: at most 10 login attempts a minute per client
+limit_req_zone $binary_remote_addr zone=asl_login:10m rate=10r/m;
+
+server {
+    listen 443 ssl;
+    server_name sanity.example.org;
+    # ssl_certificate ... as usual
+
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_read_timeout 120s;
+    }
+    location = /login {
+        limit_req zone=asl_login burst=5 nodelay;
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+    }
+}
+```
+
+Memory: each web worker keeps the features in RAM, about 1–2 GB for five years of papers. Size `WEB_WORKERS` to fit; `WEB_THREADS` adds concurrency without more memory.
+
 #### Requirements
 
 Dependencies are managed with [uv](https://docs.astral.sh/uv/). This creates `.venv` with the pinned versions from `uv.lock`:
@@ -114,7 +168,6 @@ uv run python eval.py run --source si --pool rated
 #### Todos
 
 - The metas table should not be a sqlitedict but a proper sqlite table, for efficiency
-- Build a reverse index to support faster search, right now we iterate through the entire database
 
 #### License
 

@@ -10,35 +10,47 @@ ideas:
 import os
 import re
 import time
+import threading
 from random import shuffle
 
 import numpy as np
 
-from flask import Flask, request, redirect, url_for
+import click
+from flask import Flask, request, redirect, url_for, abort
 from flask import render_template
 from flask import g  # global session-level object
 from flask import session
+from werkzeug.middleware.proxy_fix import ProxyFix
+from werkzeug.security import generate_password_hash, check_password_hash
 
 from aslite.db import get_papers_db, get_metas_db, get_tags_db, get_neg_tags_db, get_last_active_db, get_email_db
-from aslite.db import load_features, FEATURES_FILE
+from aslite.db import get_users_db, get_secret_key, load_features, search_papers, FEATURES_FILE, PAPERS_DB_FILE
 from aslite.rank import rank, resolve_feats, resolve_model, has_embeddings, FEATS, MODELS
 
 # -----------------------------------------------------------------------------
 # inits and globals
 
 RET_NUM = 25  # number of papers to return per page
+USERNAME_RE = re.compile(r'^[A-Za-z0-9_.-]{1,40}$')
+MIN_PASSWORD = 8
 
 app = Flask(__name__)
 
-# set the secret key so we can cryptographically sign cookies and maintain sessions
-if os.path.isfile('secret_key.txt'):
-    # example of generating a good key on your system is:
-    # import secrets; secrets.token_urlsafe(16)
-    sk = open('secret_key.txt').read().strip()
-else:
-    print("WARNING: no secret key found, using default devkey")
-    sk = 'devkey'
-app.secret_key = sk
+# signs the session cookie; see get_secret_key for where it comes from
+app.secret_key = get_secret_key()
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',  # browsers don't send the cookie with cross-site POSTs
+    SESSION_COOKIE_SECURE=os.environ.get('SECURE_COOKIES', '0') == '1',  # set when served over https
+    PERMANENT_SESSION_LIFETIME=90 * 24 * 3600,
+)
+# behind a reverse proxy, take the client's scheme/host/ip from its X-Forwarded-* headers.
+# TRUST_PROXY is the number of proxies in front; leave it 0 when clients connect directly,
+# or anyone could spoof those headers
+if int(os.environ.get('TRUST_PROXY', '0')) > 0:
+    n = int(os.environ['TRUST_PROXY'])
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=n, x_proto=n, x_host=n, x_prefix=n)
+ALLOW_SIGNUP = os.environ.get('ALLOW_SIGNUP', '1') == '1'
 
 # -----------------------------------------------------------------------------
 # globals that manage the (lazy) loading of various state for a request
@@ -70,14 +82,31 @@ def get_papers():
     return g._pdb
 
 
-def get_metas():
-    if not hasattr(g, '_mdb'):
-        g._mdb = get_metas_db()
-    return g._mdb
+_times_cache = {}
+_times_lock = threading.Lock()
+
+
+def get_times():
+    """
+    (pid -> time, pids newest first) for all papers. reading every meta takes seconds on a
+    big corpus, so each worker keeps them in memory until papers.db changes
+    """
+    mtime = os.path.getmtime(PAPERS_DB_FILE) if os.path.isfile(PAPERS_DB_FILE) else 0
+    with _times_lock:
+        if _times_cache.get('mtime') != mtime:
+            with get_metas_db() as mdb:
+                times = {k: v['_time'] for k, v in mdb.items()}
+            _times_cache.update(mtime=mtime, times=times, order=sorted(times, key=times.get, reverse=True))
+        return _times_cache['times'], _times_cache['order']
 
 
 @app.before_request
 def before_request():
+    # everything that changes state is a POST. SameSite=Lax already keeps the session
+    # cookie off cross-site POSTs; rejecting them by Sec-Fetch-Site covers old browsers too
+    if request.method == 'POST' and request.headers.get('Sec-Fetch-Site') == 'cross-site':
+        abort(403)
+
     g.user = session.get('user', None)
 
     # record activity on this user so we can reserve periodic
@@ -87,13 +116,19 @@ def before_request():
             last_active_db[g.user] = int(time.time())
 
 
+@app.after_request
+def security_headers(resp):
+    resp.headers.setdefault('X-Content-Type-Options', 'nosniff')
+    resp.headers.setdefault('X-Frame-Options', 'DENY')
+    resp.headers.setdefault('Referrer-Policy', 'same-origin')
+    return resp
+
+
 @app.teardown_request
 def close_connection(error=None):
     # close any opened database connections
     if hasattr(g, '_pdb'):
         g._pdb.close()
-    if hasattr(g, '_mdb'):
-        g._mdb.close()
 
 
 # -----------------------------------------------------------------------------
@@ -123,19 +158,16 @@ def render_pid(pid):
 
 
 def random_rank():
-    mdb = get_metas()
-    pids = list(mdb.keys())
+    pids = list(get_times()[1])
     shuffle(pids)
     scores = [0 for _ in pids]
     return pids, scores
 
 
 def time_rank():
-    mdb = get_metas()
-    ms = sorted(mdb.items(), key=lambda kv: kv[1]['_time'], reverse=True)
+    times, pids = get_times()
     tnow = time.time()
-    pids = [k for k, v in ms]
-    scores = [(tnow - v['_time']) / 60 / 60 / 24 for k, v in ms]  # time delta in days
+    scores = [(tnow - times[p]) / 60 / 60 / 24 for p in pids]  # time delta in days
     return pids, scores
 
 
@@ -168,6 +200,10 @@ def svm_rank(tags: str = '', pid: str = '', C=None, feats='auto', model='auto'):
 def search_rank(q: str = ''):
     if not q:
         return [], []  # no query? no results
+    found = search_papers(q)  # the full-text index from compute.py
+    if found is not None:
+        return found
+    # no index yet: scan every paper (slow on big corpora)
     qs = q.lower().strip().split()  # split query by spaces and lowercase
 
     pdb = get_papers()
@@ -255,11 +291,10 @@ def main():
 
     # filter by time
     if opt_time_filter:
-        mdb = get_metas()
-        kv = {k: v for k, v in mdb.items()}  # read all of metas to memory at once, for efficiency
+        times = get_times()[0]
         tnow = time.time()
         deltat = int(opt_time_filter) * 60 * 60 * 24  # allowed time delta in seconds
-        keep = [i for i, pid in enumerate(pids) if (tnow - kv[pid]['_time']) < deltat]
+        keep = [i for i, pid in enumerate(pids) if (tnow - times.get(pid, 0)) < deltat]
         pids, scores = [pids[i] for i in keep], [scores[i] for i in keep]
 
     # optionally hide papers we already have (tagged or downvoted)
@@ -360,8 +395,10 @@ def inspect():
 
 
 @app.route('/profile')
-def profile():
+def profile(error=''):
     context = default_context()
+    context['error'] = error
+    context['allow_signup'] = ALLOW_SIGNUP
     with get_email_db() as edb:
         email = edb.get(g.user, '')
         context['email'] = email
@@ -371,13 +408,11 @@ def profile():
 @app.route('/stats')
 def stats():
     context = default_context()
-    mdb = get_metas()
-    kv = {k: v for k, v in mdb.items()}  # read all of metas to memory at once, for efficiency
-    times = [v['_time'] for v in kv.values()]
+    times = list(get_times()[0].values())
     tstr = lambda t: time.strftime('%b %d %Y', time.localtime(t))
 
-    context['num_papers'] = len(kv)
-    if len(kv) > 0:
+    context['num_papers'] = len(times)
+    if len(times) > 0:
         context['earliest_paper'] = tstr(min(times))
         context['latest_paper'] = tstr(max(times))
     else:
@@ -423,10 +458,12 @@ def _check_tag(tag):
         return "error, not logged in"
     if tag in ('all', 'null'):
         return "error, cannot use the protected tag '%s'" % (tag,)
+    if not tag or len(tag) > 100:
+        return "error, tags are 1-100 characters"
     return None
 
 
-@app.route('/add/<pid>/<tag>')
+@app.route('/add/<pid>/<tag>', methods=['POST'])
 def add(pid=None, tag=None):
     err = _check_tag(tag)
     if err:
@@ -437,7 +474,7 @@ def add(pid=None, tag=None):
     return "ok: " + str(d)  # return back the user library for debugging atm
 
 
-@app.route('/sub/<pid>/<tag>')
+@app.route('/sub/<pid>/<tag>', methods=['POST'])
 def sub(pid=None, tag=None):
     if g.user is None:
         return "error, not logged in"
@@ -447,7 +484,7 @@ def sub(pid=None, tag=None):
     return "ok removed pid %s from tag %s" % (pid, tag)
 
 
-@app.route('/addneg/<pid>/<tag>')
+@app.route('/addneg/<pid>/<tag>', methods=['POST'])
 def addneg(pid=None, tag=None):
     """downvote: this paper is NOT what the tag is about. used as an explicit negative"""
     err = _check_tag(tag)
@@ -459,7 +496,7 @@ def addneg(pid=None, tag=None):
     return "ok: " + str(d)
 
 
-@app.route('/subneg/<pid>/<tag>')
+@app.route('/subneg/<pid>/<tag>', methods=['POST'])
 def subneg(pid=None, tag=None):
     if g.user is None:
         return "error, not logged in"
@@ -469,7 +506,7 @@ def subneg(pid=None, tag=None):
     return "ok removed downvote of pid %s for tag %s" % (pid, tag)
 
 
-@app.route('/del/<tag>')
+@app.route('/del/<tag>', methods=['POST'])
 def delete_tag(tag=None):
     if g.user is None:
         return "error, not logged in"
@@ -504,22 +541,58 @@ def delete_tag(tag=None):
 # endpoints to log in and out
 
 
+def _known_user(username):
+    """has this user ever stored anything (from before accounts had passwords)?"""
+    for get_db in (get_tags_db, get_neg_tags_db, get_email_db):
+        with get_db() as db:
+            if username in db:
+                return True
+    return False
+
+
 @app.route('/login', methods=['POST'])
 def login():
+    username = request.form.get('username', '').strip()
+    password = request.form.get('password', '')
+    if not USERNAME_RE.match(username):
+        return profile(error="Usernames are 1-40 letters, digits, '.', '_' or '-'."), 400
 
-    # the user is logged out but wants to log in, ok
-    if g.user is None and request.form['username']:
-        username = request.form['username']
-        if len(username) > 0:  # one more paranoid check
-            session['user'] = username
+    with get_users_db(flag='c') as udb:
+        pw_hash = udb.get(username)
+        if pw_hash is None:
+            # a new account, or one made before passwords existed: the first password set
+            # claims it. with signups closed, only `flask set-password` can create accounts
+            if not ALLOW_SIGNUP:
+                return profile(error="Signups are closed on this server."), 403
+            if len(password) < MIN_PASSWORD:
+                return profile(error=f"Choose a password of at least {MIN_PASSWORD} characters."), 400
+            udb[username] = generate_password_hash(password)
+            print("registered user %s%s" % (username, " (existing data)" if _known_user(username) else ""))
+        elif not check_password_hash(pw_hash, password):
+            return profile(error="Wrong username or password."), 403
 
+    session.clear()
+    session.permanent = True
+    session['user'] = username
     return redirect(url_for('profile'))
 
 
-@app.route('/logout')
+@app.route('/logout', methods=['POST'])
 def logout():
-    session.pop('user', None)
+    session.clear()
     return redirect(url_for('profile'))
+
+
+@app.cli.command('set-password')
+@click.argument('username')
+@click.password_option()
+def set_password(username, password):
+    """create a user or reset their password, e.g. when signups are closed"""
+    if not USERNAME_RE.match(username):
+        raise click.BadParameter('invalid username')
+    with get_users_db(flag='c') as udb:
+        udb[username] = generate_password_hash(password)
+    print(f"password set for {username}")
 
 
 # -----------------------------------------------------------------------------

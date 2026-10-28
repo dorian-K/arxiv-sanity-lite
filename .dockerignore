@@ -1,0 +1,12 @@
+.git
+.venv
+data
+static/thumb
+secret_key.txt
+.env
+**/__pycache__
+.ruff_cache
+.pytest_cache
+*.ipynb
+.ipynb_checkpoints
+.DS_Store

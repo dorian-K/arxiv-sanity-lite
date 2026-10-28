@@ -1,0 +1,66 @@
+# arxiv-sanity-lite behind a reverse proxy that terminates https (see README, "Serve it publicly").
+#
+#   cp .env.example .env   # and edit
+#   docker compose up -d --build
+#
+# web      gunicorn on 127.0.0.1:${PORT}, for the proxy to forward to
+# updater  fetches new papers and recomputes features once a day
+# Both share the data directory, a bind mount so the corpus can be prepared on the host
+# (import_snapshot.py, gpu_embed.sh) and backed up like any other files.
+
+x-common: &common
+  restart: unless-stopped
+  user: "${UID:-1000}:${GID:-1000}"
+  volumes:
+    - ${DATA_PATH:-./data}:/app/data
+  environment: &env
+    TZ: ${TZ:-UTC}
+
+services:
+  web:
+    <<: *common
+    build:
+      context: .
+      args:
+        EXTRAS: --extra serve
+    image: arxiv-sanity-lite-web
+    ports:
+      # only reachable from this machine; if the proxy runs elsewhere, put its
+      # interface's address here instead of 127.0.0.1
+      - "${BIND:-127.0.0.1}:${PORT:-8000}:8000"
+    environment:
+      <<: *env
+      SECURE_COOKIES: "1"  # cookies only over https
+      TRUST_PROXY: "1"  # one proxy in front: take scheme/host/client ip from X-Forwarded-*
+      ALLOW_SIGNUP: ${ALLOW_SIGNUP:-1}
+      WEB_WORKERS: ${WEB_WORKERS:-2}
+      WEB_THREADS: ${WEB_THREADS:-4}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/about', timeout=5)"]
+      interval: 60s
+      timeout: 10s
+      start_period: 30s
+
+  updater:
+    <<: *common
+    build:
+      context: .
+      args:
+        EXTRAS: --extra embed
+    image: arxiv-sanity-lite-updater
+    command: ["sh", "docker/update.sh"]
+    volumes:
+      - ${DATA_PATH:-./data}:/app/data
+      - model-cache:/cache
+    environment:
+      <<: *env
+      # must match the model features.p was computed with, or a run embeds the whole
+      # corpus again (on CPU). empty = tfidf only
+      EMBED_MODEL: ${EMBED_MODEL-st:google/embeddinggemma-2}
+      HF_TOKEN: ${HF_TOKEN:-}  # embeddinggemma is gated: accept its license on huggingface.co first
+      COMPUTE_ARGS: ${COMPUTE_ARGS:---max_docs 100000}
+      DAEMON_NUM: ${DAEMON_NUM:-2000}
+      UPDATE_INTERVAL: ${UPDATE_INTERVAL:-86400}
+
+volumes:
+  model-cache:

@@ -6,7 +6,7 @@ Any of the file system I/O and the associated settings are in this single file.
 
 import os
 import re
-import sqlite3, zlib, pickle, tempfile
+import sqlite3, zlib, pickle, tempfile, secrets, time
 from sqlitedict import SqliteDict
 from contextlib import contextmanager
 
@@ -169,6 +169,83 @@ def get_email_db(flag='r', autocommit=True):
     assert flag in ['r', 'c']
     edb = SqliteDict(DICT_DB_FILE, tablename='email', flag=_flag(DICT_DB_FILE, 'email', flag), autocommit=autocommit)
     return edb
+
+
+def get_users_db(flag='r', autocommit=True):
+    """user -> password hash (werkzeug.security format)"""
+    assert flag in ['r', 'c']
+    udb = SqliteDict(DICT_DB_FILE, tablename='users', flag=_flag(DICT_DB_FILE, 'users', flag), autocommit=autocommit)
+    return udb
+
+
+def get_secret_key():
+    """
+    the key that signs session cookies: $SECRET_KEY, else secret_key.txt in the repo root
+    (the original location), else DATA_DIR/secret_key.txt, generated on first use so
+    it survives restarts and container rebuilds along with the rest of the data
+    """
+    if os.environ.get('SECRET_KEY'):
+        return os.environ['SECRET_KEY']
+    for path in ('secret_key.txt', os.path.join(DATA_DIR, 'secret_key.txt')):
+        if os.path.isfile(path):
+            return open(path).read().strip()
+    os.makedirs(DATA_DIR, exist_ok=True)
+    key = secrets.token_urlsafe(32)
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:  # another worker process just created it
+        time.sleep(0.5)
+        return open(path).read().strip()
+    with os.fdopen(fd, 'w') as f:
+        f.write(key)
+    return key
+
+
+# full-text index over titles, authors and abstracts for the search box, rebuilt by compute.py
+SEARCH_DB_FILE = os.path.join(DATA_DIR, 'search.db')
+# column weights for bm25: (pid), title, authors, abstract. a word in the title counts
+# for more than one in the abstract, as in the original substring search
+SEARCH_WEIGHTS = (0.0, 20.0, 10.0, 1.0)
+
+
+def build_search_index(pdb):
+    """writes a fresh FTS5 index of all papers in pdb, then swaps it in atomically"""
+    tmp = SEARCH_DB_FILE + '.tmp'
+    if os.path.exists(tmp):
+        os.remove(tmp)
+    con = sqlite3.connect(tmp)
+    con.execute(
+        "CREATE VIRTUAL TABLE papers USING fts5(pid UNINDEXED, title, authors, summary, "
+        "tokenize='unicode61 remove_diacritics 2')"
+    )
+    rows = ((pid, p['title'], ' '.join(a['name'] for a in p['authors']), p['summary']) for pid, p in pdb.items())
+    con.executemany("INSERT INTO papers VALUES (?, ?, ?, ?)", rows)
+    con.execute("INSERT INTO papers(papers) VALUES ('optimize')")
+    con.commit()
+    con.close()
+    os.replace(tmp, SEARCH_DB_FILE)
+
+
+def search_papers(q, limit=2000):
+    """
+    best matching (pids, scores) for a free-text query, any word may match (words of 3+
+    letters also as prefixes, so 'diffus' finds diffusion). None if there is no index yet
+    """
+    if not os.path.isfile(SEARCH_DB_FILE):
+        return None
+    words = re.findall(r'\w+', q.lower())
+    if not words:
+        return [], []
+    match = ' OR '.join(f'"{w}"*' if len(w) >= 3 else f'"{w}"' for w in words)
+    bm25 = 'bm25(papers, %s)' % ', '.join(str(w) for w in SEARCH_WEIGHTS)
+    con = sqlite3.connect(f'file:{SEARCH_DB_FILE}?mode=ro', uri=True)
+    try:
+        rows = con.execute(
+            f"SELECT pid, -{bm25} FROM papers WHERE papers MATCH ? ORDER BY {bm25} LIMIT ?", (match, limit)
+        ).fetchall()
+    finally:
+        con.close()
+    return [r[0] for r in rows], [float(r[1]) for r in rows]
 
 
 # caches dense embeddings of papers, one table per embedding model

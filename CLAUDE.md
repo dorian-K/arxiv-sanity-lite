@@ -35,6 +35,8 @@ ARXIV_SANITY_DATA=data/5y uv run python import_snapshot.py --years 5 --check dat
 ARXIV_SANITY_DATA=data/5y uv run python harvest_papers.py --years 5   # fallback: same via OAI-PMH, ~5h of polite requests
 ./gpu_embed.sh user@host st:google/embeddinggemma-2 data/5y   # embeddings on a GPU box over ssh
 uv run flask --app serve run               # web UI (make fun); `make up` = daemon + compute
+docker compose up -d --build               # public deployment: gunicorn web + daily updater, behind an https proxy (.env.example)
+uv run flask --app serve set-password <user>   # create/reset an account (needed when ALLOW_SIGNUP=0)
 uv run python send_emails.py --dry-run 1 -u <user>   # check recommendation emails without sending
 uv run python thumb_daemon.py              # paper thumbnails into static/thumb (needs ImageMagick `convert`)
 uv run python eval.py run --source tags    # compare ranking variants on held-out liked papers
@@ -60,7 +62,9 @@ All file I/O and DB access goes through **`aslite/db.py`**. Scripts don't touch 
 - sqlitedict tables only exist after their first write, and a read-only open of a missing table raises. `_flag()` in `db.py` therefore upgrades `'r'` to `'c'` when the file or table is missing. Route every new opener through it.
 - `load_features()` caches the pickle in memory and reloads it only when the file's mtime changes. `save_features` writes atomically, so `compute.py` can run while the server is up.
 - `rank.py` has its own `_concat_cache` keyed on `id(features)`.
+- `compute.py` also builds `data/search.db`, an SQLite FTS5 index used by the search box (`search_papers`). Without it, serve.py falls back to scanning every paper.
+- serve.py caches every paper's time in memory per worker (`get_times`), and reloads it when papers.db's mtime changes. Reading all metas takes ~5 s on a 460k corpus, so never iterate `metas`/`papers` per request.
 
-User model: login is just a username stored in the Flask session, with no passwords. The session is signed with `secret_key.txt`, falling back to `devkey`. For a given user and tag, a paper is either liked (`/add`) or downvoted (`/addneg`), never both: each endpoint removes the paper from the other set.
+User model: accounts have werkzeug password hashes in the `users` table of `dict.db`. The first login with a new username signs up, unless `ALLOW_SIGNUP=0`. The Flask session is signed with `$SECRET_KEY`, else `secret_key.txt`, else `data/secret_key.txt`, which is generated on first run. Every endpoint that changes state is POST-only, and cross-site POSTs are rejected through SameSite=Lax cookies plus a `Sec-Fetch-Site` check. Keep it that way for new endpoints. `TRUST_PROXY` and `SECURE_COOKIES` are for running behind the https proxy. For a given user and tag, a paper is either liked (`/add`) or downvoted (`/addneg`), never both: each endpoint removes the paper from the other set.
 
 Frontend: Jinja templates in `templates/` plus plain-JS rendering in `static/*.js`. `serve.py` passes data to the page through `context['gvars']`, which carries things like the paper list and the `has_emb` flag.

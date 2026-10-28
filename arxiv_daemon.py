@@ -109,7 +109,7 @@ if __name__ == '__main__':
             zero_updates_in_a_row = 0
 
         # zzz
-        time.sleep(1 + random.uniform(0, 3))
+        time.sleep(3 + random.uniform(0, 3))  # arXiv asks for >= 3s between requests
 
     # exit with OK status if anything at all changed, but if nothing happened then raise 1
     sys.exit(0 if total_updated > 0 else 1)

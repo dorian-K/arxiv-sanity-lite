@@ -13,8 +13,8 @@ def client(features):
         yield c
 
 
-def login(client, user='alice'):
-    client.post('/login', data={'username': user})
+def login(client, user='alice', password='correct horse'):
+    return client.post('/login', data={'username': user, 'password': password})
 
 
 def test_pages_render(client, corpus):
@@ -29,8 +29,8 @@ def test_tag_rank_and_downvote(client, corpus):
     login(client)
     vision = [p for p in corpus if corpus[p]['tags'][0]['term'] == 'cs.CV']
     for p in vision[:4]:
-        assert client.get(f'/add/{p}/cv').data.startswith(b'ok')
-    assert client.get(f'/addneg/{vision[4]}/cv').data.startswith(b'ok')
+        assert client.post(f'/add/{p}/cv').data.startswith(b'ok')
+    assert client.post(f'/addneg/{vision[4]}/cv').data.startswith(b'ok')
 
     for model in ['svm', 'logreg']:
         r = client.get(f'/?rank=tags&tags=cv&model={model}')
@@ -38,9 +38,48 @@ def test_tag_rank_and_downvote(client, corpus):
         assert b'2601.' in r.data
 
     # liking a downvoted paper moves it from neg_tags to tags
-    client.get(f'/add/{vision[4]}/cv')
+    client.post(f'/add/{vision[4]}/cv')
     from aslite.db import get_tags_db, get_neg_tags_db
 
     with get_tags_db() as tdb, get_neg_tags_db() as ndb:
         assert vision[4] in tdb['alice']['cv']
         assert vision[4] not in ndb['alice'].get('cv', set())
+
+
+def test_passwords(client):
+    assert login(client, password='short').status_code == 400  # too short to sign up
+    assert login(client).status_code == 302  # signs up
+    client.post('/logout')
+    assert login(client, password='wrong password').status_code == 403
+    assert client.post('/add/2601.00001/x').data.startswith(b'error, not logged in')
+    assert login(client).status_code == 302
+    assert client.post('/add/2601.00001/x').data.startswith(b'ok')
+    assert login(client, user='bad name!').status_code == 400
+
+
+def test_state_changes_need_same_site_posts(client):
+    login(client)
+    assert client.get('/add/2601.00001/x').status_code == 405  # no more GET <img src=...> tricks
+    r = client.post('/add/2601.00001/x', headers={'Sec-Fetch-Site': 'cross-site'})
+    assert r.status_code == 403
+    assert client.post('/add/2601.00001/x', headers={'Sec-Fetch-Site': 'same-origin'}).data.startswith(b'ok')
+
+
+def test_closed_signups(client, monkeypatch):
+    import serve
+
+    login(client)  # alice signs up while signups are open
+    client.post('/logout')
+    monkeypatch.setattr(serve, 'ALLOW_SIGNUP', False)
+    assert login(client, user='bob').status_code == 403
+    assert login(client).status_code == 302  # existing accounts still work
+
+
+def test_search_uses_the_index(client, corpus):
+    from aslite.db import search_papers
+
+    pids, scores = search_papers('vision convol')  # prefix match
+    assert pids and scores == sorted(scores, reverse=True)
+    assert all(corpus[p]['tags'][0]['term'] == 'cs.CV' for p in pids)
+    assert search_papers('"; DROP TABLE papers; --') == ([], [])  # user input never reaches FTS syntax
+    assert b'2601.' in client.get('/?q=vision').data

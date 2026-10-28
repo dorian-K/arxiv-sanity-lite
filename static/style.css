@@ -138,7 +138,7 @@ h1 { font-size: 18px; margin: 0 0 12px; }
 }
 .linkbtn:hover { text-decoration: underline; }
 
-input[type=text], input[type=search], input[type=number], select {
+input[type=text], input[type=password], input[type=search], input[type=number], select {
     width: 100%;
     min-height: 36px;
     padding: 6px 10px;
@@ -383,6 +383,7 @@ input:focus, select:focus, .btn:focus-visible, .iconbtn:focus-visible {
 #profile-warning p { margin: 0 0 8px; }
 #profile-login-form, #email-form { max-width: 420px; margin-top: 16px; }
 #profile-login-form label { font-size: 14px; color: var(--muted); }
+.form-error { color: var(--neg); font-weight: 600; }
 .form-group { margin-bottom: 10px; }
 .form-control { margin-top: 4px; }
 

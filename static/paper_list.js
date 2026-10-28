@@ -5,7 +5,7 @@ const userTagNames = (typeof tags !== 'undefined' ? tags : []).map(t => t.name).
 
 // calls one of the tag endpoints; resolves on "ok...", otherwise shows the server's message
 function tagRequest(path) {
-    return fetch(path).then(r => r.text()).then(t => {
+    return fetch(path, { method: 'POST' }).then(r => r.text()).then(t => {
         if (!t.startsWith('ok')) {
             alert(t);
             throw new Error(t);

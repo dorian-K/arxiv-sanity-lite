@@ -27,6 +27,8 @@ thumbs = ["requests>=2.32"]
 bulk = [
     "pyarrow>=20",
 ]
+# production web server (the docker image runs serve.py under gunicorn)
+serve = ["gunicorn>=23"]
 
 [dependency-groups]
 dev = ["pytest>=9.0", "ruff>=0.14"]

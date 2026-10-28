@@ -9,7 +9,9 @@
     {% if user %}
     <section class="card">
         <h1>Logged in as {{ user }}</h1>
-        <a class="btn" href="{{ url_for('logout') }}">Log out</a>
+        <form action="{{ url_for('logout') }}" method="post">
+            <button type="submit" class="btn">Log out</button>
+        </form>
     </section>
     <section class="card">
         <h1>Email recommendations</h1>
@@ -29,24 +31,26 @@
     {% else %}
     <section class="card">
         <h1>Log in</h1>
-        <div id="profile-warning">
-            <p>
-            Okay, arxiv-sanity-lite uses a super lite version of
-            "user accounts" where there are no passwords. Basically, you can "log in"
-            with any arbitrary username. If you want to share your library with a
-            friend, you can just tell them the username. And if you'd like to keep your
-            account private, just make your username be something unique
-            and write it down somewhere safe.
-            </p>
-            <b>TLDR: there are no passwords!</b>
-        </div>
+        <p class="muted">
+            {% if allow_signup %}
+            New here? Pick a username and a password (at least 8 characters) and you're signed up.
+            {% else %}
+            Signups are closed on this server.
+            {% endif %}
+        </p>
+        {% if error %}<p class="form-error">{{ error }}</p>{% endif %}
 
         <form id="profile-login-form" action="/login" method="POST">
             <div class="form-group">
-              <label>Username:</label>
-              <input class="form-control" type="text" name="username">
+              <label for="username">Username</label>
+              <input class="form-control" type="text" id="username" name="username" autocomplete="username"
+                     autocapitalize="none" spellcheck="false" maxlength="40" required>
             </div>
-            <button type="submit" class="btn btn-primary">Log in</button>
+            <div class="form-group">
+              <label for="password">Password</label>
+              <input class="form-control" type="password" id="password" name="password" autocomplete="current-password" required>
+            </div>
+            <button type="submit" class="btn btn-primary">Log in / sign up</button>
         </form>
     </section>
     {% endif %}

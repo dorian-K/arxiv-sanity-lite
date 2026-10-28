@@ -11,7 +11,7 @@ import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.feature_extraction.text import TfidfVectorizer
 
-from aslite.db import get_papers_db, save_features
+from aslite.db import get_papers_db, save_features, build_search_index
 from aslite.embed import embed_papers
 
 # -----------------------------------------------------------------------------
@@ -112,3 +112,6 @@ if __name__ == '__main__':
 
     print("saving to features to disk...")
     save_features(features)
+
+    print("building the search index...")
+    build_search_index(pdb)

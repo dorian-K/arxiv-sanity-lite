@@ -110,6 +110,17 @@ function busyMessage(url) {
     return 'Loading…';
 }
 
+// links that leave the site (arXiv abstracts and pdfs, code, licenses) open in a new tab, so
+// the list stays where it was. set on click, so it covers templates and React alike
+document.addEventListener('click', e => {
+    const a = e.target.closest('a[href]');
+    if (!a || a.target) return;
+    const url = new URL(a.href, window.location.href);
+    if (!url.protocol.startsWith('http') || url.origin === window.location.origin) return;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer'; // the new page gets no handle on this one, and no referrer
+}, true); // capture: before the busy indicator below looks at a.target
+
 // back/forward restores the page from the cache as it was left, indicator included
 window.addEventListener('pageshow', hideBusy);
 

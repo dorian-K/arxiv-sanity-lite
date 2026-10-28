@@ -3,7 +3,7 @@
 // the user's tag names, for autocompletion in the tag editor
 // logged in with the password (not a read-only view of a shared account)
 const canEdit = Boolean(user) && !readonly;
-const userTagNames = (typeof tags !== 'undefined' ? tags : []).map(t => t.name).filter(n => n !== 'all');
+const userTagNames = (typeof tags !== 'undefined' ? tags : []).map(t => t.name);
 
 // calls one of the tag endpoints; resolves on "ok...", otherwise shows the server's message
 function tagRequest(path) {
@@ -288,9 +288,9 @@ const Tag = ({ tag: t }) => {
     };
     const active = gvars.rank === 'tags' && gvars.tags.split(',').includes(t.name);
     return html`
-        <span class=${'chip chip-tag chip-count' + (t.name === 'all' ? ' rel_utag_all' : '') + (active ? ' active' : '')}>
+        <span class=${'chip chip-tag chip-count' + (active ? ' active' : '')}>
             <a href=${tagUrl(t.name)}>${t.name}${t.n !== undefined ? html` <small>${t.n}</small>` : null}</a>
-            ${t.name !== 'all' && canEdit ? html`<button class="chip-x" title=${'delete tag ' + t.name} aria-label=${'delete tag ' + t.name} onClick=${del}>×</button>` : null}
+            ${canEdit ? html`<button class="chip-x" title=${'delete tag ' + t.name} aria-label=${'delete tag ' + t.name} onClick=${del}>×</button>` : null}
         </span>`;
 };
 

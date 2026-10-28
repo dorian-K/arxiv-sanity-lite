@@ -574,11 +574,9 @@ def main():
     if want_json:
         return {'papers': papers, 'words': words, 'has_next': has_next, 'notice': notice}
 
-    # build the current tags for the user, and append the special 'all' tag
+    # the user's tags. all of them together are "For you" and "Saved" in the nav, not a chip
     tags = get_tags()
     rtags = [{'name': t, 'n': len(pids)} for t, pids in tags.items()]
-    if rtags:
-        rtags.append({'name': 'all'})
 
     # build the page context information and render
     context = default_context()

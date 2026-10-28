@@ -240,7 +240,6 @@ input:focus, select:focus, .btn:focus-visible, .iconbtn:focus-visible {
 .chip-tag:hover, .chip-tag a:hover { text-decoration: none; }
 .chip-count small { color: var(--muted); font-size: 12px; }
 .chip.active { border-color: var(--tag); }
-.rel_utag_all, .rel_utag_all a { color: var(--accent); background: var(--surface-2); }
 .chip-x {
     padding: 0 0 0 2px;
     font-size: 15px;

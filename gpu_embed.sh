@@ -3,6 +3,14 @@
 #
 #   ./gpu_embed.sh user@gpuhost [model] [data dir]
 #   ./gpu_embed.sh me@h100 st:google/embeddinggemma-2 data/5y
+#   GPU=MIG-<uuid> EMBED_BATCH=64 ./gpu_embed.sh me@h100 ...   # one GPU or MIG slice
+#
+# GPU pins the run to one device (CUDA_VISIBLE_DEVICES: an index, GPU-<uuid> or
+# MIG-<uuid>, as listed by `nvidia-smi -L`). Without it CUDA takes the first device,
+# which may be a GPU someone else is using. On a small MIG slice lower EMBED_BATCH
+# (64 for 1g.10gb, 256 for 3g.40gb): batches are sorted by length, so an out-of-memory
+# error would only show up near the end. Embeddings are saved as they're computed, so
+# rerunning the same command after an error continues where it stopped.
 #
 # Copies the code (git ls-files, so no data or venv) and <data dir>/papers.sqlite over ssh,
 # runs compute.py there with the CUDA build of torch (uv extra embed-gpu), and copies
@@ -16,6 +24,7 @@ model=${2:-st:google/embeddinggemma-2}
 data=${3:-data}
 remote=arxiv-sanity-lite   # directory in the remote home
 batch=${EMBED_BATCH:-512}
+gpu=${GPU:-}
 
 cd "$(dirname "$0")"
 test -f "$data/papers.sqlite" || { echo "no $data/papers.sqlite (run migrate_db.py on old data)"; exit 1; }
@@ -39,10 +48,11 @@ ssh "$host" "mkdir -p $remote/$data"
 git ls-files -z | rsync -az --from0 --files-from=- ./ "$host:$remote/"
 rsync -az --info=progress2 "$out/" "$host:$remote/$data/"
 
-echo "== embedding on $host with $model"
-ssh -t "$host" "$rpath; cd $remote && nvidia-smi --query-gpu=name,memory.total --format=csv,noheader && \
+echo "== embedding on $host with $model${gpu:+ on $gpu}, batch $batch"
+ssh -t "$host" "$rpath; cd $remote && nvidia-smi -L && \
     uv sync --extra embed-gpu --no-dev && \
-    ARXIV_SANITY_DATA=$data uv run --no-sync python compute.py --embed_model '$model' --embed_batch $batch"
+    ${gpu:+CUDA_VISIBLE_DEVICES=$gpu} ARXIV_SANITY_DATA=$data uv run --no-sync python -c 'import torch; print(\"torch sees\", torch.cuda.get_device_name(0))' && \
+    ${gpu:+CUDA_VISIBLE_DEVICES=$gpu} ARXIV_SANITY_DATA=$data uv run --no-sync python compute.py --embed_model '$model' --embed_batch $batch"
 
 echo "== copying results back"
 # compute.py has exited, so the remote databases are checkpointed and safe to copy

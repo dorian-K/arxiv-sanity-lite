@@ -34,7 +34,7 @@ uv run python compute.py                   # rebuild data/features/ (tfidf); add
 uv run python fetch_papers.py <arxiv ids>  # add specific papers by id, then rerun compute.py
 ARXIV_SANITY_DATA=data/5y uv run python import_snapshot.py --years 5 --check data/papers.sqlite   # bulk import from the HF snapshot (extra bulk), verified; no arXiv load
 ARXIV_SANITY_DATA=data/5y uv run python harvest_papers.py --years 5   # fallback: same via OAI-PMH, ~5h of polite requests
-./gpu_embed.sh user@host st:google/embeddinggemma-2 data/5y   # embeddings on a GPU box over ssh
+./gpu_embed.sh user@host st:google/embeddinggemma-2 data/5y   # embeddings on a GPU box over ssh; GPU=MIG-<uuid> pins a device
 uv run flask --app serve run               # web UI (make fun); `make up` = daemon + compute
 docker compose up -d --build               # public deployment: gunicorn web + daily updater, behind an https proxy (.env.example)
 uv run flask --app serve set-password <user>   # create/reset an account (needed when ALLOW_SIGNUP=0)

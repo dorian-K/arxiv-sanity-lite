@@ -2,21 +2,21 @@
 # default one. docker compose reads this file automatically next to docker-compose.yml, so
 # create the network once before `up`:
 #
-#   docker network create --ipv6=false arxiv-resanity
+#   docker network create --ipv6=false arxiv_resanity
 #
-# An nginx in docker joins the same network (`docker network connect arxiv-resanity <nginx>`)
-# and proxies to http://arxiv-resanity-web:8000, the web container's name. The
+# An nginx in docker joins the same network (`docker network connect arxiv_resanity <nginx>`)
+# and proxies to http://arxiv_resanity_web:8000, the web container's name. The
 # 127.0.0.1:${PORT} binding for a proxy on the host stays. Another name: RESANITY_NETWORK in .env.
 
 services:
-  arxiv-resanity-web:
+  arxiv_resanity_web:
     networks: [resanity]
-  arxiv-resanity-updater:
+  arxiv_resanity_updater:
     networks: [resanity]
-  arxiv-resanity-mail:
+  arxiv_resanity_mail:
     networks: [resanity]
 
 networks:
   resanity:
     external: true
-    name: ${RESANITY_NETWORK:-arxiv-resanity}
+    name: ${RESANITY_NETWORK:-arxiv_resanity}

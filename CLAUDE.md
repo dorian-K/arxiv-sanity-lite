@@ -13,7 +13,7 @@ The project is **Arxiv Resanity**, a fork of karpathy's arxiv-sanity-lite. Say "
 - Never hammer arXiv; the user does not want to be banned. Pause ≥3s between API calls (harvest_papers.py uses 5s), honor 503 Retry-After, back off on errors, and don't re-download what is already in papers.sqlite. For bulk data, use the Hugging Face snapshot (import_snapshot.py) instead of arXiv's APIs.
 - arXiv calls a user can trigger (`/import`) must go through `db.arxiv_slot()` (one call per 3.5 s across processes) and count against `FETCH_LIMIT_USER`/`FETCH_LIMIT_TOTAL` via the `fetches` table. Never fetch from a GET handler.
 - Anything outward-facing (emails, pushes to other services) is off by default and never fires on first start or right after being enabled; the user turns it on after testing. (The digest once defaulted to on and would have mailed everyone before the DNS records existed.)
-- Docker networking: all services share the single external network `arxiv-resanity` (docker-compose.override.yml); services and containers are both named `arxiv-resanity-<x>` (web, updater, mail) so nginx can find them and nothing clashes on the shared network. (Renaming only `container_name` wasn't what the user asked for.) (A request for "its own network" meant one network for the project, not one per service.)
+- Docker networking: all services share the single external network `arxiv_resanity` (docker-compose.override.yml); services and containers are both named `arxiv_resanity_<x>` (web, updater, mail) so nginx can find them and nothing clashes on the shared network, with underscores, not dashes (user preference). (Renaming only `container_name` wasn't what the user asked for.) (A request for "its own network" meant one network for the project, not one per service.)
 - EU law (GDPR/ePrivacy): never load anything from a third-party server in pages (vendor it into static/vendor via update_vendor.py; the CSP enforces it), new email addresses go through the double opt-in (`request_email`/`confirm_email`, never store an unconfirmed address as `email`), and keep templates/privacy.html true whenever you change what is stored, logged or sent anywhere.
 - Work and commit directly on `master`; don't create feature branches, even if a pasted prompt asks for one.
 
@@ -41,7 +41,7 @@ ARXIV_SANITY_DATA=data/5y uv run python import_snapshot.py --years 5 --check dat
 ARXIV_SANITY_DATA=data/5y uv run python harvest_papers.py --years 5   # fallback: same via OAI-PMH, ~5h of polite requests
 ./gpu_embed.sh user@host st:google/embeddinggemma-2 data/5y   # embeddings on a GPU box over ssh; GPU=MIG-<uuid> pins a device
 uv run flask --app serve run               # web UI (make fun); `make up` = daemon + compute
-docker network create --ipv6=false arxiv-resanity   # once: docker-compose.override.yml puts all services on it
+docker network create --ipv6=false arxiv_resanity   # once: docker-compose.override.yml puts all services on it
 docker compose up -d --build               # public deployment: gunicorn web + daily updater, behind an https proxy (.env.example)
 uv run flask --app serve set-password <user>   # create/reset an account (needed when ALLOW_SIGNUP=0)
 uv run python send_emails.py --dry-run 1 -u <user> --save d.html   # compose (and store) a digest without sending

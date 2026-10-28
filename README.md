@@ -42,18 +42,18 @@ All of the database will be stored inside the `data` directory. Finally, if you'
 #### Serve it publicly (Docker)
 
 `docker-compose.yml` runs two services that share the data directory:
-- **arxiv-resanity-web:** gunicorn, listening on `127.0.0.1:8000`.
-- **arxiv-resanity-updater:** once a day, fetches new papers and recomputes the features. The web service picks up the new ones without a restart.
+- **arxiv_resanity_web:** gunicorn, listening on `127.0.0.1:8000`.
+- **arxiv_resanity_updater:** once a day, fetches new papers and recomputes the features. The web service picks up the new ones without a restart.
 
 TLS is left to a reverse proxy in front.
 
 ```bash
 cp .env.example .env        # DATA_PATH, port, signups, embedding model, HF token
 # docker-compose.override.yml (read automatically) puts all services on one network created
-# outside compose; an nginx in docker can join it and proxy to http://arxiv-resanity-web:8000
-docker network create --ipv6=false arxiv-resanity
+# outside compose; an nginx in docker can join it and proxy to http://arxiv_resanity_web:8000
+docker network create --ipv6=false arxiv_resanity
 docker compose up -d --build
-docker compose logs -f arxiv-resanity-updater
+docker compose logs -f arxiv_resanity_updater
 ```
 
 `DATA_PATH` can point at a corpus prepared on the host, for example `./data/5y` from `import_snapshot.py` with embeddings from `gpu_embed.sh`. The updater then only embeds each day's new papers, on CPU. `EMBED_MODEL` has to match the model that corpus was embedded with, or the next run re-embeds every paper. `HF_TOKEN` is only needed for gated models; EmbeddingGemma 2 downloads without one.
@@ -61,7 +61,7 @@ docker compose logs -f arxiv-resanity-updater
 Accounts have passwords. With `ALLOW_SIGNUP=1`, anyone can create one. A username that has tags from before passwords existed can't be claimed from the login form; give it a password with `flask set-password`. With `ALLOW_SIGNUP=0`, create accounts yourself:
 
 ```bash
-docker compose exec arxiv-resanity-web flask --app serve set-password alice
+docker compose exec arxiv_resanity_web flask --app serve set-password alice
 ```
 
 EU law (GDPR, ePrivacy, German imprint duty). What the code takes care of:
@@ -130,8 +130,8 @@ In docker, the updater sends the digest every Sunday at 08:00 German time (`DIGE
 1. A VPS whose provider allows outgoing port 25. Check with `timeout 5 bash -c '</dev/tcp/gmail-smtp-in.l.google.com/25' && echo open`. Some providers unblock it on request.
 2. Reverse DNS of the VPS's IP set to `MAIL_HOSTNAME` (in the provider's panel), with an A record for that name pointing back to the IP.
 3. `MAIL_DOMAIN` (the domain in `MAIL_FROM`) and `MAIL_HOSTNAME` in `.env`, then `docker compose up -d`.
-4. The DNS records the mail container prints on its first start (`docker compose logs arxiv-resanity-mail`): DKIM, SPF and DMARC. The DKIM key lives in the `mail-dkim` volume, so the record stays valid across rebuilds.
-5. A test: send yourself a digest (`docker compose exec arxiv-resanity-updater python send_emails.py -u <you>`), and check the score at mail-tester.com or the "Authentication-Results" header (expect `spf=pass dkim=pass`). Only then set `DIGEST_ENABLED=1`. Mail that goes out before the DNS records exist lands in spam and costs the new server reputation.
+4. The DNS records the mail container prints on its first start (`docker compose logs arxiv_resanity_mail`): DKIM, SPF and DMARC. The DKIM key lives in the `mail-dkim` volume, so the record stays valid across rebuilds.
+5. A test: send yourself a digest (`docker compose exec arxiv_resanity_updater python send_emails.py -u <you>`), and check the score at mail-tester.com or the "Authentication-Results" header (expect `spf=pass dkim=pass`). Only then set `DIGEST_ENABLED=1`. Mail that goes out before the DNS records exist lands in spam and costs the new server reputation.
 
 New servers have no reputation, so the first digests may land in spam until recipients mark them as not spam. To send through an existing SMTP server instead (your provider's, a university relay, a sending service), drop the profile and set `SMTP_HOST`/`SMTP_PORT`/`SMTP_TLS`/`SMTP_USER`/`SMTP_PASSWORD`. Or keep the container and set `RELAYHOST` to route its mail through such a server, still DKIM-signed.
 

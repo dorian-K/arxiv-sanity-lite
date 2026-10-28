@@ -5,9 +5,9 @@
 #
 # Services are named like their containers, so they can't clash with other projects on the
 # shared network (see docker-compose.override.yml):
-# arxiv-resanity-web      gunicorn on 127.0.0.1:${PORT}, for the proxy to forward to
-# arxiv-resanity-updater  fetches new papers and recomputes features once a day, sends the weekly digest
-# arxiv-resanity-mail     (profile "mail", COMPOSE_PROFILES=mail) outgoing-only postfix + dkim for the digest
+# arxiv_resanity_web      gunicorn on 127.0.0.1:${PORT}, for the proxy to forward to
+# arxiv_resanity_updater  fetches new papers and recomputes features once a day, sends the weekly digest
+# arxiv_resanity_mail     (profile "mail", COMPOSE_PROFILES=mail) outgoing-only postfix + dkim for the digest
 # Both share the data directory, a bind mount so the corpus can be prepared on the host
 # (import_snapshot.py, gpu_embed.sh) and backed up like any other files.
 
@@ -24,14 +24,14 @@ x-common: &common
     TZ: ${TZ:-UTC}
 
 services:
-  arxiv-resanity-web:
+  arxiv_resanity_web:
     <<: *common
     build:
       context: .
       args:
         EXTRAS: --extra serve
-    image: arxiv-resanity-web
-    container_name: arxiv-resanity-web  # for a proxy in docker: http://arxiv-resanity-web:8000
+    image: arxiv_resanity_web
+    container_name: arxiv_resanity_web  # for a proxy in docker: http://arxiv_resanity_web:8000
     ports:
       # only reachable from this machine; if the proxy runs elsewhere, put its
       # interface's address here instead of 127.0.0.1
@@ -49,7 +49,7 @@ services:
       # PUBLIC_URL, and requests for other hosts are refused once it is set
       PUBLIC_URL: ${PUBLIC_URL:-}
       MAIL_FROM: ${MAIL_FROM:-}
-      SMTP_HOST: ${SMTP_HOST:-arxiv-resanity-mail}
+      SMTP_HOST: ${SMTP_HOST:-arxiv_resanity_mail}
       SMTP_PORT: ${SMTP_PORT:-25}
       SMTP_TLS: ${SMTP_TLS:-none}
       SMTP_USER: ${SMTP_USER:-}
@@ -65,14 +65,14 @@ services:
       timeout: 10s
       start_period: 30s
 
-  arxiv-resanity-updater:
+  arxiv_resanity_updater:
     <<: *common
     build:
       context: .
       args:
         EXTRAS: --extra embed
-    image: arxiv-resanity-updater
-    container_name: arxiv-resanity-updater
+    image: arxiv_resanity_updater
+    container_name: arxiv_resanity_updater
     command: ["sh", "docker/update.sh"]
     volumes:
       - ${DATA_PATH:-./data}:/app/data
@@ -94,20 +94,20 @@ services:
       DIGEST_DAYS: ${DIGEST_DAYS:-7}
       PUBLIC_URL: ${PUBLIC_URL:-}
       MAIL_FROM: ${MAIL_FROM:-}
-      SMTP_HOST: ${SMTP_HOST:-arxiv-resanity-mail}
+      SMTP_HOST: ${SMTP_HOST:-arxiv_resanity_mail}
       SMTP_PORT: ${SMTP_PORT:-25}
       SMTP_TLS: ${SMTP_TLS:-none}
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
 
-  arxiv-resanity-mail:
+  arxiv_resanity_mail:
     profiles: [mail]
     logging:
       driver: json-file
       options: {max-size: 10m, max-file: "3"}
     build: docker/mail
-    image: arxiv-resanity-mail
-    container_name: arxiv-resanity-mail
+    image: arxiv_resanity_mail
+    container_name: arxiv_resanity_mail
     restart: unless-stopped
     environment:
       MAIL_DOMAIN: ${MAIL_DOMAIN:-}
@@ -117,7 +117,7 @@ services:
     volumes:
       - mail-dkim:/dkim  # the dkim key; its public half is in your dns, so keep it
       - mail-spool:/var/spool/postfix  # the queue, so retries survive restarts
-    # no ports: only the other services can reach it, as arxiv-resanity-mail:25
+    # no ports: only the other services can reach it, as arxiv_resanity_mail:25
 
 volumes:
   model-cache:

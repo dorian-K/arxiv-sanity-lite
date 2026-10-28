@@ -7,6 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Commit on your own after every substantial change, without waiting to be asked. Use a brief title and explain the reasons in the commit body. Don't push; the user reviews and pushes.
 - Whenever the user gives guidance or corrects a mistake, add it to this section so it doesn't happen again, and commit that too.
 - Git author is `Dorian Koch <do.ko1605.dk@gmail.com>`, set in the repo's local git config.
+- Flag evaluation caveats yourself, as soon as you see them, and fix them before drawing conclusions. Don't sit on a concern you noticed. (Example: the arxiv_daemon background papers are newer than every Scholar Inbox rating, so eval scores against them are inflated. Use `eval.py run --pool rated`.)
 - Work and commit directly on `master`; don't create feature branches, even if a pasted prompt asks for one.
 
 ## Commands

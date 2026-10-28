@@ -100,14 +100,33 @@ def auc(a, b):
     return float(np.mean((lo + hi) / 2) / len(b))
 
 
+def restrict_to(features, keep):
+    """
+    features limited to the papers in keep. used for --pool rated: background papers fetched
+    with arxiv_daemon.py are newer than any rated paper, so models can push them down by their
+    date-specific vocabulary alone, which inflates auc_rand and top1pct. in the app every
+    candidate is new, so paper age carries no signal there; restricting the pool to rated papers
+    (other users' likes and downvotes from the same years) removes it here too
+    """
+    ix = [i for i, p in enumerate(features['pids']) if p in keep]
+    out = dict(features)
+    out['pids'] = [features['pids'][i] for i in ix]
+    out['x'] = features['x'][ix]
+    if features.get('x_emb') is not None:
+        out['x_emb'] = features['x_emb'][ix]
+    return out
+
+
 def run(args):
     if args.features:
         with open(args.features, 'rb') as f:
             features = pickle.load(f)
     else:
         features = load_features()
-    known = set(features['pids'])
     profiles = load_profiles(args.source)
+    if args.pool == 'rated':
+        features = restrict_to(features, set().union(*(p | n for p, n in profiles.values())))
+    known = set(features['pids'])
     # only keep what we have features for, and profiles with enough likes to split
     profiles = {k: (p & known, n & known) for k, (p, n) in profiles.items()}
     profiles = {k: v for k, v in profiles.items() if len(v[0]) >= max(args.min_pos, args.folds)}
@@ -208,6 +227,9 @@ if __name__ == '__main__':
     r.add_argument('--alpha', type=float, default=None, help='concat: embedding block scale')
     r.add_argument('--fusion_w', type=float, default=None, help='fusion: weight of the embedding score')
     r.add_argument('--out', default='', help='also write results to this csv')
+    r.add_argument('--pool', choices=['all', 'rated'], default='all',
+                   help="papers to rank: everything, or only papers some profile rated "
+                        "(use 'rated' with --source si, see restrict_to)")
     r.add_argument('--features', default='', help='features pickle to use instead of data/features.p, '
                    'e.g. a copy made with another --embed_model, to compare embedding models')
 

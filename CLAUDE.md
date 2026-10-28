@@ -14,6 +14,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The shell is zsh, which doesn't word-split an unquoted `$VAR`. A command stored in a variable has to be expanded as `${=VAR}`, and a list of ids should be looped over as an array (`for p in ${=P}`). A failed split often shows up only as an empty log.
 
+Never gate a commit on `uv run pytest | tail -1 && git commit`: the pipe returns `tail`'s exit code, so a failing run still commits. Use `uv run pytest -q && git commit ...`, or `setopt pipefail` first.
+
 
 Dependencies are managed with uv (`pyproject.toml` + `uv.lock`, Python 3.12+, `package = false`). Every script runs from the repo root, because paths such as `data/`, `static/thumb` and `secret_key.txt` are relative to it.
 

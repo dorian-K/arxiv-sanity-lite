@@ -100,6 +100,16 @@ flag='c': default mode, open for read/write, and creating the db/table if necess
 flag='r': open for read-only
 """
 
+def _flag(filename, tablename, flag):
+    """
+    sqlitedict refuses to open a missing file or table read-only. tables only get
+    created on first write, so on a fresh install (or for a user who never tagged
+    anything) reads would crash; open those with 'c' instead, which creates them empty
+    """
+    if flag == 'r' and (not os.path.isfile(filename) or tablename not in SqliteDict.get_tablenames(filename)):
+        return 'c'
+    return flag
+
 # stores info about papers, and also their lighter-weight metadata
 PAPERS_DB_FILE = os.path.join(DATA_DIR, 'papers.db')
 # stores account-relevant info, like which tags exist for which papers
@@ -107,35 +117,33 @@ DICT_DB_FILE = os.path.join(DATA_DIR, 'dict.db')
 
 def get_papers_db(flag='r', autocommit=True):
     assert flag in ['r', 'c']
-    pdb = CompressedSqliteDict(PAPERS_DB_FILE, tablename='papers', flag=flag, autocommit=autocommit)
+    pdb = CompressedSqliteDict(PAPERS_DB_FILE, tablename='papers', flag=_flag(PAPERS_DB_FILE, 'papers', flag), autocommit=autocommit)
     return pdb
 
 def get_metas_db(flag='r', autocommit=True):
     assert flag in ['r', 'c']
-    mdb = SqliteDict(PAPERS_DB_FILE, tablename='metas', flag=flag, autocommit=autocommit)
+    mdb = SqliteDict(PAPERS_DB_FILE, tablename='metas', flag=_flag(PAPERS_DB_FILE, 'metas', flag), autocommit=autocommit)
     return mdb
 
 def get_tags_db(flag='r', autocommit=True):
     assert flag in ['r', 'c']
-    tdb = CompressedSqliteDict(DICT_DB_FILE, tablename='tags', flag=flag, autocommit=autocommit)
+    tdb = CompressedSqliteDict(DICT_DB_FILE, tablename='tags', flag=_flag(DICT_DB_FILE, 'tags', flag), autocommit=autocommit)
     return tdb
 
 def get_neg_tags_db(flag='r', autocommit=True):
     """ like tags, but for explicit downvotes: user -> {tag: set(pids)} """
     assert flag in ['r', 'c']
-    # always 'c': existing installs don't have this table yet, and a read-only open of a
-    # missing table raises, which would break every page for users who never downvoted
-    ntdb = CompressedSqliteDict(DICT_DB_FILE, tablename='neg_tags', flag='c', autocommit=autocommit)
+    ntdb = CompressedSqliteDict(DICT_DB_FILE, tablename='neg_tags', flag=_flag(DICT_DB_FILE, 'neg_tags', flag), autocommit=autocommit)
     return ntdb
 
 def get_last_active_db(flag='r', autocommit=True):
     assert flag in ['r', 'c']
-    ladb = SqliteDict(DICT_DB_FILE, tablename='last_active', flag=flag, autocommit=autocommit)
+    ladb = SqliteDict(DICT_DB_FILE, tablename='last_active', flag=_flag(DICT_DB_FILE, 'last_active', flag), autocommit=autocommit)
     return ladb
 
 def get_email_db(flag='r', autocommit=True):
     assert flag in ['r', 'c']
-    edb = SqliteDict(DICT_DB_FILE, tablename='email', flag=flag, autocommit=autocommit)
+    edb = SqliteDict(DICT_DB_FILE, tablename='email', flag=_flag(DICT_DB_FILE, 'email', flag), autocommit=autocommit)
     return edb
 
 # caches dense embeddings of papers, one table per embedding model
@@ -145,7 +153,7 @@ def get_embeddings_db(model, flag='r', autocommit=True):
     """ pid -> float16 embedding vector, for the given model string """
     assert flag in ['r', 'c']
     tablename = 'emb_' + re.sub(r'[^A-Za-z0-9]+', '_', model)
-    edb = SqliteDict(EMBEDDINGS_DB_FILE, tablename=tablename, flag=flag, autocommit=autocommit)
+    edb = SqliteDict(EMBEDDINGS_DB_FILE, tablename=tablename, flag=_flag(EMBEDDINGS_DB_FILE, tablename, flag), autocommit=autocommit)
     return edb
 
 # -----------------------------------------------------------------------------

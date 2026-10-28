@@ -283,6 +283,13 @@ CREATE TABLE IF NOT EXISTS digests (
     days INTEGER NOT NULL,
     sections TEXT NOT NULL
 ) WITHOUT ROWID;
+-- papers per tag in the digest, where the user changed it (0 = leave the tag out)
+CREATE TABLE IF NOT EXISTS digest_sizes (
+    user TEXT NOT NULL,
+    tag TEXT NOT NULL,
+    n INTEGER NOT NULL,
+    PRIMARY KEY (user, tag)
+) WITHOUT ROWID;
 """
 
 
@@ -384,7 +391,13 @@ def delete_user(name):
     con = users_db()
     try:
         with con:
-            for table, col in (('tags', 'user'), ('digests', 'user'), ('fetches', 'user'), ('users', 'name')):
+            for table, col in (
+                ('tags', 'user'),
+                ('digests', 'user'),
+                ('digest_sizes', 'user'),
+                ('fetches', 'user'),
+                ('users', 'name'),
+            ):
                 con.execute(f'DELETE FROM {table} WHERE {col} = ?', (name,))
     finally:
         con.close()
@@ -406,6 +419,7 @@ def export_user(name):
         'shares_tags_read_only': bool(u.get('public')),
         'tags': tags,
         'latest_digest': get_digest(name),
+        'digest_papers_per_tag': get_digest_sizes(name),
         'arxiv_fetches_last_two_days': [
             {'time': t, 'pid': p} for t, p in _query('SELECT time, pid FROM fetches WHERE user = ?', (name,))
         ],
@@ -453,7 +467,21 @@ def untag_paper(user, pid, tag, neg=False):
 
 def delete_tag(user, tag):
     """removes a tag with all its likes and downvotes; returns whether it existed"""
+    _run('DELETE FROM digest_sizes WHERE user = ? AND tag = ?', (user, tag))
     return _run('DELETE FROM tags WHERE user = ? AND tag = ?', (user, tag)) > 0
+
+
+def get_digest_sizes(user):
+    """{tag: papers in the digest} for the tags where the user changed it from the default"""
+    return dict(_query('SELECT tag, n FROM digest_sizes WHERE user = ?', (user,)))
+
+
+def set_digest_size(user, tag, n):
+    """n papers of this tag in the digest, None for the default"""
+    if n is None:
+        _run('DELETE FROM digest_sizes WHERE user = ? AND tag = ?', (user, tag))
+    else:
+        _run('INSERT OR REPLACE INTO digest_sizes (user, tag, n) VALUES (?, ?, ?)', (user, tag, n))
 
 
 def save_digest(user, sections, days):

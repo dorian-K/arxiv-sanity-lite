@@ -129,7 +129,9 @@ def send(to, subject, text, body, user, dry_run):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Sends the digest emails')
-    parser.add_argument('-n', '--per-tag', type=int, default=8, help='papers per tag')
+    parser.add_argument(
+        '-n', '--per-tag', type=int, default=digest.PER_TAG, help="papers per tag, where the user didn't pick a number"
+    )
     parser.add_argument('-t', '--time-delta', type=int, default=7, help='papers from the last this many days')
     parser.add_argument('-d', '--dry-run', type=int, default=0, help='if 1, compose (and store) but do not send')
     parser.add_argument('-u', '--user', type=str, default='', help='only this user (for testing)')

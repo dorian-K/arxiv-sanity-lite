@@ -638,3 +638,9 @@ details.danger form { margin-top: 10px; }
     border-radius: 999px;
 }
 .rel_for:hover { text-decoration: none; }
+
+.form-ok { color: var(--pos-word); font-weight: 600; }
+.digest-sizes { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; align-items: end; }
+.digest-sizes label { display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+.digest-sizes label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.digest-sizes .btn { justify-self: start; }

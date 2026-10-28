@@ -36,7 +36,7 @@ const NTag = ({ tag, onUndo }) => html`
         <button class="chip-x" title="undo" aria-label=${'undo not for ' + tag} onClick=${onUndo}>×</button>
     </span>`;
 
-// picks the tag for "save" / "not for me": the user's tags as one-tap chips, or a new name
+// picks the tag for "save" / "not for this tag": the user's tags as one-tap chips, or a new name
 const TagPicker = ({ mode, tags, onPick, onCancel }) => {
     const [value, setValue] = useState('');
     const submit = e => {
@@ -111,7 +111,7 @@ document.querySelectorAll('#viewswitch [data-view]').forEach(b => {
 const VOTES = [
     { key: 'like', label: '👍 Like', on: '👍 Liked', add: '/add/', sub: '/sub/' },
     { key: 'seen', label: '😐 Neutral', on: '😐 Neutral', add: '/seen/', sub: '/unseen/' },
-    { key: 'down', label: '👎 Not for me', on: '👎 Not for me', add: '/addneg/', sub: '/subneg/' },
+    { key: 'down', label: '👎 Not for this tag', on: '👎 Not for this tag', add: '/addneg/', sub: '/subneg/' },
 ];
 const QuickVote = ({ pid, tag, state, onChange, compact }) => {
     const enc = pid + '/' + encodeURIComponent(tag);
@@ -206,7 +206,7 @@ const Paper = ({ paper: p, quickTag }) => {
         <div class="rel_utags">
             <button class=${'btn btn-small rel_utag_add' + (picker === 'add' ? ' on' : '')} onClick=${() => toggle('add')}>+ Save</button>
             <button class=${'btn btn-small rel_utag_neg' + (picker === 'neg' ? ' on' : '')} onClick=${() => toggle('neg')}
-                    title="not what one of your tags is about: improves its recommendations">✗ Not for me</button>
+                    title="not what one of your tags is about: improves its recommendations">✗ Not for this tag</button>
             ${utags.map(t => html`<${UTag} key=${'u' + t} tag=${t} onRemove=${() => unsave(t)} />`)}
             ${ntags.map(t => html`<${NTag} key=${'n' + t} tag=${t} onUndo=${() => undoNeg(t)} />`)}
         </div>` : null}

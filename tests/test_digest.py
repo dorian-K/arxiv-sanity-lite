@@ -209,3 +209,27 @@ def test_legal_pages_and_no_third_parties(client):
     csp = client.get('/').headers['Content-Security-Policy']
     assert "default-src 'self'" in csp and 'http' not in csp
     assert '/privacy' in page and '/imprint' in page  # linked from every page
+
+
+def test_papers_per_tag_in_the_digest(client, corpus):
+    from conftest import login
+
+    v = vision(corpus)
+    lang = [p for p in corpus if p not in v]
+    login(client)
+    for p in v[:4]:
+        client.post(f'/add/{p}/cv')
+    for p in lang[:4]:
+        client.post(f'/add/{p}/nlp')
+    assert b'Papers per tag' in client.get('/profile').data
+    r = client.post('/digest_sizes', data={'tag': ['cv', 'nlp', 'nope'], 'n': ['3', '0', '5']})
+    assert r.status_code == 302 and db.get_digest_sizes('alice') == {'cv': 3, 'nlp': 0}  # unknown tags ignored
+    client.post('/digest')
+    d = db.get_digest('alice')
+    assert [(s['tag'], len(s['papers'])) for s in d['sections']] == [('cv', 3)]  # 0 leaves nlp out
+    # back to the default number stores nothing; bounds are enforced
+    client.post('/digest_sizes', data={'tag': ['cv', 'nlp'], 'n': [str(digest.PER_TAG), '999']})
+    assert db.get_digest_sizes('alice') == {'nlp': digest.MAX_PER_TAG}
+    assert db.export_user('alice')['digest_papers_per_tag'] == {'nlp': digest.MAX_PER_TAG}
+    client.post('/del/nlp')
+    assert db.get_digest_sizes('alice') == {}

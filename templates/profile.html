@@ -71,6 +71,21 @@
             <button type="submit" class="btn">Stop the digest and delete my address</button>
         </form>
         {% endif %}
+        {% if digest_tags %}
+        <h2 id="digest-sizes">Papers per tag</h2>
+        <p class="muted">How many papers each tag gets in the digest; 0 leaves the tag out.</p>
+        {% if saved_sizes %}<p class="form-ok">Saved.</p>{% endif %}
+        <form action="/digest_sizes" method="post" class="digest-sizes">
+            {% for t in digest_tags %}
+            <label>
+                <span>{{ t.name }}</span>
+                <input type="hidden" name="tag" value="{{ t.name }}">
+                <input class="form-control" type="number" name="n" min="0" max="{{ max_per_tag }}" value="{{ t.n }}" required>
+            </label>
+            {% endfor %}
+            <button type="submit" class="btn">Save</button>
+        </form>
+        {% endif %}
     </section>
     <section class="card">
         <h1>Your data</h1>

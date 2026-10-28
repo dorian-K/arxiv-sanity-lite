@@ -29,7 +29,7 @@ var move_page = function(int_offset) {
     <ol>
         <li><b>Find a few papers you like</b>: search below, browse the newest, or paste arXiv links on the <a href="/import">add</a> page.</li>
         <li><b>Hit + Save</b> on each and give them a tag, like <i>diffusion</i> or <i>robot learning</i>. One tag per topic you follow.</li>
-        <li><b>Open "For you"</b>: the best papers of the last {{ for_you_days }} days for your tags (from then on, this page opens there). "✗ Not for me" on a bad match makes it better, and every Sunday your <a href="/digest">digest</a> collects the week's best.</li>
+        <li><b>Open "For you"</b>: the best papers of the last {{ for_you_days }} days for your tags (from then on, this page opens there). "✗ Not for this tag" on a bad match makes it better, and every Sunday your <a href="/digest">digest</a> collects the week's best.</li>
     </ol>
 </section>
 {% endif %}
@@ -55,7 +55,7 @@ var move_page = function(int_offset) {
             <div id="optgrid">
                 <label title="How the list is ordered">rank by
                     <select name="rank" id="rank_select">
-                        <option value="tags" {{ gvars.rank == 'tags' and 'selected' }} title="Best matches for the tags below: a model learns from the papers you saved (and marked 'not for me') and scores every paper">recommended for tags</option>
+                        <option value="tags" {{ gvars.rank == 'tags' and 'selected' }} title="Best matches for the tags below: a model learns from the papers you saved (and marked 'not for this tag') and scores every paper">recommended for tags</option>
                         <option value="saved" {{ gvars.rank == 'saved' and 'selected' }} title="The papers you saved to the tags below, newest first">saved in tags</option>
                         <option value="pid" {{ gvars.rank == 'pid' and 'selected' }} title="Papers most like the one paper id below">similar to paper</option>
                         <option value="search" {{ gvars.rank == 'search' and 'selected' }} title="Full-text search of titles, authors and abstracts">search</option>
@@ -85,7 +85,7 @@ var move_page = function(int_offset) {
                     </select>
                     <small>how papers are compared; auto is tuned</small>
                 </label>
-                <label title="The model that learns from your saved papers. svm: every other paper counts as a 'no' (the original arxiv-sanity). logreg: a random sample of papers counts as 'no', and your 'not for me' papers more. auto picks the tuned default">model
+                <label title="The model that learns from your saved papers. svm: every other paper counts as a 'no' (the original arxiv-sanity). logreg: a random sample of papers counts as 'no', and your 'not for this tag' papers more. auto picks the tuned default">model
                     <select name="model" id="model_select">
                         {% for m in ['auto', 'svm', 'logreg'] %}
                         <option value="{{ m }}" {{ gvars.model == m and 'selected' }}>{{ m }}{{ ' (' + gvars.eff_model + ')' if m == 'auto' else '' }}</option>
@@ -104,7 +104,7 @@ var move_page = function(int_offset) {
                     </select>
                     <small>per tag: better for unrelated topics, slower</small>
                 </label>
-                <label title="Leave out papers you already saved, marked 'not for me' or neutral, so only new ones are listed">hide papers I rated
+                <label title="Leave out papers you already saved, marked 'not for this tag' or neutral, so only new ones are listed">hide papers I rated
                     <select name="skip_have" id="skip_have_select">
                         <option value="yes" {{ gvars.skip_have == 'yes' and 'selected' }}>yes</option>
                         <option value="no" {{ gvars.skip_have == 'no' and 'selected' }}>no</option>

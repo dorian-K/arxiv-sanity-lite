@@ -124,7 +124,7 @@ Memory: the features are memory-mapped, so all workers share one copy in the pag
 
 #### Weekly digest
 
-Once a week, every user with an email address on their profile gets the best new papers for each of their tags. The ranking is the same as the tag pages, restricted to the last 7 days and leaving out papers they already rated. The email links to `/digest`, which shows the same papers with one-click 👍 ("more like this") and 👎 ("not for me") buttons. Votes go straight into the tag, so the next digest improves. Every email has an unsubscribe link, including the one-click kind Gmail looks for.
+Once a week, every user with an email address on their profile gets the best new papers for each of their tags. The ranking is the same as the tag pages, restricted to the last 7 days and leaving out papers they already rated. The email links to `/digest`, which shows the same papers with one-click 👍 ("more like this") and 👎 ("not for this tag") buttons. Votes go straight into the tag, so the next digest improves. Every email has an unsubscribe link, including the one-click kind Gmail looks for.
 
 In docker, the updater sends the digest every Sunday at 08:00 German time (`DIGEST_SCHEDULE=sun 08:00 Europe/Berlin`, summer time included). It's off by default; set `DIGEST_ENABLED=1` once sending works (step 5 below). The first digest then goes out at the next Sunday slot, never on the spot. Set `PUBLIC_URL` (your site, for the links) and `MAIL_FROM` in `.env`. To try it without sending anything: `uv run python send_emails.py --dry-run 1 -u <user> --save digest.html`. Without email, users can still open `/digest` and make one on the spot.
 

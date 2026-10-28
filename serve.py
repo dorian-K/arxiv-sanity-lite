@@ -725,7 +725,30 @@ def profile(error=''):
         time.strftime('%b %d %Y', time.localtime(user['email_confirmed'])) if user and user['email_confirmed'] else ''
     )
     context['public'] = bool(user and user['public'])
+    sizes = db.get_digest_sizes(g.user) if user else {}
+    context['digest_tags'] = (
+        [{'name': t, 'n': sizes.get(t, digest.PER_TAG)} for t in sorted(get_tags())] if user else []
+    )
+    context['max_per_tag'] = digest.MAX_PER_TAG
+    context['saved_sizes'] = request.args.get('saved') == '1'
     return render_template('profile.html', **context)
+
+
+@app.route('/digest_sizes', methods=['POST'])
+def digest_sizes():
+    """papers per tag in the user's digest (0 = leave the tag out)"""
+    if g.user is None:
+        return redirect(url_for('profile'))
+    tags = get_tags()
+    for tag, n in zip(request.form.getlist('tag'), request.form.getlist('n'), strict=False):
+        if tag not in tags:
+            continue
+        try:
+            n = min(digest.MAX_PER_TAG, max(0, int(n)))
+        except ValueError:
+            continue
+        db.set_digest_size(g.user, tag, None if n == digest.PER_TAG else n)
+    return redirect(url_for('profile', saved=1, _anchor='digest-sizes'))
 
 
 @app.route('/sharing', methods=['POST'])

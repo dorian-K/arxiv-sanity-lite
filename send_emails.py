@@ -8,7 +8,7 @@ Mail goes out over plain SMTP, configured with environment variables:
     SMTP_PORT      default 25
     SMTP_TLS       none | starttls | ssl (default none, for a server on the same host/network)
     SMTP_USER, SMTP_PASSWORD   if the server wants a login
-    MAIL_FROM      e.g. "arxiv-sanity <digest@example.org>"
+    MAIL_FROM      e.g. "Arxiv Resanity <digest@example.org>"
     PUBLIC_URL     where the site is reachable, e.g. https://sanity.example.org
 
     uv run python send_emails.py --dry-run 1 -u alice --save digest.html   # preview
@@ -71,7 +71,7 @@ def due(now):
 
 
 PUBLIC_URL = os.environ.get('PUBLIC_URL', 'http://localhost:5000').rstrip('/')
-MAIL_FROM = os.environ.get('MAIL_FROM', 'arxiv-sanity <digest@localhost>')
+MAIL_FROM = os.environ.get('MAIL_FROM', 'Arxiv Resanity <digest@localhost>')
 
 
 def unsubscribe_url(user):

@@ -5,7 +5,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<title>arxiv-sanity</title>
+<title>Arxiv Resanity</title>
 <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
 <link rel="shortcut icon" type="image/png" href="{{ url_for('static', filename='favicon.png') }}" />
 
@@ -20,7 +20,7 @@ var readonly = {{ readonly | default(false) | tojson }};
 
 <body>
 <header id="header">
-    <a href="/" id="home-link">arxiv<span>-sanity</span></a>
+    <a href="/" id="home-link">Arxiv <span>Resanity</span></a>
     <nav>
         {% if user %}<a href="/digest">digest</a>{% endif %}{% if user and not readonly %}<a href="/import" title="add papers by arXiv link">add</a>{% endif %}
         <a href="/about" class="nav-secondary">about</a>

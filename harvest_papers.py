@@ -28,7 +28,7 @@ OAI = 'https://oaipmh.arxiv.org/oai'
 NS = {'oai': 'http://www.openarchives.org/OAI/2.0/', 'raw': 'http://arxiv.org/OAI/arXivRaw/'}
 STATE_FILE = os.path.join(DATA_DIR, 'harvest_state.json')
 PAUSE = 5  # seconds between requests; arXiv asks for at least 3, be nicer than that
-USER_AGENT = 'arxiv-sanity-lite harvest_papers.py (one-off bulk import, polite: 1 request / 5s)'
+USER_AGENT = 'arxiv-resanity harvest_papers.py (one-off bulk import, polite: 1 request / 5s)'
 
 
 def fetch(url):

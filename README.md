@@ -1,9 +1,14 @@
 
-# arxiv-sanity-lite
+# Arxiv Resanity
 
-A much lighter-weight arxiv-sanity from-scratch re-write. Periodically polls arxiv API for new papers. Then allows users to tag papers of interest, and recommends new papers for each tag based on SVMs over tfidf features of paper abstracts. Allows one to search, rank, sort, slice and dice these results in a pretty web UI. Lastly, arxiv-sanity-lite can send you a weekly digest email with the best new papers for each of your tags, which you rate with one click. Curate your tags, track recent papers in your area, and don't miss out!
+Arxiv Resanity keeps up with arXiv for you. You save papers you like into tags, one per topic you follow, and it ranks every new paper against each tag. It trains a small model per tag on the spot, using tfidf features plus dense embeddings of titles and abstracts. Each paper you mark as not relevant improves that tag's ranking. Every Sunday it can email you a digest of the week's best papers per tag, which you rate with one click. Search, browse and add papers by link, from any year.
 
-I am running a live version of this code on [arxiv-sanity-lite.com](https://arxiv-sanity-lite.com).
+It is a fork of Andrej Karpathy's [arxiv-sanity-lite](https://github.com/karpathy/arxiv-sanity-lite). Compared to the original, it adds embeddings, tuned with an evaluation on real user ratings, as well as:
+- downvotes;
+- bulk import of years of papers;
+- password accounts and read-only sharing;
+- the weekly digest;
+- self-hosted deployment with docker compose.
 
 ![Screenshot](screenshot.jpg)
 

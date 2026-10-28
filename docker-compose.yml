@@ -1,4 +1,4 @@
-# arxiv-sanity-lite behind a reverse proxy that terminates https (see README, "Serve it publicly").
+# Arxiv Resanity behind a reverse proxy that terminates https (see README, "Serve it publicly").
 #
 #   cp .env.example .env   # and edit
 #   docker compose up -d --build
@@ -24,7 +24,7 @@ services:
       context: .
       args:
         EXTRAS: --extra serve
-    image: arxiv-sanity-lite-web
+    image: arxiv-resanity-web
     ports:
       # only reachable from this machine; if the proxy runs elsewhere, put its
       # interface's address here instead of 127.0.0.1
@@ -50,7 +50,7 @@ services:
       context: .
       args:
         EXTRAS: --extra embed
-    image: arxiv-sanity-lite-updater
+    image: arxiv-resanity-updater
     command: ["sh", "docker/update.sh"]
     volumes:
       - ${DATA_PATH:-./data}:/app/data
@@ -81,7 +81,7 @@ services:
   mail:
     profiles: [mail]
     build: docker/mail
-    image: arxiv-sanity-lite-mail
+    image: arxiv-resanity-mail
     restart: unless-stopped
     environment:
       MAIL_DOMAIN: ${MAIL_DOMAIN:-}

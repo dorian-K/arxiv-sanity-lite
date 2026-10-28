@@ -1,5 +1,5 @@
 [project]
-name = "arxiv-sanity-lite"
+name = "arxiv-resanity"
 version = "0.1.0"
 description = "Tag arxiv papers and get tfidf/embedding-based recommendations in a small Flask UI"
 readme = "README.md"

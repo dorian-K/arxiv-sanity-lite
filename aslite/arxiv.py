@@ -102,7 +102,7 @@ def filter_latest_version(idvs):
 ARXIV_ID_RE = re.compile(r'(?<![\d])(\d{4}\.\d{4,5})(?:v\d+)?(?![\d])')
 # old-style ids like hep-th/0408218, which we can't store (the id has a slash)
 OLD_ARXIV_ID_RE = re.compile(r'\b[a-z-]+(?:\.[A-Z]{2})?/\d{7}\b')
-USER_AGENT = 'arxiv-sanity-lite (self-hosted; fetches single papers on user request, >= 3s apart)'
+USER_AGENT = 'arxiv-resanity (self-hosted; fetches single papers on user request, >= 3s apart)'
 
 
 def find_arxiv_id(text):

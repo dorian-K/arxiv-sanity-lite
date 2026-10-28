@@ -466,3 +466,8 @@ textarea.form-control {
 label.check { display: flex; gap: 10px; align-items: flex-start; line-height: 1.4; cursor: pointer; }
 label.check input { margin-top: 3px; width: 18px; height: 18px; flex: none; }
 .muted.small { font-size: 13px; margin: 10px 0 0; }
+@media (max-width: 380px) {
+    #home-link { font-size: 16px; }
+    #header nav { gap: 10px; }
+    .nav-user { max-width: 8ch; }
+}

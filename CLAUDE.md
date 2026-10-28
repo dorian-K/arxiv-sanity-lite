@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+The project is **Arxiv Resanity**, a fork of karpathy's arxiv-sanity-lite. Say "the original arxiv-sanity-lite" only when you mean his version.
+
 ## Working rules (from the user, keep these)
 
 - Commit on your own after every substantial change, without waiting to be asked. Use a brief title and explain the reasons in the commit body. Don't push; the user reviews and pushes.

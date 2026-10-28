@@ -4,40 +4,31 @@
 {% endblock %}
 
 {% block content %}
-<div id="profilewrap">
+<div id="profilewrap" class="page">
 
     {% if user %}
-    <div>
-        <div>
-            <div><b>Current session</b></div>
-            <div>Logged in user: {{ user }}</div>
-        </div>
-        <br>
-        <div>
-            <div><b>Email recommendations</b></div>
-            <div>
+    <section class="card">
+        <h1>Logged in as {{ user }}</h1>
+        <a class="btn" href="{{ url_for('logout') }}">Log out</a>
+    </section>
+    <section class="card">
+        <h1>Email recommendations</h1>
+            <p class="muted">
                 Users can receive regular new paper recommendations via email based on their tags.
                 (This is still being developed, may not be running or may be unreliable.)
                 Register your email address below to receive these recommendations.
                 To stop the recommendations simply delete your email address.
-            </div>
-            <div>
+            </p>
                 <form id="email-form" action="{{ url_for('register_email') }}" method="post">
                     <div class="form-group">
                         <input type="text" class="form-control" name="email" placeholder="Email address" value="{{ email }}">
                     </div>
-                    <input type="submit" class="btn" value="Set">
+                    <input type="submit" class="btn btn-primary" value="Save">
                 </form>
-            </div>
-        </div>
-        <br>
-        <div>
-            <a href="{{ url_for('logout') }}">Log out</a>
-        </div>
-    </div>
+    </section>
     {% else %}
-    <div>
-
+    <section class="card">
+        <h1>Log in</h1>
         <div id="profile-warning">
             <p>
             Okay, arxiv-sanity-lite uses a super lite version of
@@ -55,9 +46,9 @@
               <label>Username:</label>
               <input class="form-control" type="text" name="username">
             </div>
-            <button type="submit" class="btn">Log in</button>
+            <button type="submit" class="btn btn-primary">Log in</button>
         </form>
-    </div>
+    </section>
     {% endif %}
 
 </div>

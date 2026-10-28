@@ -1,125 +1,153 @@
 'use strict';
 
-const UTag = props => {
-    const tag_name = props.tag;
-    const turl = "/?rank=tags&tags=" + tag_name;
-    return (
-        <div class='rel_utag'>
-            <a href={turl}>
-                {tag_name}
-            </a>
-        </div>
-    )
-}
+// the user's tag names, for autocompletion in the tag editor
+const userTagNames = (typeof tags !== 'undefined' ? tags : []).map(t => t.name).filter(n => n !== 'all');
 
-const NTag = props => {
-    // a tag this paper was downvoted for; clicking it removes the downvote
-    const tag_name = props.tag;
-    const undo = () => {
-        if (confirm("remove downvote of this paper for tag '" + tag_name + "'?")) {
-            fetch("/subneg/" + props.pid + "/" + tag_name).then(response => console.log(response.text()));
+// calls one of the tag endpoints; resolves on "ok...", otherwise shows the server's message
+function tagRequest(path) {
+    return fetch(path).then(r => r.text()).then(t => {
+        if (!t.startsWith('ok')) {
+            alert(t);
+            throw new Error(t);
         }
+        return t;
+    });
+}
+
+const UTag = ({ tag }) => html`
+    <a class="chip chip-tag" href=${'/?rank=tags&tags=' + encodeURIComponent(tag)}>${tag}</a>`;
+
+const NTag = ({ tag, onUndo }) => html`
+    <button class="chip chip-neg" title="downvoted for this tag, click to undo" onClick=${onUndo}>${tag}</button>`;
+
+const EDITOR_LABELS = {
+    add: 'add to tag',
+    sub: 'remove from tag',
+    neg: 'not for tag',
+};
+
+// inline replacement for prompt(): a text field with the user's tags as suggestions
+const TagEditor = ({ mode, suggestions, onSubmit, onCancel }) => {
+    const [value, setValue] = useState('');
+    const listId = 'tagsugg-' + mode;
+    const submit = e => {
+        e.preventDefault();
+        const tag = value.trim();
+        if (tag) onSubmit(tag);
     };
-    return (
-        <div class='rel_utag rel_ntag' title="downvoted for this tag, click to undo" onClick={undo}>
-            {tag_name}
+    return html`
+        <form class=${'tag-editor tag-editor-' + mode} onSubmit=${submit}>
+            <input autoFocus list=${listId} value=${value} placeholder=${EDITOR_LABELS[mode] + '…'}
+                   aria-label=${EDITOR_LABELS[mode]}
+                   onInput=${e => setValue(e.target.value)}
+                   onKeyDown=${e => e.key === 'Escape' && onCancel()} />
+            <datalist id=${listId}>${suggestions.map(s => html`<option key=${s} value=${s} />`)}</datalist>
+            <button type="submit" class="btn btn-small btn-primary">${mode === 'sub' ? 'remove' : 'save'}</button>
+            <button type="button" class="btn btn-small" onClick=${onCancel}>cancel</button>
+        </form>`;
+};
+
+const SHOW_SCORE = ['tags', 'pid', 'search'];
+
+const Paper = ({ paper: p }) => {
+    const [utags, setUtags] = useState(p.utags);
+    const [ntags, setNtags] = useState(p.ntags);
+    const [editor, setEditor] = useState(null); // null | 'add' | 'sub' | 'neg'
+    const [open, setOpen] = useState(false);
+
+    const without = (list, tag) => list.filter(t => t !== tag);
+    const withTag = (list, tag) => (list.includes(tag) ? list : [...list, tag]);
+
+    const apply = tag => {
+        const enc = p.id + '/' + encodeURIComponent(tag);
+        const req = { add: '/add/', sub: '/sub/', neg: '/addneg/' }[editor] + enc;
+        const mode = editor;
+        tagRequest(req).then(() => {
+            // mirror the server: liking and downvoting for one tag exclude each other
+            if (mode === 'add') { setUtags(u => withTag(u, tag)); setNtags(n => without(n, tag)); }
+            if (mode === 'sub') { setUtags(u => without(u, tag)); }
+            if (mode === 'neg') { setNtags(n => withTag(n, tag)); setUtags(u => without(u, tag)); }
+            setEditor(null);
+        }).catch(() => {});
+    };
+    const undoNeg = tag => {
+        if (!confirm("remove downvote of this paper for tag '" + tag + "'?")) return;
+        tagRequest('/subneg/' + p.id + '/' + encodeURIComponent(tag)).then(() => setNtags(n => without(n, tag))).catch(() => {});
+    };
+
+    const toggle = mode => setEditor(e => (e === mode ? null : mode));
+    const suggestions = editor === 'sub' ? utags : userTagNames;
+    const long = p.summary.length > 360;
+    const showScore = SHOW_SCORE.includes(gvars.rank);
+
+    return html`
+    <article class="rel_paper">
+        ${p.thumb_url ? html`<div class="rel_img"><img src=${p.thumb_url} alt="" loading="lazy" /></div>` : null}
+        <div class="rel_head">
+            ${showScore ? html`<span class="rel_score" title="ranking score">${p.weight.toFixed(2)}</span>` : null}
+            <h2 class="rel_title"><a href=${'https://arxiv.org/abs/' + p.id}><${MathText} text=${p.title} /></a></h2>
         </div>
-    )
-}
+        <div class="rel_authors">${p.authors}</div>
+        <div class="rel_meta">
+            <span class="rel_time">${p.time}</span>
+            <span class="rel_tags">${p.tags}</span>
+        </div>
+        ${user ? html`
+        <div class="rel_utags">
+            <button class="iconbtn rel_utag_add" title="add to a tag" aria-label="add to a tag" onClick=${() => toggle('add')}>+</button>
+            <button class="iconbtn rel_utag_sub" title="remove from a tag" aria-label="remove from a tag" onClick=${() => toggle('sub')} disabled=${utags.length === 0}>−</button>
+            <button class="iconbtn rel_utag_neg" title="downvote: not what a tag is about" aria-label="downvote for a tag" onClick=${() => toggle('neg')}>✗</button>
+            ${utags.map(t => html`<${UTag} key=${'u' + t} tag=${t} />`)}
+            ${ntags.map(t => html`<${NTag} key=${'n' + t} tag=${t} onUndo=${() => undoNeg(t)} />`)}
+        </div>` : null}
+        ${editor ? html`<${TagEditor} mode=${editor} suggestions=${suggestions} onSubmit=${apply} onCancel=${() => setEditor(null)} />` : null}
+        <div class=${'rel_abs' + (long && !open ? ' clamped' : '')} onClick=${() => long && !open && setOpen(true)}>
+            <${MathText} text=${p.summary} />
+        </div>
+        <div class="rel_links">
+            ${long ? html`<button class="linkbtn" onClick=${() => setOpen(o => !o)}>${open ? 'show less' : 'show more'}</button>` : null}
+            <a href=${'https://arxiv.org/pdf/' + p.id}>pdf</a>
+            <a class="rel_more" href=${'/?rank=pid&pid=' + p.id}>similar</a>
+            <a class="rel_inspect" href=${'/inspect?pid=' + p.id}>inspect</a>
+        </div>
+    </article>`;
+};
 
-const Paper = props => {
-    const p = props.paper;
-
-    const adder = () => fetch("/add/" + p.id + "/" + prompt("tag to add to this paper:"))
-                        .then(response => console.log(response.text()));
-    const subber = () => fetch("/sub/" + p.id + "/" + prompt("tag to subtract from this paper:"))
-                        .then(response => console.log(response.text()));
-    const downvoter = () => fetch("/addneg/" + p.id + "/" + prompt("downvote this paper for tag (it is NOT what the tag is about):"))
-                        .then(response => console.log(response.text()));
-    const utags = p.utags.map((utxt, ix) => <UTag key={ix} tag={utxt} />);
-    const ntags = p.ntags.map((ntxt, ix) => <NTag key={ix} tag={ntxt} pid={p.id} />);
-    const similar_url = "/?rank=pid&pid=" + p.id;
-    const inspect_url = "/inspect?pid=" + p.id;
-    const thumb_img = p.thumb_url === '' ? null : <div class='rel_img'><img src={p.thumb_url} /></div>;
-    // if the user is logged in then we can show add/sub buttons
-    let utag_controls = null;
-    if(user) {
-        utag_controls = (
-            <div class='rel_utags'>
-                <div class="rel_utag rel_utag_add" onClick={adder}>+</div>
-                <div class="rel_utag rel_utag_sub" onClick={subber}>-</div>
-                <div class="rel_utag rel_utag_neg" title="downvote for a tag" onClick={downvoter}>&#10007;</div>
-                {utags}
-                {ntags}
-            </div>
-        )
+const PaperList = ({ papers }) => {
+    if (papers.length === 0) {
+        return html`<div class="empty">No papers here. Try another search, a longer time window, or tag a few papers first.</div>`;
     }
+    return html`<div id="paperList" class="rel_papers">${papers.map(p => html`<${Paper} key=${p.id} paper=${p} />`)}</div>`;
+};
 
-    return (
-    <div class='rel_paper'>
-        <div class="rel_score">{p.weight.toFixed(2)}</div>
-        <div class='rel_title'><a href={'http://arxiv.org/abs/' + p.id}>{p.title}</a></div>
-        <div class='rel_authors'>{p.authors}</div>
-        <div class="rel_time">{p.time}</div>
-        <div class='rel_tags'>{p.tags}</div>
-        {utag_controls}
-        {thumb_img}
-        <div class='rel_abs'>{p.summary}</div>
-        <div class='rel_more'><a href={similar_url}>similar</a></div>
-        <div class='rel_inspect'><a href={inspect_url}>inspect</a></div>
-    </div>
-    )
-}
+const Tag = ({ tag: t }) => {
+    const del = e => {
+        e.preventDefault();
+        if (!confirm("delete the tag '" + t.name + "' and its downvotes? the papers stay in the database")) return;
+        tagRequest('/del/' + encodeURIComponent(t.name)).then(() => window.location.reload()).catch(() => {});
+    };
+    const active = gvars.rank === 'tags' && gvars.tags.split(',').includes(t.name);
+    return html`
+        <span class=${'chip chip-tag chip-count' + (t.name === 'all' ? ' rel_utag_all' : '') + (active ? ' active' : '')}>
+            <a href=${'/?rank=tags&tags=' + encodeURIComponent(t.name)}>${t.name}${t.n !== undefined ? html` <small>${t.n}</small>` : null}</a>
+            ${t.name !== 'all' ? html`<button class="chip-x" title=${'delete tag ' + t.name} aria-label=${'delete tag ' + t.name} onClick=${del}>×</button>` : null}
+        </span>`;
+};
 
-const PaperList = props => {
-    const lst = props.papers;
-    const plst = lst.map((jpaper, ix) => <Paper key={ix} paper={jpaper} />);
-    return (
-        <div>
-            <div id="paperList" class="rel_papers">
-                {plst}
-            </div>
-        </div>
-    )
-}
+const TagList = ({ tags }) => {
+    const [shown, setShown] = useState(false);
+    const toggleWords = () => {
+        const w = document.getElementById('wordwrap');
+        w.hidden = !w.hidden;
+        setShown(!w.hidden);
+    };
+    return html`
+        <div id="tagList">
+            <span class="taglabel">Your tags</span>
+            ${tags.map(t => html`<${Tag} key=${t.name} tag=${t} />`)}
+            ${words.length > 0 ? html`<button id="inspect_svm" class="linkbtn" onClick=${toggleWords}>${shown ? 'hide' : 'why these papers?'}</button>` : null}
+        </div>`;
+};
 
-const Tag = props => {
-    const t = props.tag;
-    const turl = "/?rank=tags&tags=" + t.name;
-    const tag_class = 'rel_utag' + (t.name === 'all' ? ' rel_utag_all' : '');
-    return (
-        <div class={tag_class}>
-            <a href={turl}>
-                {t.n} {t.name}
-            </a>
-        </div>
-    )
-}
-
-const TagList = props => {
-    const lst = props.tags;
-    const tlst = lst.map((jtag, ix) => <Tag key={ix} tag={jtag} />);
-    const deleter = () => fetch("/del/" + prompt("delete tag name:"))
-                          .then(response => console.log(response.text()));
-    // show the #wordwrap element if the user clicks inspect
-    const show_inspect = () => { document.getElementById("wordwrap").style.display = "block"; };
-    const inspect_elt = words.length > 0 ? <div id="inspect_svm" onClick={show_inspect}>inspect</div> : null;
-    return (
-        <div>
-            <div class="rel_tag" onClick={deleter}>-</div>
-            <div id="tagList" class="rel_utags">
-                {tlst}
-            </div>
-            {inspect_elt}
-        </div>
-    )
-}
-
-// render papers into #wrap
-ReactDOM.render(<PaperList papers={papers} />, document.getElementById('wrap'));
-
-// render tags into #tagwrap, if it exists
-let tagwrap_elt = document.getElementById('tagwrap');
-if (tagwrap_elt) {
-    ReactDOM.render(<TagList tags={tags} />, tagwrap_elt);
-}
+mount(html`<${PaperList} papers=${papers} />`, 'wrap');
+mount(html`<${TagList} tags=${tags} />`, 'tagwrap');

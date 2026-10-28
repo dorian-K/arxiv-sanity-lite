@@ -16,6 +16,6 @@ var words_desc = {{ words_desc | tojson }};
 {% endblock %}
 
 {% block elements %}
-<script src="{{ url_for('static', filename='paper_detail.js') }}" type="text/babel"></script>
-<script src="{{ url_for('static', filename='word_list.js') }}" type="text/babel"></script>
+<script src="{{ url_for('static', filename='paper_detail.js') }}"></script>
+<script src="{{ url_for('static', filename='word_list.js') }}"></script>
 {% endblock %}

@@ -4,25 +4,24 @@
 {% endblock %}
 
 {% block content %}
-<div id="statswrap">
-
-    <div><b>Current index:</b></div>
-    <div>Number of papers total: {{ num_papers }}</div>
-    <div>Earliest paper: {{ earliest_paper }}</div>
-    <div>Latest paper: {{ latest_paper }}</div>
-
-    <br>
-
-    <!-- thresholds are [1, 6, 12, 24, 48, 72, 96] -->
-    <div><b>New paper counts flow:</b></div>
-    <div>Number of new papers in the last 01 hours: {{ thr_1 }}</div>
-    <div>Number of new papers in the last 06 hours: {{ thr_6 }}</div>
-    <div>Number of new papers in the last 12 hours: {{ thr_12 }}</div>
-    <div>Number of new papers in the last 24 hours: {{ thr_24 }}</div>
-    <div>Number of new papers in the last 48 hours: {{ thr_48 }}</div>
-    <div>Number of new papers in the last 72 hours: {{ thr_72 }}</div>
-    <div>Number of new papers in the last 96 hours: {{ thr_96 }}</div>
-
+<div id="statswrap" class="page">
+    <section class="card">
+        <h1>Current index</h1>
+        <div class="statgrid">
+            <div><span class="statnum">{{ num_papers }}</span><span class="muted">papers in total</span></div>
+            <div><span class="statnum">{{ earliest_paper }}</span><span class="muted">earliest paper</span></div>
+            <div><span class="statnum">{{ latest_paper }}</span><span class="muted">latest paper</span></div>
+        </div>
+    </section>
+    <section class="card">
+        <!-- thresholds are [1, 6, 12, 24, 48, 72, 96] -->
+        <h1>New papers</h1>
+        <table class="stattable">
+            {% for h in [1, 6, 12, 24, 48, 72, 96] %}
+            <tr><td>last {{ h }} hours</td><td>{{ {1: thr_1, 6: thr_6, 12: thr_12, 24: thr_24, 48: thr_48, 72: thr_72, 96: thr_96}[h] }}</td></tr>
+            {% endfor %}
+        </table>
+    </section>
 </div>
 {% endblock %}
 

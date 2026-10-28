@@ -8,10 +8,6 @@ var words = {{ words | tojson }};
 var words_desc = {{ words_desc | tojson }};
 var gvars = {{ gvars | tojson }};
 
-/*
-JS code here handles pagination. I really don't super love this approach,
-if anyone can think of a cleaner / shorter way please let me know.
-*/
 var move_page = function(int_offset) {
     var queryParams = new URLSearchParams(window.location.search);
     queryParams.set("page_number", Math.max(1, parseInt(gvars.page_number) + int_offset));
@@ -23,105 +19,101 @@ var move_page = function(int_offset) {
 {% block content %}
 
 {% if not user %}
-<div id="log-fun-warn">(hi! just btw you have to be logged in to be able to add/delete/curate tags for papers and get recommendations)</div>
+<div id="log-fun-warn"><a href="/profile">Log in</a> (no password needed) to tag papers and get recommendations.</div>
 {% endif %}
 
-<div id="controls">
-    <div>
+<section id="controls">
+    <form action="/" method="get" id="cbox">
+        <div id="searchrow">
+            <input name="q" type="search" id="qfield" value="{{ gvars.search_query }}" placeholder="Search papers…" aria-label="search">
+            <button type="submit" class="btn btn-primary">Search</button>
+        </div>
 
-        <!-- the choice box, allowing us to sort, rank, slice and dice papers -->
-        <div id="cbox">
-            <form action="/" method="get">
-
-                <!-- the search box, allowing us to search by keywords -->
-                <input name="q" type="text" id="qfield" value="{{ gvars.search_query }}">
-
-                <!-- rank type: one of tags, pid, time, or random -->
-                <label for="rank_type">Rank by:</label>
-                <select name="rank" id="rank_select">
-                    <option value="search" {{ gvars.rank == 'search' and 'selected' }}>search</option>
-                    <option value="tags" {{ gvars.rank == 'tags' and 'selected' }}>tags</option>
-                    <option value="pid" {{ gvars.rank == 'pid' and 'selected' }}>pid</option>
-                    <option value="time" {{ gvars.rank == 'time' and 'selected' }}>time</option>
-                    <option value="random" {{ gvars.rank == 'random' and 'selected' }}>random</option>
-                </select>
-
-                <!-- current tags, simply in a text field -->
-                <label for="tags">tags: </label>
-                <input name="tags" type="text" id="tags_field" value="{{ gvars.tags }}">
-
-                <!-- current pid, simply in a text field -->
-                <label for="pid">pid: </label>
-                <input name="pid" type="text" id="pid_field" value="{{ gvars.pid }}">
-
-                <!-- current time_filter, in a text field -->
-                <label for="time_filter">time_filter (days): </label>
-                <input name="time_filter" type="text" id="time_filter_field" value="{{ gvars.time_filter }}">
-
-                <!-- current svm_c, in a text field -->
-                <label for="svm_c">svm_c: </label>
-                <input name="svm_c" type="text" id="svm_c_field" value="{{ gvars.svm_c }}">
-
+        <!-- everything that changes how papers are ranked; open whenever it is in use -->
+        <!-- collapsed by default; open when a non-default model setting is in use -->
+        <details id="options" {{ 'open' if gvars.svm_c or gvars.feats != 'auto' or gvars.model != 'svm' }}>
+            <summary>Ranking options
+                <span class="optsummary">
+                    {%- if gvars.rank == 'tags' %} · tags: {{ gvars.tags }}{% elif gvars.rank == 'pid' %} · similar to {{ gvars.pid }}{% elif gvars.rank == 'random' %} · random{% elif gvars.rank == 'time' %} · newest{% endif -%}
+                    {%- if gvars.time_filter %} · last {{ gvars.time_filter }} days{% endif -%}
+                    {%- if gvars.rank in ('tags', 'pid') %} · {{ gvars.eff_feats }} + {{ gvars.model }}{% endif -%}
+                </span>
+            </summary>
+            <div id="optgrid">
+                <label>rank by
+                    <select name="rank" id="rank_select">
+                        <option value="search" {{ gvars.rank == 'search' and 'selected' }}>search</option>
+                        <option value="tags" {{ gvars.rank == 'tags' and 'selected' }}>tags</option>
+                        <option value="pid" {{ gvars.rank == 'pid' and 'selected' }}>similar to paper</option>
+                        <option value="time" {{ gvars.rank == 'time' and 'selected' }}>newest</option>
+                        <option value="random" {{ gvars.rank == 'random' and 'selected' }}>random</option>
+                    </select>
+                </label>
+                <label>tags
+                    <input name="tags" type="text" id="tags_field" value="{{ gvars.tags }}" placeholder="e.g. all, or rl,vision">
+                </label>
+                <label>paper id
+                    <input name="pid" type="text" id="pid_field" value="{{ gvars.pid }}" placeholder="2504.08385">
+                </label>
+                <label>last N days
+                    <input name="time_filter" type="number" min="1" id="time_filter_field" value="{{ gvars.time_filter }}" placeholder="any">
+                </label>
                 <!-- which features and model rank papers for tags/pid, see aslite/rank.py -->
-                <label for="feats">feats: </label>
-                <select name="feats" id="feats_select">
-                    {% for f in (['auto', 'tfidf', 'emb', 'concat', 'fusion'] if gvars.has_emb else ['tfidf']) %}
-                    <option value="{{ f }}" {{ gvars.feats == f and 'selected' }}>{{ f }}{{ ' (' + gvars.eff_feats + ')' if f == 'auto' else '' }}</option>
-                    {% endfor %}
-                </select>
-                <label for="model">model: </label>
-                <select name="model" id="model_select">
-                    <option value="svm" {{ gvars.model == 'svm' and 'selected' }}>svm</option>
-                    <option value="logreg" {{ gvars.model == 'logreg' and 'selected' }}>logreg</option>
-                </select>
+                <label>features
+                    <select name="feats" id="feats_select">
+                        {% for f in (['auto', 'tfidf', 'emb', 'concat', 'fusion'] if gvars.has_emb else ['tfidf']) %}
+                        <option value="{{ f }}" {{ gvars.feats == f and 'selected' }}>{{ f }}{{ ' (' + gvars.eff_feats + ')' if f == 'auto' else '' }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <label>model
+                    <select name="model" id="model_select">
+                        <option value="svm" {{ gvars.model == 'svm' and 'selected' }}>svm</option>
+                        <option value="logreg" {{ gvars.model == 'logreg' and 'selected' }}>logreg</option>
+                    </select>
+                </label>
+                <label title="C: inverse regularization strength, lower is smoother. empty = tuned default">regularization C
+                    <input name="svm_c" type="text" id="svm_c_field" value="{{ gvars.svm_c }}" placeholder="default">
+                </label>
+                <label>hide papers I tagged
+                    <select name="skip_have" id="skip_have_select">
+                        <option value="yes" {{ gvars.skip_have == 'yes' and 'selected' }}>yes</option>
+                        <option value="no" {{ gvars.skip_have == 'no' and 'selected' }}>no</option>
+                    </select>
+                </label>
+            </div>
+            <button type="submit" class="btn">Apply</button>
+        </details>
+    </form>
 
-                <!-- current skip_have: one of yes or no -->
-                <label for="skip_have">skip_have: </label>
-                <select name="skip_have" id="skip_have_select">
-                    <option value="yes" {{ gvars.skip_have == 'yes' and 'selected' }}>yes</option>
-                    <option value="no" {{ gvars.skip_have == 'no' and 'selected' }}>no</option>
-                </select>
-
-                <input type="submit" value="Submit">
-            </form>
-        </div>
-        <!-- some hand-coded common choices for faster and more convenient operation -->
-        <div id="cbox_fast">
-            Shortcuts:
-            <a href="/?rank=tags&tags=all&time_filter=7&skip_have=yes">recommend over last week</a>
-            <a href="/?rank=tags&tags=all&time_filter=3&skip_have=yes">recommend over last 3 days</a>
-            <a href="/?rank=time">recent</a>
-            <a href="/?rank=random&time_filter=7">random last week</a>
-        </div>
-    </div>
-    <div>
-
-    </div>
-</div>
+    <!-- some hand-coded common choices for faster and more convenient operation -->
+    <nav id="cbox_fast" aria-label="shortcuts">
+        <a href="/?rank=tags&tags=all&time_filter=7&skip_have=yes">For you · last week</a>
+        <a href="/?rank=tags&tags=all&time_filter=3&skip_have=yes">For you · last 3 days</a>
+        <a href="/?rank=time">Newest</a>
+        <a href="/?rank=random&time_filter=7">Random · last week</a>
+    </nav>
+</section>
 
 {% if user and tags %}
-<div id="tagwrap">
-</div>
+<section id="tagwrap"></section>
 {% endif %}
 
 {% if user and words %}
-<div id="wordwrap" style="display:none;">
-</div>
+<section id="wordwrap" hidden></section>
 {% endif %}
 
 <!-- main content showing all the papers as a list -->
-<div id="wrap">
-</div>
+<section id="wrap"></section>
 
-<!-- links to previous and next pages -->
-<div id="pagination">
-    <span id="link-prev-page" onclick='move_page(-1);'>prev</span>
-    <span>current page: {{ gvars.page_number }} </span>
-    <span id="link-next-page" onclick='move_page(1);'>next</span>
-</div>
+<nav id="pagination" aria-label="pages">
+    <button id="link-prev-page" class="btn" onclick="move_page(-1);" {{ 'disabled' if gvars.page_number == '1' }}>← prev</button>
+    <span>page {{ gvars.page_number }}</span>
+    <button id="link-next-page" class="btn" onclick="move_page(1);" {{ 'disabled' if papers|length < 25 }}>next →</button>
+</nav>
 {% endblock %}
 
 {% block elements %}
-<script src="{{ url_for('static', filename='paper_list.js') }}" type="text/babel"></script>
-<script src="{{ url_for('static', filename='word_list.js') }}" type="text/babel"></script>
+<script src="{{ url_for('static', filename='paper_list.js') }}"></script>
+<script src="{{ url_for('static', filename='word_list.js') }}"></script>
 {% endblock %}

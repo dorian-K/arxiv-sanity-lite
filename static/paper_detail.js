@@ -1,16 +1,18 @@
 'use strict';
 
-const PaperLite = props => {
-    const p = props.paper;
-    return (
-    <div class='rel_paper'>
-        <div class='rel_title'><a href={'http://arxiv.org/abs/' + p.id}>{p.title}</a></div>
-        <div class='rel_authors'>{p.authors}</div>
-        <div class="rel_time">{p.time}</div>
-        <div class='rel_tags'>{p.tags}</div>
-        <div class='rel_abs'>{p.summary}</div>
-    </div>
-    )
-}
+const PaperLite = ({ paper: p }) => html`
+    <article class="rel_paper">
+        <h2 class="rel_title"><a href=${'https://arxiv.org/abs/' + p.id}><${MathText} text=${p.title} /></a></h2>
+        <div class="rel_authors">${p.authors}</div>
+        <div class="rel_meta">
+            <span class="rel_time">${p.time}</span>
+            <span class="rel_tags">${p.tags}</span>
+        </div>
+        <div class="rel_abs"><${MathText} text=${p.summary} /></div>
+        <div class="rel_links">
+            <a href=${'https://arxiv.org/pdf/' + p.id}>pdf</a>
+            <a href=${'/?rank=pid&pid=' + p.id}>similar</a>
+        </div>
+    </article>`;
 
-ReactDOM.render(<PaperLite paper={paper} />, document.getElementById('wrap'))
+mount(html`<${PaperLite} paper=${paper} />`, 'wrap');

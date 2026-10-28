@@ -42,6 +42,46 @@ All of the database will be stored inside the `data` directory. Finally, if you'
  pip install -r requirements.txt
  ```
 
+#### Embeddings, downvotes and other ranking models (optional)
+
+By default nothing changes: papers are ranked with tfidf SVMs as above. On top of that you can:
+
+**Add dense embeddings.** `compute.py --embed_model ...` also embeds every paper's title and abstract and stores the vectors next to the tfidf features. Embeddings are cached in `data/embeddings.db`, so the periodic run only embeds the new papers. Two ways to get them:
+
+```bash
+# locally, with sentence-transformers (pip install -r requirements-embed.txt)
+python3 compute.py --embed_model st:BAAI/bge-small-en-v1.5
+
+# or from any OpenAI-compatible embeddings endpoint, e.g. a local Ollama server,
+# which keeps torch off a small server entirely
+export EMBED_API_BASE=http://localhost:11434/v1
+python3 compute.py --embed_model api:embeddinggemma
+```
+
+You can also set `EMBED_MODEL` in the environment instead of passing `--embed_model`. Embeddings are reduced to 256 dimensions with PCA by default (`--emb_dims`, 0 to keep all).
+
+**Pick features and model per request.** The front page gets two new options, also usable as URL parameters and as `send_emails.py --feats/--model`:
+
+- `feats`: `tfidf`, `emb` (embeddings only), `concat` (both in one model), `fusion` (one model each, scores averaged) or `auto` (fusion if embeddings exist, else tfidf).
+- `model`: `svm` (the original) or `logreg`, the recipe from [Scholar Inbox](https://arxiv.org/abs/2504.08385): logistic regression on your liked papers, your downvotes and 5000 random other papers, with tuned class weights.
+
+The word list under "inspect" still shows the tfidf words, also for `concat` and `fusion`. With `feats=emb` there are no words to show.
+
+**Downvote papers.** The new ✗ button on a paper asks for a tag and marks the paper as *not* what that tag is about. Downvotes are used as explicit negatives when ranking that tag, hidden by `skip_have`, and shown as crossed-out tags on the paper (click one to undo). Liking a paper for a tag removes its downvote for that tag and vice versa.
+
+**Fetch specific papers.** `python3 fetch_papers.py <arxiv ids>` (or `--file ids.txt`) adds papers by id, e.g. older papers you want to tag. Run `compute.py` afterwards.
+
+**Compare the variants.** `eval.py` holds out some of the liked papers of each tag and checks where they land in the ranking, for every feature set and model. Run it on your own tags with `python3 eval.py run --source tags`, or on the public [Scholar Inbox ratings](https://github.com/avg-dev/scholar_inbox_datasets) (thumbs up/down from thousands of researchers):
+
+```bash
+python3 eval.py prepare-si --ratings path/to/rated_papers.csv --users 60
+python3 fetch_papers.py --file data/si_ids.txt
+python3 compute.py --embed_model st:BAAI/bge-small-en-v1.5
+python3 eval.py run --source si
+```
+
+The defaults in `aslite/rank.py` (`DEFAULT_C`, `DEFAULTS`) are starting points; tune them with `eval.py` once you have results.
+
 #### Todos
 
 - Make website mobile friendly with media queries in css etc

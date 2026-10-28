@@ -14,12 +14,10 @@
         </form>
     </section>
     <section class="card">
-        <h1>Email recommendations</h1>
+        <h1>Weekly digest</h1>
             <p class="muted">
-                Users can receive regular new paper recommendations via email based on their tags.
-                (This is still being developed, may not be running or may be unreliable.)
-                Register your email address below to receive these recommendations.
-                To stop the recommendations simply delete your email address.
+                Once a week, an email with the best new papers for each of your tags, linking to your
+                <a href="/digest">digest page</a> where you can rate them. Leave the field empty to stop the emails.
             </p>
                 <form id="email-form" action="{{ url_for('register_email') }}" method="post">
                     <div class="form-group">

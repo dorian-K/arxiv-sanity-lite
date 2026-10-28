@@ -1,7 +1,7 @@
 
 # arxiv-sanity-lite
 
-A much lighter-weight arxiv-sanity from-scratch re-write. Periodically polls arxiv API for new papers. Then allows users to tag papers of interest, and recommends new papers for each tag based on SVMs over tfidf features of paper abstracts. Allows one to search, rank, sort, slice and dice these results in a pretty web UI. Lastly, arxiv-sanity-lite can send you daily emails with recommendations of new papers based on your tags. Curate your tags, track recent papers in your area, and don't miss out!
+A much lighter-weight arxiv-sanity from-scratch re-write. Periodically polls arxiv API for new papers. Then allows users to tag papers of interest, and recommends new papers for each tag based on SVMs over tfidf features of paper abstracts. Allows one to search, rank, sort, slice and dice these results in a pretty web UI. Lastly, arxiv-sanity-lite can send you a weekly digest email with the best new papers for each of your tags, which you rate with one click. Curate your tags, track recent papers in your area, and don't miss out!
 
 I am running a live version of this code on [arxiv-sanity-lite.com](https://arxiv-sanity-lite.com).
 
@@ -32,7 +32,7 @@ uv run flask --app serve run
 
 All of the database will be stored inside the `data` directory. Finally, if you'd like to run your own instance on the interwebs I recommend simply running the above on a [Linode](https://www.linode.com), e.g. I am running this code currently on the smallest "Nanode 1 GB" instance indexing about 30K papers, which costs $5/month.
 
-(Optional) Finally, if you'd like to send periodic emails to users about new papers, see the `send_emails.py` script. Install its dependency with `uv sync --extra email`. I run this script in a daily cron job.
+(Optional) Finally, `send_emails.py` sends the weekly digest emails over SMTP; see "Weekly digest" below.
 
 #### Serve it publicly (Docker)
 
@@ -99,6 +99,21 @@ Ordinary page views are never limited. The limits are counted in memory per work
 
 Memory: the features are memory-mapped, so all workers share one copy in the page cache, and each worker adds about 0.5 GB on five years of papers. The whole 460k-paper setup runs in 2–3 GB of RAM. `WEB_THREADS` adds concurrency without adding memory.
 
+#### Weekly digest
+
+Once a week, every user with an email address on their profile gets the best new papers for each of their tags. The ranking is the same as the tag pages, restricted to the last 7 days and leaving out papers they already rated. The email links to `/digest`, which shows the same papers with one-click 👍 ("more like this") and 👎 ("not for me") buttons. Votes go straight into the tag, so the next digest improves. Every email has an unsubscribe link, including the one-click kind Gmail looks for.
+
+In docker, the updater sends the digest every `DIGEST_INTERVAL` (a week). Set `PUBLIC_URL` (your site, for the links) and `MAIL_FROM` in `.env`. To try it without sending anything: `uv run python send_emails.py --dry-run 1 -u <user> --save digest.html`. Without email, users can still open `/digest` and make one on the spot.
+
+**Sending from your own VPS.** The `mail` service (`COMPOSE_PROFILES=mail`) is an outgoing-only Postfix that signs mail with DKIM and delivers straight to recipients' mail servers. It publishes no port, so only the updater can hand it mail. You need:
+1. A VPS whose provider allows outgoing port 25. Check with `timeout 5 bash -c '</dev/tcp/gmail-smtp-in.l.google.com/25' && echo open`. Some providers unblock it on request.
+2. Reverse DNS of the VPS's IP set to `MAIL_HOSTNAME` (in the provider's panel), with an A record for that name pointing back to the IP.
+3. `MAIL_DOMAIN` (the domain in `MAIL_FROM`) and `MAIL_HOSTNAME` in `.env`, then `docker compose up -d`.
+4. The DNS records the mail container prints on its first start (`docker compose logs mail`): DKIM, SPF and DMARC. The DKIM key lives in the `mail-dkim` volume, so the record stays valid across rebuilds.
+5. A test: point `MAIL_FROM` at your domain, send yourself a digest (`docker compose exec updater python send_emails.py -u <you>`), and check the score at mail-tester.com or the "Authentication-Results" header (expect `spf=pass dkim=pass`).
+
+New servers have no reputation, so the first digests may land in spam until recipients mark them as not spam. To send through an existing SMTP server instead (your provider's, a university relay, a sending service), drop the profile and set `SMTP_HOST`/`SMTP_PORT`/`SMTP_TLS`/`SMTP_USER`/`SMTP_PASSWORD`. Or keep the container and set `RELAYHOST` to route its mail through such a server, still DKIM-signed.
+
 #### Add papers by link
 
 Logged-in users get an **add** page (`/import`). Paste arXiv links or ids there, one per line and up to 100 at a time. It understands abs/pdf links, Hugging Face and alphaXiv paper pages, DOIs and bare ids, and can tag the papers in the same step. Papers of any year or category work. The ones that aren't in the database yet are fetched from the arXiv API in one call per 100 ids:
@@ -125,7 +140,7 @@ Dependencies are managed with [uv](https://docs.astral.sh/uv/). This creates `.v
 ```bash
 uv sync                              # core + dev tools (pytest)
 uv sync --extra embed                # + sentence-transformers for local embeddings
-uv sync --extra email --extra thumbs # + send_emails.py / thumb_daemon.py deps
+uv sync --extra thumbs               # + thumb_daemon.py deps
 uv run pytest                        # smoke tests on a synthetic corpus, no network needed
 ```
 

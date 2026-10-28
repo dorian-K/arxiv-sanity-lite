@@ -49,7 +49,21 @@ const TagEditor = ({ mode, suggestions, onSubmit, onCancel }) => {
 
 const SHOW_SCORE = ['tags', 'pid', 'search'];
 
-const Paper = ({ paper: p }) => {
+// one-click like / downvote for a given tag (the digest page), toggling like the server does
+const QuickVote = ({ pid, tag, liked, downvoted, onChange }) => {
+    const enc = pid + '/' + encodeURIComponent(tag);
+    const like = () => tagRequest((liked ? '/sub/' : '/add/') + enc).then(() => onChange(liked ? null : 'like')).catch(() => {});
+    const down = () => tagRequest((downvoted ? '/subneg/' : '/addneg/') + enc).then(() => onChange(downvoted ? null : 'down')).catch(() => {});
+    return html`
+        <div class="quickvote">
+            <button class=${'btn btn-small vote-up' + (liked ? ' on' : '')} aria-pressed=${liked} onClick=${like}
+                    title=${'more like this for ' + tag}>👍 ${liked ? 'liked' : 'more like this'}</button>
+            <button class=${'btn btn-small vote-down' + (downvoted ? ' on' : '')} aria-pressed=${downvoted} onClick=${down}
+                    title=${'not what ' + tag + ' is about'}>👎 ${downvoted ? 'downvoted' : 'not for me'}</button>
+        </div>`;
+};
+
+const Paper = ({ paper: p, quickTag }) => {
     const [utags, setUtags] = useState(p.utags);
     const [ntags, setNtags] = useState(p.ntags);
     const [editor, setEditor] = useState(null); // null | 'add' | 'sub' | 'neg'
@@ -92,6 +106,12 @@ const Paper = ({ paper: p }) => {
             <span class="rel_time">${p.time}</span>
             <span class="rel_tags">${p.tags}</span>
         </div>
+        ${user && quickTag ? html`
+        <${QuickVote} pid=${p.id} tag=${quickTag} liked=${utags.includes(quickTag)} downvoted=${ntags.includes(quickTag)}
+            onChange=${v => {
+                setUtags(u => (v === 'like' ? withTag(u, quickTag) : without(u, quickTag)));
+                setNtags(n => (v === 'down' ? withTag(n, quickTag) : without(n, quickTag)));
+            }} />` : null}
         ${user ? html`
         <div class="rel_utags">
             <button class="iconbtn rel_utag_add" title="add to a tag" aria-label="add to a tag" onClick=${() => toggle('add')}>+</button>
@@ -149,5 +169,17 @@ const TagList = ({ tags }) => {
         </div>`;
 };
 
-mount(html`<${PaperList} papers=${papers} />`, 'wrap');
-mount(html`<${TagList} tags=${tags} />`, 'tagwrap');
+// the digest page: one section per tag, with quick votes for that tag
+const Digest = ({ sections }) => html`
+    ${sections.map(s => html`
+    <section key=${s.tag} class="digest-section">
+        <h2 class="digest-tag"><a href=${'/?rank=tags&tags=' + encodeURIComponent(s.tag)}>${s.tag}</a></h2>
+        <div class="rel_papers">${s.papers.map(p => html`<${Paper} key=${p.id} paper=${p} quickTag=${s.tag} />`)}</div>
+    </section>`)}`;
+
+if (typeof digest !== 'undefined') {
+    mount(html`<${Digest} sections=${digest} />`, 'digestwrap');
+} else {
+    mount(html`<${PaperList} papers=${papers} />`, 'wrap');
+    mount(html`<${TagList} tags=${tags} />`, 'tagwrap');
+}

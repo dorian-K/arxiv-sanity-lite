@@ -1,21 +1,6 @@
-import importlib
 import os
 
-import pytest
-
-
-@pytest.fixture
-def client(features):
-    import serve
-
-    importlib.reload(serve)  # module-level state must not leak between temp dirs
-    serve.app.config['TESTING'] = True
-    with serve.app.test_client() as c:
-        yield c
-
-
-def login(client, user='alice', password='correct horse'):
-    return client.post('/login', data={'username': user, 'password': password})
+from conftest import login
 
 
 def test_pages_render(client, corpus):

@@ -1,290 +1,155 @@
 """
-Compose and send recommendation emails to arxiv-sanity-lite users!
+Sends every user with an email address their digest: for each of their tags, the best
+papers of the last few days (aslite/digest.py). The digest is also stored, and the
+email links to the /digest page that shows it with thumbs up/down.
 
-I run this script in a cron job to send out emails to the users with their
-recommendations. There's a bit of copy paste code here but I expect that
-the recommendations may become more complex in the future, so this is ok for now.
+Mail goes out over plain SMTP, configured with environment variables:
+    SMTP_HOST      default localhost (in docker compose: the `mail` service)
+    SMTP_PORT      default 25
+    SMTP_TLS       none | starttls | ssl (default none, for a server on the same host/network)
+    SMTP_USER, SMTP_PASSWORD   if the server wants a login
+    MAIL_FROM      e.g. "arxiv-sanity <digest@example.org>"
+    PUBLIC_URL     where the site is reachable, e.g. https://sanity.example.org
 
-You'll notice that the file sendgrid_api_key.txt is not in the repo, you'd have
-to manually register with sendgrid yourself, get an API key and put it in the file.
+    uv run python send_emails.py --dry-run 1 -u alice --save digest.html   # preview
 """
 
 import os
 import time
+import html
 import argparse
+import smtplib
+from email.message import EmailMessage
+from email.utils import make_msgid, formataddr, parseaddr
+
+from itsdangerous import URLSafeSerializer
+
+from aslite import db, digest
+from aslite.db import load_features, get_papers_db, get_emails, get_secret_key
+
+PUBLIC_URL = os.environ.get('PUBLIC_URL', 'http://localhost:5000').rstrip('/')
+MAIL_FROM = os.environ.get('MAIL_FROM', 'arxiv-sanity <digest@localhost>')
 
 
-import sendgrid
-from sendgrid.helpers.mail import Email, To, Content, Mail
-
-from aslite.db import load_features, get_papers_db, get_all_tags, get_emails
-from aslite.rank import rank, resolve_feats, resolve_model
-
-# -----------------------------------------------------------------------------
-# the html template for the email
-
-template = """
-<!DOCTYPE HTML>
-<html>
-
-<head>
-<style>
-body {
-    font-family: Arial, sans-serif;
-}
-.s {
-    font-weight: bold;
-    margin-right: 10px;
-}
-.a {
-    color: #333;
-}
-.u {
-    font-size: 12px;
-    color: #333;
-    margin-bottom: 10px;
-}
-.f {
-    color: #933;
-    display: inline-block;
-}
-</style>
-</head>
-
-<body>
-
-<br><br>
-<div>Hi! Here are your <a href="https://arxiv-sanity-lite.com">arxiv-sanity-lite</a> recommendations. __STATS__</div>
-<br><br>
-
-<div>
-    __CONTENT__
-</div>
-
-<br><br>
-<div>
-To stop these emails remove your email in your <a href="https://arxiv-sanity-lite.com/profile">account</a> settings. (your account is __ACCOUNT__).
-</div>
-<div> <3, arxiv-sanity-lite. </div>
-
-</body>
-</html>
-"""
-
-# -----------------------------------------------------------------------------
+def unsubscribe_url(user):
+    token = URLSafeSerializer(get_secret_key(), salt='unsubscribe').dumps(user)
+    return f'{PUBLIC_URL}/unsubscribe/{token}'
 
 
-def calculate_recommendation(
-    tags,
-    neg_tags,
-    time_delta=3,  # how recent papers are we recommending? in days
-):
+def render(user, sections, papers, days):
+    """(subject, plain text, html) of one digest email"""
+    n = sum(len(s['papers']) for s in sections)
+    subject = f"{n} new papers for you, {time.strftime('%b %d')}"
+    digest_url = f'{PUBLIC_URL}/digest'
+    unsub = unsubscribe_url(user)
+    e = html.escape
 
-    # loop over all the tags
-    all_pids, all_scores = {}, {}
-    have = set().union(*tags.values(), *neg_tags.values())
-    for tag, pids in tags.items():
-        if len(pids) == 0:
-            continue
-
-        # rank all papers for this tag, with its downvotes as explicit negatives
-        pids, scores, _ = rank(features, pids, neg_tags.get(tag, set()), feats=args.feats, model=args.model)
-
-        # filter by time to only recent papers
-        deltat = time_delta * 60 * 60 * 24  # allowed time delta in seconds
-        keep = [i for i, pid in enumerate(pids) if (tnow - times.get(pid, 0)) < deltat]
-        pids, scores = [pids[i] for i in keep], [scores[i] for i in keep]
-
-        # finally exclude the papers we already have tagged or downvoted
-        keep = [i for i, pid in enumerate(pids) if pid not in have]
-        pids, scores = [pids[i] for i in keep], [scores[i] for i in keep]
-
-        # store results
-        all_pids[tag] = pids
-        all_scores[tag] = scores
-
-    return all_pids, all_scores
-
-
-# -----------------------------------------------------------------------------
-
-
-def render_recommendations(user, tags, tag_pids, tag_scores):
-    # render the paper recommendations into the html template
-
-    # first we are going to merge all of the papers / scores together using a MAX
-    max_score = {}
-    max_source_tag = {}
-    for tag in tag_pids:
-        for pid, score in zip(tag_pids[tag], tag_scores[tag], strict=True):
-            max_score[pid] = max(max_score.get(pid, -99999), score)  # lol
-            if max_score[pid] == score:
-                max_source_tag[pid] = tag
-
-    # now we have a dict of pid -> max score. sort by score
-    max_score_list = sorted(max_score.items(), key=lambda x: x[1], reverse=True)
-    pids, scores = zip(*max_score_list, strict=True)
-
-    # now render the html for each individual recommendation
+    text = [
+        f"Hi {user}, the best papers of the last {days} days for each of your tags.",
+        f"Rate them: {digest_url}",
+        '',
+    ]
     parts = []
-    n = min(len(scores), args.num_recommendations)
-    for score, pid in zip(scores[:n], pids[:n], strict=True):
-        p = pdb[pid]
-        authors = ', '.join(a['name'] for a in p['authors'])
-        # crop the abstract
-        summary = p['summary']
-        summary = summary[: min(500, len(summary))]
-        if len(summary) == 500:
-            summary += '...'
-        # create the url that will feature this paper on top and also show the most similar papers
-        url = 'https://arxiv-sanity-lite.com/?rank=pid&pid=' + pid
-        parts.append(
-            """
-<tr>
-<td valign="top"><div class="s">%.2f</div></td>
-<td>
-<a href="%s">%s</a> <div class="f">(%s)</div>
-<div class="a">%s</div>
-<div class="u">%s</div>
-</td>
-</tr>
-"""
-            % (score, url, p['title'], max_source_tag[pid], authors, summary)
-        )
-
-    # render the final html
-    out = template
-
-    # render the recommendations
-    final = '<table>' + ''.join(parts) + '</table>'
-    out = out.replace('__CONTENT__', final)
-
-    # render the stats
-    num_papers_tagged = len(set().union(*tags.values()))
-    tags_str = ', '.join(['"%s" (%d)' % (t, len(pids)) for t, pids in tags.items()])
-    stats = f"We took the {num_papers_tagged} papers across your {len(tags)} tags ({tags_str}) and \
-              ranked {len(pids)} papers that showed up on arxiv over the last \
-              {args.time_delta} days using {resolve_feats(features, args.feats)} {resolve_model(features, args.model)} models over paper abstracts. Below are the \
-              top {args.num_recommendations} papers. Remember that the more you tag, \
-              the better this gets:"
-    out = out.replace('__STATS__', stats)
-
-    # render the account
-    out = out.replace('__ACCOUNT__', user)
-
-    return out
+    for s in sections:
+        text.append(f"== {s['tag']}")
+        parts.append(f'<h2 style="font-size:17px;margin:28px 0 8px;color:#b3261e">{e(s["tag"])}</h2>')
+        for pid, _ in s['papers']:
+            p = papers[pid]
+            authors = ', '.join(a['name'] for a in p['authors'][:6]) + (' et al.' if len(p['authors']) > 6 else '')
+            summary = ' '.join(p['summary'].split())
+            summary = summary[:400] + ('…' if len(summary) > 400 else '')
+            title = ' '.join(p['title'].split())
+            text += [f"- {title}", f"  {authors}", f"  https://arxiv.org/abs/{pid}", '']
+            parts.append(
+                '<div style="margin:0 0 16px">'
+                f'<a href="https://arxiv.org/abs/{pid}" style="font-size:15px;font-weight:600;color:#1a1a1a">{e(title)}</a>'
+                f'<div style="font-size:13px;color:#666;margin:2px 0">{e(authors)} · {e(p["_time_str"])}</div>'
+                f'<div style="font-size:14px;color:#333">{e(summary)}</div>'
+                f'<div style="font-size:13px;margin-top:4px"><a href="{PUBLIC_URL}/?rank=pid&pid={pid}">similar papers</a>'
+                f' · <a href="https://arxiv.org/pdf/{pid}">pdf</a></div>'
+                '</div>'
+            )
+    text += ['', f"Unsubscribe: {unsub}"]
+    body = f"""<!DOCTYPE html>
+<html><body style="margin:0;padding:24px 16px;background:#f6f5f2;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif">
+<div style="max-width:640px;margin:0 auto;background:#fff;border-radius:10px;padding:24px">
+<p style="margin-top:0;font-size:15px">Hi {e(user)}, here are the best papers of the last {days} days for each of your tags.</p>
+<p><a href="{digest_url}" style="display:inline-block;padding:10px 16px;background:#b3261e;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">Rate them 👍 👎</a></p>
+<p style="font-size:13px;color:#666">Each rating teaches your tag what you want, so next week's list gets better.</p>
+{''.join(parts)}
+<p style="font-size:12px;color:#888;margin-top:32px">You get this because you added your email at {e(PUBLIC_URL)}.
+<a href="{unsub}" style="color:#888">Unsubscribe</a></p>
+</div></body></html>"""
+    return subject, '\n'.join(text), body
 
 
-# -----------------------------------------------------------------------------
-# send the actual html via sendgrid
+def send(to, subject, text, body, user, dry_run):
+    msg = EmailMessage()
+    msg['Subject'] = subject
+    msg['From'] = MAIL_FROM
+    msg['To'] = to
+    msg['Message-ID'] = make_msgid(domain=parseaddr(MAIL_FROM)[1].split('@')[-1] or None)
+    # one-click unsubscribe (RFC 8058), which Gmail and others look for in bulk mail
+    msg['List-Unsubscribe'] = f'<{unsubscribe_url(user)}>'
+    msg['List-Unsubscribe-Post'] = 'List-Unsubscribe=One-Click'
+    msg.set_content(text)
+    msg.add_alternative(body, subtype='html')
+    if dry_run:
+        return
+    host, port = os.environ.get('SMTP_HOST', 'localhost'), int(os.environ.get('SMTP_PORT', '25'))
+    tls = os.environ.get('SMTP_TLS', 'none')
+    cls = smtplib.SMTP_SSL if tls == 'ssl' else smtplib.SMTP
+    with cls(host, port, timeout=60) as s:
+        if tls == 'starttls':
+            s.starttls()
+        if os.environ.get('SMTP_USER'):
+            s.login(os.environ['SMTP_USER'], os.environ.get('SMTP_PASSWORD', ''))
+        s.send_message(msg)
 
-
-def send_email(to, html):
-
-    # init the api
-    assert os.path.isfile('sendgrid_api_key.txt')
-    api_key = open('sendgrid_api_key.txt', 'r').read().strip()
-    sg = sendgrid.SendGridAPIClient(api_key=api_key)
-
-    # construct the email
-    from_email = Email("admin@arxiv-sanity-lite.com")
-    to_email = To(to)
-    subject = tnow_str + " Arxiv Sanity Lite recommendations"
-    content = Content("text/html", html)
-    mail = Mail(from_email, to_email, subject, content)
-
-    # hope for the best :)
-    if not args.dry_run:
-        response = sg.client.mail.send.post(request_body=mail.get())
-        print(response.status_code)
-        pass
-
-
-# -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Sends emails with recommendations')
-    parser.add_argument(
-        '-n', '--num-recommendations', type=int, default=20, help='number of recommendations to send per person'
-    )
-    parser.add_argument('-t', '--time-delta', type=int, default=3, help='how recent papers to recommended, in days')
-    parser.add_argument('-d', '--dry-run', type=int, default=0, help='if set to 1 do not actually send the emails')
-    parser.add_argument(
-        '-u',
-        '--user',
-        type=str,
-        default='',
-        help='restrict recommendations only to a single given user (used for debugging)',
-    )
-    parser.add_argument(
-        '--feats',
-        type=str,
-        default='auto',
-        help='features to rank with: auto|tfidf|emb|concat|fusion (see aslite/rank.py)',
-    )
-    parser.add_argument('--model', type=str, default='auto', help='ranking model: auto|svm|logreg (see aslite/rank.py)')
-    parser.add_argument(
-        '-m',
-        '--min-papers',
-        type=int,
-        default=1,
-        help='user must have at least this many papers for us to send recommendations',
-    )
+    parser = argparse.ArgumentParser(description='Sends the digest emails')
+    parser.add_argument('-n', '--per-tag', type=int, default=8, help='papers per tag')
+    parser.add_argument('-t', '--time-delta', type=int, default=7, help='papers from the last this many days')
+    parser.add_argument('-d', '--dry-run', type=int, default=0, help='if 1, compose (and store) but do not send')
+    parser.add_argument('-u', '--user', type=str, default='', help='only this user (for testing)')
+    parser.add_argument('--save', type=str, default='', help='also write the html of the (last) email to this file')
+    parser.add_argument('--feats', type=str, default='auto', help='auto|tfidf|emb|concat|fusion (see aslite/rank.py)')
+    parser.add_argument('--model', type=str, default='auto', help='auto|svm|logreg (see aslite/rank.py)')
     args = parser.parse_args()
     print(args)
 
-    tnow = time.time()
-    tnow_str = time.strftime('%b %d', time.localtime(tnow))  # e.g. "Nov 27"
-
-    all_tags = get_all_tags()
-    all_neg_tags = get_all_tags(neg=True)
     emails = get_emails()
+    if args.user:
+        emails = {u: e for u, e in emails.items() if u == args.user}
+    if not emails or not db.features_exist():
+        print("nobody to send to" if not emails else "no features yet, run compute.py")
+        raise SystemExit(0)
     features = load_features()
-    pdb = get_papers_db()  # only a handle, papers are read as needed
+    pdb = get_papers_db()
     times = pdb.times()
 
-    # iterate all users, create recommendations, send emails
     num_sent = 0
-    for user, tags in all_tags.items():
-        # verify that we have an email for this user
-        email = emails.get(user, None)
-        if not email:
-            print("skipping user %s, no email" % (user,))
+    for user, email in sorted(emails.items()):
+        sections = digest.compute_for(
+            user, features, times, args.time_delta, args.per_tag, feats=args.feats, model=args.model
+        )
+        if not sections:
+            print(f"skipping {user}: no recommendations (no tags, or nothing new)")
             continue
-        if args.user and user != args.user:
-            print("skipping user %s, not %s" % (user, args.user))
+        db.save_digest(user, sections, args.time_delta)
+        papers = pdb.get_many(p for s in sections for p, _ in s['papers'])
+        subject, text, body = render(user, sections, papers, args.time_delta)
+        if args.save:
+            with open(args.save, 'w') as f:
+                f.write(body)
+        try:
+            send(formataddr((user, email)), subject, text, body, user, args.dry_run)
+        except (smtplib.SMTPException, OSError) as e:
+            print(f"failed to send to {user}: {e}")
             continue
-
-        # verify that we have at least one positive example...
-        num_papers_tagged = len(set().union(*tags.values()))
-        if num_papers_tagged < args.min_papers:
-            print("skipping user %s, only has %d papers tagged" % (user, num_papers_tagged))
-            continue
-
-        # insert a fake entry in tags for the special "all" tag, which is the union of all papers
-        # tags['all'] = set().union(*tags.values())
-
-        # calculate the recommendations
-        pids, scores = calculate_recommendation(tags, all_neg_tags.get(user, {}), time_delta=args.time_delta)
-        if all(len(lst) == 0 for tag, lst in pids.items()):
-            print("skipping user %s, no recommendations were produced" % (user,))
-            continue
-
-        # render the html
-        print("rendering top %d recommendations into a report for %s..." % (args.num_recommendations, user))
-        html = render_recommendations(user, tags, pids, scores)
-        # temporarily for debugging write recommendations to disk for manual inspection
-        if os.path.isdir('recco'):
-            with open('recco/%s.html' % (user,), 'w') as f:
-                f.write(html)
-
-        # actually send the email
-        print("sending email...")
-        send_email(email, html)
         num_sent += 1
+        print(f"{'composed' if args.dry_run else 'sent'} digest for {user}: {subject}")
+        time.sleep(0.5)  # no need to burst
 
-        # zzz?
-        # time.sleep(1 + random.uniform(0, 2))
-
-    print("done.")
-    print("sent %d emails" % (num_sent,))
+    print(f"done, {num_sent} {'composed' if args.dry_run else 'sent'}")

@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="page">
+    <section class="card">
+        {% if done %}
+        <h1>Unsubscribed</h1>
+        <p>No more digests for {{ name }}. You can add your email again on your <a href="/profile">profile</a> any time.</p>
+        {% else %}
+        <h1>Unsubscribe</h1>
+        <p>Stop the digest emails for {{ name }}?</p>
+        <form method="post" action="/unsubscribe/{{ token }}">
+            <button type="submit" class="btn btn-primary">Unsubscribe</button>
+        </form>
+        {% endif %}
+    </section>
+</div>
+{% endblock %}

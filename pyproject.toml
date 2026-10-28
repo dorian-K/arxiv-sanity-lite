@@ -19,8 +19,6 @@ dependencies = [
 embed = ["sentence-transformers>=6.0", "torch>=2.6", "torchvision", "pillow"]
 # the same with CUDA torch, for a GPU machine (see gpu_embed.sh); can't be combined with embed
 embed-gpu = ["sentence-transformers>=6.0", "torch>=2.6", "torchvision", "pillow"]
-# send_emails.py
-email = ["sendgrid>=6.12"]
 # thumb_daemon.py (also needs ImageMagick's `convert` on PATH)
 thumbs = ["requests>=2.32"]
 bulk = [

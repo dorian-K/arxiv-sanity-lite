@@ -20,10 +20,11 @@ from flask import Flask, request, redirect, url_for, abort
 from flask import render_template
 from flask import g  # global session-level object
 from flask import session
+from itsdangerous import URLSafeSerializer, BadSignature
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import generate_password_hash, check_password_hash
 
-from aslite import db
+from aslite import db, digest
 from aslite.db import get_papers_db, get_secret_key, load_features, features_exist, PAPERS_DB_FILE
 from aslite.arxiv import find_arxiv_id, fetch_papers_by_id, OLD_ARXIV_ID_RE
 from aslite.rank import rank, resolve_feats, resolve_model, has_embeddings, FEATS, MODELS
@@ -67,6 +68,7 @@ RATE_LIMITS = {
     'search': (240, 60),
     'login': (30, 300),  # password hashing is deliberately slow
     'import': (60, 3600),
+    'digest': (20, 3600),  # recomputing a digest trains one model per tag
 }
 RATE_LIMITS_ON = os.environ.get('RATE_LIMITS', '1') != '0'
 _buckets = {}
@@ -620,6 +622,65 @@ def import_papers():
     return render_template('import.html', **context)
 
 
+DIGEST_DAYS = 7
+
+
+@app.route('/digest', methods=['GET', 'POST'])
+def digest_page():
+    """the user's latest digest (what the email showed), with thumbs up/down per tag"""
+    context = default_context()
+    context.update(sections=[], digest_time='', digest_days=DIGEST_DAYS, error='')
+    context['tags'] = [{'name': t} for t in get_tags()]  # suggestions in the tag editor
+    if g.user is None:
+        return render_template('digest.html', **context)
+    if request.method == 'POST':
+        # make a fresh one, e.g. before the first email or after a lot of rating
+        if rate_limited('digest'):
+            return too_many('digest')
+        if not features_exist():
+            context['error'] = "No features yet, run compute.py first."
+            return render_template('digest.html', **context)
+        sections = digest.compute_for(g.user, load_features(), get_times()[0], DIGEST_DAYS)
+        db.save_digest(g.user, sections, DIGEST_DAYS)
+        return redirect(url_for('digest_page'))
+
+    d = db.get_digest(g.user)
+    if d:
+        found = get_papers().get_many(p for s in d['sections'] for p, _ in s['papers'])
+        sections = []
+        for s in d['sections']:
+            papers = []
+            for pid, score in s['papers']:
+                if pid in found:
+                    papers.append(dict(render_pid(pid, found[pid]), weight=score))
+            sections.append({'tag': s['tag'], 'papers': papers})
+        context.update(
+            sections=sections,
+            digest_time=time.strftime('%b %d', time.localtime(d['time'])),
+            digest_days=d['days'],
+        )
+    return render_template('digest.html', **context)
+
+
+def _unsubscribe_user(token):
+    try:
+        return URLSafeSerializer(app.secret_key, salt='unsubscribe').loads(token)
+    except BadSignature:
+        return None
+
+
+@app.route('/unsubscribe/<token>', methods=['GET', 'POST'])
+def unsubscribe(token):
+    """the link in every digest email; POST is also the one-click unsubscribe of RFC 8058"""
+    user = _unsubscribe_user(token)
+    if user is None:
+        return "This unsubscribe link is invalid.", 400
+    if request.method == 'POST':
+        db.set_email(user, '')
+        return render_template('unsubscribe.html', done=True, name=user, **default_context())
+    return render_template('unsubscribe.html', done=False, name=user, token=token, **default_context())
+
+
 # -----------------------------------------------------------------------------
 # endpoints to log in and out
 
@@ -676,11 +737,11 @@ def set_password(username, password):
 
 @app.route('/register_email', methods=['POST'])
 def register_email():
-    email = request.form['email']
+    email = request.form.get('email', '').strip()
 
     if g.user:
         # do some basic input validation
-        proper_email = re.match(r'^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,4}$', email, re.IGNORECASE)
+        proper_email = re.match(r'^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$', email, re.IGNORECASE)
         if email == '' or proper_email:  # allow empty email, meaning no email
             # everything checks out, write to the database
             db.set_email(g.user, email)

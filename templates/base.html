@@ -21,9 +21,9 @@ var user = {{ user | tojson }};
 <header id="header">
     <a href="/" id="home-link">arxiv<span>-sanity</span></a>
     <nav>
-        {% if user %}<a href="/import" title="add papers by arXiv link">add</a>{% endif %}
-        <a href="/about">about</a>
-        <a href="/stats">stats</a>
+        {% if user %}<a href="/digest">digest</a><a href="/import" title="add papers by arXiv link">add</a>{% endif %}
+        <a href="/about" class="nav-secondary">about</a>
+        <a href="/stats" class="nav-secondary">stats</a>
         <a href="/profile" class="{{ 'nav-user' if user else 'nav-login' }}">{{ user if user else 'log in' }}</a>
     </nav>
 </header>
@@ -32,6 +32,8 @@ var user = {{ user | tojson }};
 {% block content %}
 {% endblock %}
 </main>
+
+<footer id="footer"><a href="/about">about</a> · <a href="/stats">stats</a></footer>
 
 <!-- React without a build step: components are written with htm tagged templates
      (static/common.js), so no in-browser JSX compiler is needed -->

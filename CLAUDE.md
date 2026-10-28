@@ -22,7 +22,7 @@ Never gate a commit on `uv run pytest | tail -1 && git commit`: the pipe returns
 Dependencies are managed with uv (`pyproject.toml` + `uv.lock`, Python 3.12+, `package = false`). Every script runs from the repo root, because paths such as `data/`, `static/thumb` and `secret_key.txt` are relative to it.
 
 ```bash
-uv sync                                    # core + dev (pytest); --extra embed|email|thumbs for optional deps
+uv sync                                    # core + dev (pytest); --extra embed|serve|bulk|thumbs for optional deps
 uv sync --extra embed                      # sentence-transformers for compute.py --embed_model st:...
                                            # (uv sync drops extras you don't list, so pass every one you need)
 uv run pytest                              # smoke tests, synthetic corpus in a temp dir, no network
@@ -38,7 +38,7 @@ ARXIV_SANITY_DATA=data/5y uv run python harvest_papers.py --years 5   # fallback
 uv run flask --app serve run               # web UI (make fun); `make up` = daemon + compute
 docker compose up -d --build               # public deployment: gunicorn web + daily updater, behind an https proxy (.env.example)
 uv run flask --app serve set-password <user>   # create/reset an account (needed when ALLOW_SIGNUP=0)
-uv run python send_emails.py --dry-run 1 -u <user>   # check recommendation emails without sending
+uv run python send_emails.py --dry-run 1 -u <user> --save d.html   # compose (and store) a digest without sending
 uv run python thumb_daemon.py              # paper thumbnails into static/thumb (needs ImageMagick `convert`)
 uv run python eval.py run --source tags    # compare ranking variants on held-out liked papers
 ```
@@ -61,7 +61,8 @@ The pipeline runs in batch through cron jobs, and the web server only reads its 
 All file I/O and DB access goes through **`aslite/db.py`**. Scripts don't touch the filesystem directly, so add new storage there.
 - Plain SQLite through the stdlib, every database in WAL mode, so the web server keeps reading while the updater writes. The schema is created on first connect (`connect()`). Copy a live database with `snapshot()`, never with `cp`.
 - `papers.sqlite`: one row per paper. `PapersDB` returns the same paper dicts (`_id`, `_time`, `authors: [{name}]`, `tags: [{term}]`, ...) the code always used, and also has `get_many`, `times` and `search`. Search is an FTS5 index over the table itself, kept in sync by triggers (bm25, weights title > authors > abstract).
-- `users.sqlite`: `users` (password hash, email, last_active), `tags` (one row per user/tag/paper, `neg` marks a downvote, so like and downvote are exclusive by construction), `fetches`.
+- `users.sqlite`: `users` (password hash, email, last_active), `tags` (one row per user/tag/paper, `neg` marks a downvote, so like and downvote are exclusive by construction), `fetches`, `digests` (the latest digest per user).
+- Digest: `aslite/digest.py` computes it (one rank per tag, last N days, minus rated papers). `send_emails.py` stores it and emails it over SMTP; `/digest` shows the stored one with one-click votes. Email links come from `PUBLIC_URL`, never a hardcoded domain. `docker/mail/` is the optional outgoing Postfix + OpenDKIM container.
 - `features/<version>/` holds `.npy` arrays that are memory-mapped (all workers share one copy in the page cache), and `features/current` is a symlink swapped atomically. `load_features()` caches per process until `current` changes. Never build a full concat or copy of `x` per process; `rank.py` stacks only the training rows and scores the blocks separately.
 - `migrate_db.py` converts the old sqlitedict files (papers.db, dict.db, embeddings.db, features.p). It reads them raw, so sqlitedict is no longer a dependency.
 - `load_features()` caches the pickle in memory and reloads it only when the file's mtime changes. `save_features` writes atomically, so `compute.py` can run while the server is up.

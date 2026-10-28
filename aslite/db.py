@@ -266,6 +266,13 @@ CREATE TABLE IF NOT EXISTS fetches (
     pid TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS fetches_time ON fetches(time);
+-- the latest digest per user (see aslite/digest.py), json sections of [pid, score]
+CREATE TABLE IF NOT EXISTS digests (
+    user TEXT PRIMARY KEY,
+    time REAL NOT NULL,
+    days INTEGER NOT NULL,
+    sections TEXT NOT NULL
+) WITHOUT ROWID;
 """
 
 
@@ -354,6 +361,19 @@ def untag_paper(user, pid, tag, neg=False):
 def delete_tag(user, tag):
     """removes a tag with all its likes and downvotes; returns whether it existed"""
     return _run('DELETE FROM tags WHERE user = ? AND tag = ?', (user, tag)) > 0
+
+
+def save_digest(user, sections, days):
+    _run(
+        'INSERT OR REPLACE INTO digests (user, time, days, sections) VALUES (?, ?, ?, ?)',
+        (user, time.time(), days, json.dumps(sections)),
+    )
+
+
+def get_digest(user):
+    """{'time', 'days', 'sections'} of the user's latest digest, or None"""
+    r = _query('SELECT time, days, sections FROM digests WHERE user = ?', (user,))
+    return {'time': r[0][0], 'days': r[0][1], 'sections': json.loads(r[0][2])} if r else None
 
 
 def log_fetch(user, pid):

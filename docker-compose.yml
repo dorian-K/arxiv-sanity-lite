@@ -4,7 +4,8 @@
 #   docker compose up -d --build
 #
 # web      gunicorn on 127.0.0.1:${PORT}, for the proxy to forward to
-# updater  fetches new papers and recomputes features once a day
+# updater  fetches new papers and recomputes features once a day, sends the weekly digest
+# mail     (profile "mail", COMPOSE_PROFILES=mail) outgoing-only postfix + dkim for the digest
 # Both share the data directory, a bind mount so the corpus can be prepared on the host
 # (import_snapshot.py, gpu_embed.sh) and backed up like any other files.
 
@@ -64,6 +65,33 @@ services:
       DAEMON_NUM: ${DAEMON_NUM:-2000}
       UPDATE_INTERVAL: ${UPDATE_INTERVAL:-86400}
       COMPUTE_MIN_INTERVAL: ${COMPUTE_MIN_INTERVAL:-3600}  # features for papers users added, at most this often
+      # weekly digest emails; 0 = off
+      DIGEST_INTERVAL: ${DIGEST_INTERVAL:-604800}
+      DIGEST_DAYS: ${DIGEST_DAYS:-7}
+      PUBLIC_URL: ${PUBLIC_URL:-}
+      MAIL_FROM: ${MAIL_FROM:-}
+      SMTP_HOST: ${SMTP_HOST:-mail}
+      SMTP_PORT: ${SMTP_PORT:-25}
+      SMTP_TLS: ${SMTP_TLS:-none}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+
+  mail:
+    profiles: [mail]
+    build: docker/mail
+    image: arxiv-sanity-lite-mail
+    restart: unless-stopped
+    environment:
+      MAIL_DOMAIN: ${MAIL_DOMAIN:-}
+      MAIL_HOSTNAME: ${MAIL_HOSTNAME:-}
+      DKIM_SELECTOR: ${DKIM_SELECTOR:-asl}
+      RELAYHOST: ${RELAYHOST:-}
+    volumes:
+      - mail-dkim:/dkim  # the dkim key; its public half is in your dns, so keep it
+      - mail-spool:/var/spool/postfix  # the queue, so retries survive restarts
+    # no ports: only web/updater can reach it, as mail:25
 
 volumes:
   model-cache:
+  mail-dkim:
+  mail-spool:

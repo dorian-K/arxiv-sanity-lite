@@ -424,3 +424,18 @@ textarea.form-control {
 
 /* after .stattable, which right-aligns its last column */
 .stattable.import-results td:last-child { text-align: left; font-weight: normal; padding-right: 0; width: 40%; }
+
+/* digest */
+.digest-section { margin-top: 24px; }
+.digest-tag { margin: 0 0 10px; font-size: 20px; }
+.digest-tag a { color: var(--tag); }
+.quickvote { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.vote-up.on { color: var(--tag); background: var(--tag-soft); border-color: var(--tag); }
+.vote-down.on { color: var(--neg); background: var(--neg-soft); border-color: var(--neg); }
+
+/* narrow screens: about/stats move from the header to the footer */
+#footer { display: none; padding: 24px 16px 32px; text-align: center; font-size: 14px; color: var(--muted); }
+@media (max-width: 480px) {
+    .nav-secondary { display: none; }
+    #footer { display: block; }
+}

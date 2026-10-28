@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+
+{% block variables %}
+<script>
+var digest = {{ sections | tojson }};
+var tags = {{ tags | tojson }};
+var gvars = {rank: 'digest'};
+</script>
+{% endblock %}
+
+{% block content %}
+<div class="page">
+    <section class="card">
+        <h1>Your digest</h1>
+        {% if not user %}
+        <p class="muted">Please <a href="/profile">log in</a> to see your digest.</p>
+        {% else %}
+        {% if error %}<p class="form-error">{{ error }}</p>{% endif %}
+        {% if sections %}
+        <p class="muted">
+            The best papers of the {{ digest_days }} days before {{ digest_time }} for each of your tags.
+            👍 adds a paper to the tag, 👎 marks it as not what the tag is about. Both shape next week's list.
+        </p>
+        {% elif digest_time %}
+        <p class="muted">Nothing new for your tags in the {{ digest_days }} days before {{ digest_time }}.</p>
+        {% else %}
+        <p class="muted">
+            No digest yet. It's made every week when the emails go out
+            (add your email on your <a href="/profile">profile</a>), or right now:
+        </p>
+        {% endif %}
+        <form action="/digest" method="post">
+            <button type="submit" class="btn">{{ 'Make a fresh one' if digest_time else 'Make my digest' }}</button>
+        </form>
+        {% endif %}
+    </section>
+    <div id="digestwrap"></div>
+</div>
+{% endblock %}
+
+{% block elements %}
+<script src="{{ url_for('static', filename='paper_list.js') }}"></script>
+{% endblock %}

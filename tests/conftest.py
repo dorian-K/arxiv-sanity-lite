@@ -4,6 +4,7 @@ current directory, so tests build a small synthetic corpus in a temp dir and chd
 into it instead of touching the real data/.
 """
 
+import importlib
 import os
 import random
 import subprocess
@@ -71,3 +72,17 @@ def features(corpus):
     from aslite.db import load_features
 
     return load_features()
+
+
+@pytest.fixture
+def client(features):
+    import serve
+
+    importlib.reload(serve)  # module-level state must not leak between temp dirs
+    serve.app.config['TESTING'] = True
+    with serve.app.test_client() as c:
+        yield c
+
+
+def login(client, user='alice', password='correct horse'):
+    return client.post('/login', data={'username': user, 'password': password})

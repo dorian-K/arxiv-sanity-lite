@@ -19,6 +19,18 @@ compute() {
 
 last_daily=0
 last_compute=0
+
+# the weekly digest emails (send_emails.py), when DIGEST_INTERVAL > 0. the time of the last
+# one is kept in data/, so restarting the container doesn't send another
+digest() {
+    [ "${DIGEST_INTERVAL:-0}" -gt 0 ] || return 0
+    last=$(cat data/last_digest 2>/dev/null || echo 0)
+    if [ $(($(date +%s) - last)) -ge "$DIGEST_INTERVAL" ]; then
+        echo "== $(date -u) sending digests"
+        date +%s > data/last_digest
+        python send_emails.py --time-delta "${DIGEST_DAYS:-7}" || echo "send_emails.py failed"
+    fi
+}
 while true; do
     now=$(date +%s)
     if [ $((now - last_daily)) -ge "${UPDATE_INTERVAL:-86400}" ]; then
@@ -32,6 +44,7 @@ while true; do
         else
             echo "no new papers (or arXiv unreachable)"
         fi
+        digest
     elif [ -f data/compute_requested ] && [ $((now - last_compute)) -ge "${COMPUTE_MIN_INTERVAL:-3600}" ]; then
         echo "== $(date -u) users added papers"
         rm -f data/compute_requested  # before computing, so papers added meanwhile trigger another run

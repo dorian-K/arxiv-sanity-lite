@@ -15,7 +15,7 @@ function mount(component, elementId) {
 // lazy LaTeX: KaTeX is only downloaded once the first piece of text containing math
 // scrolls into view, and each piece of text is typeset when it becomes visible.
 
-const KATEX = 'https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/';
+const KATEX = '/static/vendor/katex-0.16.11/';  // served from this server, see update_vendor.py
 const MATH_DELIMITERS = [
     { left: '$$', right: '$$', display: true },
     { left: '\\[', right: '\\]', display: true },
@@ -34,7 +34,6 @@ function loadKatex() {
         const script = src => new Promise((resolve, reject) => {
             const s = document.createElement('script');
             s.src = src;
-            s.crossOrigin = 'anonymous';
             s.onload = resolve;
             s.onerror = reject;
             document.head.appendChild(s);

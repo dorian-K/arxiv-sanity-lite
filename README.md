@@ -64,6 +64,15 @@ Accounts have passwords. With `ALLOW_SIGNUP=1`, anyone can create one. A usernam
 docker compose exec web flask --app serve set-password alice
 ```
 
+EU law (GDPR, ePrivacy, German imprint duty). What the code takes care of:
+- **Double opt-in:** digests only go to confirmed addresses. Entering an address sends one confirmation link (valid 3 days, confirmed with a button so mail scanners can't click it). The confirmation time is stored as the consent record. Confirmation mails are limited to 5 a day per user and per address. Unsubscribing (link or profile) deletes the address.
+- **Self-service rights:** users can download everything stored about them (`/export`, JSON) and delete their account (password required). The one backup is overwritten daily.
+- **No third parties:** React, htm and KaTeX are served from `static/vendor` (`update_vendor.py` fetches and checksum-verifies them), and a Content-Security-Policy keeps the browser from loading anything elsewhere. The only cookie is the login session, which is strictly necessary, so no cookie banner is needed.
+- **Data minimization:** access logs leave out IP addresses and user agents, and all container logs rotate at 3 × 10 MB. IPs are kept in memory only for the rate limits.
+- **`/privacy` and `/imprint`:** linked on every page and at signup, filled from `OPERATOR_NAME`, `OPERATOR_ADDRESS`, `OPERATOR_EMAIL` and `OPERATOR_HOSTING` in `.env`.
+
+What's left to you: fill in those details; sign a data processing agreement with your VPS provider (usually a click in their panel); check that your nginx keeps its logs only briefly; and have someone qualified read the privacy text if the site grows beyond friends.
+
 Read-only sharing: users can turn on "let anyone view my tags read-only" on their profile (off by default). Anyone can then log in as them with an empty password and browse their tags, recommendations and digest. A viewer can't change anything, and never sees the email address. Turning it off ends those sessions on their next request.
 
 Example nginx config for the proxy. The `X-Forwarded-*` headers are required, because the app takes the scheme, host and client IP from them (`TRUST_PROXY=1`), and session cookies are https-only (`SECURE_COOKIES=1`):

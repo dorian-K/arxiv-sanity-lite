@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page"><section class="card">
+    {% if state == 'ask' %}
+    <h1>Confirm your email</h1>
+    <p>Send the weekly Arxiv Resanity digest to <b>{{ email }}</b>?</p>
+    <form method="post" action="/confirm_email/{{ token }}">
+        <button type="submit" class="btn btn-primary">Yes, send me the digest</button>
+    </form>
+    <p class="muted small">Every digest has an unsubscribe link, and you can remove the address on your profile any time.</p>
+    {% elif state == 'done' %}
+    <h1>Confirmed</h1>
+    <p>The digest goes to <b>{{ email }}</b> from next Sunday on.</p>
+    {% elif state == 'stale' %}
+    <h1>Nothing to confirm</h1>
+    <p>This address was changed or removed in the meantime, or is already confirmed. Check your <a href="/profile">profile</a>.</p>
+    {% else %}
+    <h1>Link expired or invalid</h1>
+    <p>Confirmation links work for 3 days. Enter your address again on your <a href="/profile">profile</a> for a new one.</p>
+    {% endif %}
+</section></div>
+{% endblock %}

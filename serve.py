@@ -9,6 +9,7 @@ ideas:
 
 import os
 import re
+import json
 import time
 import threading
 from random import shuffle
@@ -20,11 +21,11 @@ from flask import Flask, request, redirect, url_for, abort
 from flask import render_template
 from flask import g  # global session-level object
 from flask import session
-from itsdangerous import URLSafeSerializer, BadSignature
+from itsdangerous import URLSafeSerializer, URLSafeTimedSerializer, BadSignature
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import generate_password_hash, check_password_hash
 
-from aslite import db, digest
+from aslite import db, digest, mail
 from aslite.db import get_papers_db, get_secret_key, load_features, features_exist, PAPERS_DB_FILE
 from aslite.arxiv import find_arxiv_id, fetch_papers_by_id, OLD_ARXIV_ID_RE
 from aslite.rank import rank, holdout_ranks, resolve_feats, resolve_model, has_embeddings, FEATS, MODELS
@@ -70,10 +71,12 @@ RATE_LIMITS = {
     'import': (60, 3600),
     'digest': (20, 3600),  # recomputing a digest trains one model per tag
     'check': (30, 3600),  # a tag check trains 5 models
+    'confirm': (5, 86400),  # confirmation mails, so the email form can't be used to mail people
 }
 RATE_LIMITS_ON = os.environ.get('RATE_LIMITS', '1') != '0'
 _buckets = {}
 _buckets_lock = threading.Lock()
+_last_prune = 0.0
 
 
 def rate_limited(kind, client=None):
@@ -84,8 +87,13 @@ def rate_limited(kind, client=None):
     client = client or (('user:' + g.user) if g.user else ('ip:' + str(request.remote_addr)))
     now = time.monotonic()
     with _buckets_lock:
-        if len(_buckets) > 100000:  # forget idle clients now and then
-            _buckets.clear()
+        global _last_prune
+        if now - _last_prune > 60:
+            # forget clients whose window has passed (their bucket would be full again anyway),
+            # so ips and addresses are only held as long as a limit needs them
+            for k in [k for k, (_, last) in _buckets.items() if now - last > RATE_LIMITS[k[0]][1]]:
+                del _buckets[k]
+            _last_prune = now
         tokens, last = _buckets.get((kind, client), (n, now))
         tokens = min(n, tokens + (now - last) * n / per)
         if tokens < 1:
@@ -170,7 +178,7 @@ def before_request():
         if not u or not u['public']:
             session.clear()
             g.user, g.readonly = None, False
-        elif request.method == 'POST' and request.endpoint not in ('login', 'logout'):
+        elif request.method == 'POST' and request.endpoint not in ('login', 'logout', 'confirm_email', 'unsubscribe'):
             return "error, this is a read-only view: log in with the password to make changes", 403
     elif g.user:
         # record activity on this user so we can reserve periodic
@@ -183,6 +191,15 @@ def security_headers(resp):
     resp.headers.setdefault('X-Content-Type-Options', 'nosniff')
     resp.headers.setdefault('X-Frame-Options', 'DENY')
     resp.headers.setdefault('Referrer-Policy', 'same-origin')
+    # everything comes from this server: no third party ever sees a visitor's ip (GDPR), and
+    # the browser enforces it. inline scripts/styles: the templates pass data in <script>
+    # blocks and KaTeX positions math with inline styles
+    resp.headers.setdefault(
+        'Content-Security-Policy',
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'self'; "
+        "frame-ancestors 'none'; base-uri 'self'",
+    )
     return resp
 
 
@@ -464,6 +481,10 @@ def profile(error=''):
     context['allow_signup'] = ALLOW_SIGNUP
     user = db.get_user(g.user) if g.user and not g.readonly else None  # the email stays private
     context['email'] = user['email'] if user else ''
+    context['pending_email'] = user['pending_email'] if user else ''
+    context['email_confirmed'] = (
+        time.strftime('%b %d %Y', time.localtime(user['email_confirmed'])) if user and user['email_confirmed'] else ''
+    )
     context['public'] = bool(user and user['public'])
     return render_template('profile.html', **context)
 
@@ -844,15 +865,94 @@ def set_password(username, password):
 # user settings and configurations
 
 
+EMAIL_RE = re.compile(r'^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$', re.IGNORECASE)
+CONFIRM_MAX_AGE = 3 * 86400
+
+
+def _confirm_serializer():
+    return URLSafeTimedSerializer(app.secret_key, salt='confirm-email')
+
+
 @app.route('/register_email', methods=['POST'])
 def register_email():
+    """
+    double opt-in: a new address only gets a confirmation link, and digests start once its
+    owner clicks it. removing the address (empty field) takes effect at once
+    """
     email = request.form.get('email', '').strip()
-
-    if g.user:
-        # do some basic input validation
-        proper_email = re.match(r'^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$', email, re.IGNORECASE)
-        if email == '' or proper_email:  # allow empty email, meaning no email
-            # everything checks out, write to the database
-            db.set_email(g.user, email)
-
+    if g.user is None:
+        return redirect(url_for('profile'))
+    if email == '':
+        db.set_email(g.user, '')
+        return redirect(url_for('profile'))
+    if not EMAIL_RE.match(email) or len(email) > 254:
+        return profile(error="That doesn't look like an email address."), 400
+    # per user and per address, so nobody can make the server mail someone over and over
+    if rate_limited('confirm') or rate_limited('confirm', 'to:' + email.lower()):
+        return profile(error="Too many confirmation mails today, please try again tomorrow."), 429
+    db.request_email(g.user, email)
+    token = _confirm_serializer().dumps([g.user, email])
+    link = url_for('confirm_email', token=token, _external=True)
+    text = (
+        f"Hi {g.user},\n\nplease confirm that you want the weekly Arxiv Resanity digest at this address:\n\n"
+        f"{link}\n\nThe link works for 3 days. If you didn't ask for this, ignore this mail: "
+        "without a click nothing is ever sent to you, and the address is not used for anything else.\n"
+    )
+    try:
+        mail.send(mail.message(email, 'Confirm your email for Arxiv Resanity', text))
+    except Exception as e:  # no mail server configured or reachable
+        print("confirmation mail to %s failed: %s" % (email, e))
+        return profile(error="The confirmation mail couldn't be sent. Please try again later."), 503
     return redirect(url_for('profile'))
+
+
+@app.route('/confirm_email/<token>', methods=['GET', 'POST'])
+def confirm_email(token):
+    """the link in the confirmation mail. GET only shows a button, so link scanners that
+    open every link in a mail can't confirm on the owner's behalf"""
+    try:
+        user, email = _confirm_serializer().loads(token, max_age=CONFIRM_MAX_AGE)
+    except BadSignature:  # also covers expired links
+        return render_template('confirm_email.html', state='invalid', **default_context()), 400
+    if request.method == 'POST':
+        ok = db.confirm_email(user, email)
+        return render_template('confirm_email.html', state='done' if ok else 'stale', email=email, **default_context())
+    return render_template('confirm_email.html', state='ask', email=email, token=token, **default_context())
+
+
+@app.route('/export')
+def export_data():
+    """everything stored about the logged-in user, as a json download"""
+    if g.user is None or g.readonly:
+        return redirect(url_for('profile'))
+    resp = app.response_class(json.dumps(db.export_user(g.user), indent=2), mimetype='application/json')
+    resp.headers['Content-Disposition'] = f'attachment; filename="arxiv-resanity-{g.user}.json"'
+    return resp
+
+
+@app.route('/delete_account', methods=['POST'])
+def delete_account():
+    """erases the account and everything stored about it, after the password is confirmed"""
+    if g.user is None:
+        return redirect(url_for('profile'))
+    user = db.get_user(g.user)
+    if user and user['pw_hash'] and not check_password_hash(user['pw_hash'], request.form.get('password', '')):
+        return profile(error="Wrong password, the account was not deleted."), 403
+    db.delete_user(g.user)
+    print("deleted user %s" % (g.user,))
+    session.clear()
+    return render_template('deleted.html', **dict(default_context(), user=''))
+
+
+# operator details for the privacy policy and imprint, from the environment (see .env.example)
+OPERATOR = {k: os.environ.get('OPERATOR_' + k.upper(), '') for k in ('name', 'address', 'email', 'hosting')}
+
+
+@app.route('/privacy')
+def privacy():
+    return render_template('privacy.html', operator=OPERATOR, **default_context())
+
+
+@app.route('/imprint')
+def imprint():
+    return render_template('imprint.html', operator=OPERATOR, **default_context())

@@ -45,16 +45,49 @@
     </section>
     <section class="card">
         <h1>Weekly digest</h1>
-            <p class="muted">
-                Once a week, an email with the best new papers for each of your tags, linking to your
-                <a href="/digest">digest page</a> where you can rate them. Leave the field empty to stop the emails.
-            </p>
-                <form id="email-form" action="{{ url_for('register_email') }}" method="post">
-                    <div class="form-group">
-                        <input type="text" class="form-control" name="email" placeholder="Email address" value="{{ email }}">
-                    </div>
-                    <input type="submit" class="btn btn-primary" value="Save">
-                </form>
+        {% if error %}<p class="form-error">{{ error }}</p>{% endif %}
+        <p class="muted">
+            Every Sunday, an email with the best new papers for each of your tags, linking to your
+            <a href="/digest">digest page</a> where you can rate them. Your address is used for nothing else,
+            and every digest has an unsubscribe link (<a href="/privacy">privacy</a>).
+        </p>
+        {% if email %}
+        <p>Digests go to <b>{{ email }}</b> (confirmed {{ email_confirmed }}).</p>
+        {% endif %}
+        {% if pending_email %}
+        <p>We sent a confirmation link to <b>{{ pending_email }}</b>. Nothing else is sent there until
+            you click it (it works for 3 days).</p>
+        {% endif %}
+        <form id="email-form" action="{{ url_for('register_email') }}" method="post">
+            <div class="form-group">
+                <input type="email" class="form-control" name="email" maxlength="254" autocomplete="email"
+                       placeholder="{{ 'New email address' if email else 'Email address' }}">
+            </div>
+            <button type="submit" class="btn btn-primary">{{ 'Change address' if email else 'Send confirmation link' }}</button>
+        </form>
+        {% if email or pending_email %}
+        <form action="{{ url_for('register_email') }}" method="post" style="margin-top: 10px">
+            <input type="hidden" name="email" value="">
+            <button type="submit" class="btn">Stop the digest and delete my address</button>
+        </form>
+        {% endif %}
+    </section>
+    <section class="card">
+        <h1>Your data</h1>
+        <p class="muted">Everything stored about you: your account, tags, votes, digests and email address
+            (<a href="/privacy">privacy policy</a>).</p>
+        <p><a class="btn" href="/export">Download my data</a></p>
+        <details class="danger">
+            <summary>Delete my account</summary>
+            <form action="/delete_account" method="post">
+                <p>This erases your account with all its tags, votes, digests and your email address, for good.</p>
+                <div class="form-group">
+                    <label for="del-password">Your password, to confirm</label>
+                    <input class="form-control" type="password" id="del-password" name="password" autocomplete="current-password" required>
+                </div>
+                <button type="submit" class="btn btn-danger">Delete my account</button>
+            </form>
+        </details>
     </section>
     {% else %}
     <section class="card">
@@ -79,7 +112,8 @@
               <input class="form-control" type="password" id="password" name="password" autocomplete="current-password">
             </div>
             <button type="submit" class="btn btn-primary">Log in / sign up</button>
-            <p class="muted small">Leave the password empty to view a shared account read-only.</p>
+            <p class="muted small">Leave the password empty to view a shared account read-only.
+                How we handle your data: <a href="/privacy">privacy policy</a>.</p>
         </form>
     </section>
     {% endif %}

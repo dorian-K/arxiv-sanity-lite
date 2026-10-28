@@ -43,7 +43,8 @@ def test_emails_and_unsubscribe(features, corpus, monkeypatch, tmp_path):
     v = vision(corpus)
     for p in v[:4]:
         db.tag_paper('alice', p, 'cv')
-    db.set_email('alice', 'alice@example.org')
+    db.request_email('alice', 'alice@example.org')
+    db.confirm_email('alice', 'alice@example.org')  # double opt-in done
     out = tmp_path / 'digest.html'
     r = subprocess.run(
         [sys.executable, os.path.join(REPO, 'send_emails.py'), '--dry-run', '1', '--save', str(out)],
@@ -144,3 +145,62 @@ def test_neutral_hides_without_training(client, corpus):
     client.post(f'/add/{first}/cv')  # liking replaces neutral
     assert db.get_tags('alice', neg=db.SEEN) == {}
     assert client.post(f'/unseen/{first}/cv').data.startswith(b"paper")
+
+
+def test_double_opt_in(client, corpus, monkeypatch):
+    from conftest import login
+
+    from aslite import mail
+
+    sent = []
+    monkeypatch.setattr(mail, 'send', sent.append)
+    login(client)
+    assert client.post('/register_email', data={'email': 'alice@example.org'}).status_code == 302
+    assert db.get_emails() == {}  # nothing goes out before the owner confirms
+    assert db.get_user('alice')['pending_email'] == 'alice@example.org'
+    (msg,) = sent
+    assert msg['To'] == 'alice@example.org'
+    link = next(w for w in msg.get_content().split() if '/confirm_email/' in w)
+    path = link[link.index('/confirm_email/') :]
+    # opening the link (or a mail scanner prefetching it) only shows a button
+    assert b'Yes, send me the digest' in client.get(path).data and db.get_emails() == {}
+    assert b'Confirmed' in client.post(path).data
+    assert db.get_emails() == {'alice': 'alice@example.org'} and db.get_user('alice')['email_confirmed']
+    assert b'Nothing to confirm' in client.post(path).data  # a link works once
+    assert client.post('/confirm_email/forged').status_code == 400
+    # removing the address works at once and needs no confirmation
+    client.post('/register_email', data={'email': ''})
+    assert db.get_emails() == {} and db.get_user('alice')['email'] == ''
+    # the form can't be used to flood someone with confirmation mails
+    codes = [client.post('/register_email', data={'email': 'victim@example.org'}).status_code for _ in range(7)]
+    assert codes.count(429) >= 1 and len(sent) <= 6
+
+
+def test_export_and_delete_account(client, corpus):
+    import json
+
+    from conftest import login
+
+    pid = next(iter(corpus))
+    login(client)
+    client.post(f'/add/{pid}/cv')
+    r = client.get('/export')
+    data = json.loads(r.data)
+    assert 'attachment' in r.headers['Content-Disposition']
+    assert data['username'] == 'alice' and data['tags'] == {'cv': {'liked': [pid]}}
+    assert 'pw_hash' not in r.data.decode() and 'scrypt' not in r.data.decode()
+    assert client.post('/delete_account', data={'password': 'wrong one'}).status_code == 403
+    assert db.get_user('alice') is not None
+    assert b'Account deleted' in client.post('/delete_account', data={'password': 'correct horse'}).data
+    assert db.get_user('alice') is None and db.get_tags('alice') == {} and db.get_digest('alice') is None
+    assert client.post(f'/add/{pid}/cv').data.startswith(b'error, not logged in')  # logged out too
+
+
+def test_legal_pages_and_no_third_parties(client):
+    for url in ['/privacy', '/imprint']:
+        assert client.get(url).status_code == 200
+    page = client.get('/').data.decode()
+    assert 'cdn' not in page and 'jsdelivr' not in page and '/static/vendor/' in page
+    csp = client.get('/').headers['Content-Security-Policy']
+    assert "default-src 'self'" in csp and 'http' not in csp
+    assert '/privacy' in page and '/imprint' in page  # linked from every page

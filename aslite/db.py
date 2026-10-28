@@ -256,7 +256,9 @@ CREATE TABLE IF NOT EXISTS users (
     pw_hash TEXT,                  -- NULL for accounts from before passwords existed
     email TEXT NOT NULL DEFAULT '',
     last_active INTEGER NOT NULL DEFAULT 0,
-    public INTEGER NOT NULL DEFAULT 0  -- 1: anyone may view this user's tags read-only, without the password
+    public INTEGER NOT NULL DEFAULT 0,  -- 1: anyone may view this user's tags read-only, without the password
+    pending_email TEXT NOT NULL DEFAULT '',  -- entered, but the confirmation link not clicked yet
+    email_confirmed REAL  -- when the owner of `email` confirmed it (double opt-in): the consent record
 ) WITHOUT ROWID;
 -- one row per (user, tag, paper): liked (neg = 0), downvoted (neg = 1) or seen without an
 -- opinion (neg = 2, the digest's neutral button: not shown again, not used for training)
@@ -293,9 +295,15 @@ def users_db():
     if key not in _users_columns_done:
         # columns added after the table first shipped; CREATE TABLE IF NOT EXISTS won't add them
         cols = {r[1] for r in con.execute('PRAGMA table_info(users)')}
-        if 'public' not in cols:
-            with con:
-                con.execute('ALTER TABLE users ADD COLUMN public INTEGER NOT NULL DEFAULT 0')
+        added = {
+            'public': 'INTEGER NOT NULL DEFAULT 0',
+            'pending_email': "TEXT NOT NULL DEFAULT ''",
+            'email_confirmed': 'REAL',
+        }
+        with con:
+            for col, decl in added.items():
+                if col not in cols:
+                    con.execute(f'ALTER TABLE users ADD COLUMN {col} {decl}')
         _users_columns_done.add(key)
     return con
 
@@ -318,9 +326,12 @@ def _query(sql, args=()):
         con.close()
 
 
+USER_KEYS = ('name', 'pw_hash', 'email', 'last_active', 'public', 'pending_email', 'email_confirmed')
+
+
 def get_user(name):
-    """{'name', 'pw_hash', 'email', 'last_active', 'public'} or None"""
-    keys = ('name', 'pw_hash', 'email', 'last_active', 'public')
+    """{'name', 'pw_hash', 'email', ...} (see USER_KEYS) or None"""
+    keys = USER_KEYS
     r = _query(f'SELECT {", ".join(keys)} FROM users WHERE name = ?', (name,))
     return dict(zip(keys, r[0], strict=True)) if r else None
 
@@ -337,16 +348,69 @@ def set_password(name, pw_hash):
     )
 
 
-def set_email(name, email):
+def request_email(name, email):
+    """an address the user entered; it receives nothing but the confirmation mail until confirmed"""
     _run(
-        'INSERT INTO users (name, email) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET email = excluded.email',
+        'INSERT INTO users (name, pending_email) VALUES (?, ?) '
+        'ON CONFLICT(name) DO UPDATE SET pending_email = excluded.pending_email',
         (name, email),
     )
 
 
+def confirm_email(name, email):
+    """the owner clicked the confirmation link: the address gets digests from now on"""
+    return (
+        _run(
+            "UPDATE users SET email = ?, email_confirmed = ?, pending_email = '' WHERE name = ? AND pending_email = ?",
+            (email, time.time(), name, email),
+        )
+        > 0
+    )
+
+
+def set_email(name, email):
+    """only for removing an address ('', e.g. unsubscribe); new ones go through request_email"""
+    assert email == '', 'new addresses must be confirmed first, see request_email'
+    _run("UPDATE users SET email = '', email_confirmed = NULL, pending_email = '' WHERE name = ?", (name,))
+
+
 def get_emails():
-    """{user: email} for users who registered one"""
-    return dict(_query("SELECT name, email FROM users WHERE email != ''"))
+    """{user: email} for users with a confirmed address"""
+    return dict(_query("SELECT name, email FROM users WHERE email != '' AND email_confirmed IS NOT NULL"))
+
+
+def delete_user(name):
+    """erases everything stored about a user (the GDPR's right to erasure)"""
+    con = users_db()
+    try:
+        with con:
+            for table, col in (('tags', 'user'), ('digests', 'user'), ('fetches', 'user'), ('users', 'name')):
+                con.execute(f'DELETE FROM {table} WHERE {col} = ?', (name,))
+    finally:
+        con.close()
+
+
+def export_user(name):
+    """everything stored about a user, as plain data (the GDPR's right to data portability)"""
+    u = get_user(name) or {}
+    kinds = {LIKED: 'liked', DOWNVOTED: 'not for', SEEN: 'neutral'}
+    tags = {}
+    for tag, pid, neg in _query('SELECT tag, pid, neg FROM tags WHERE user = ? ORDER BY tag, pid', (name,)):
+        tags.setdefault(tag, {}).setdefault(kinds[neg], []).append(pid)
+    return {
+        'username': name,
+        'email': u.get('email', ''),
+        'email_confirmed_at': u.get('email_confirmed'),
+        'pending_email': u.get('pending_email', ''),
+        'last_active': u.get('last_active'),
+        'shares_tags_read_only': bool(u.get('public')),
+        'tags': tags,
+        'latest_digest': get_digest(name),
+        'arxiv_fetches_last_two_days': [
+            {'time': t, 'pid': p} for t, p in _query('SELECT time, pid FROM fetches WHERE user = ?', (name,))
+        ],
+        'note': 'the password is stored only as a salted hash, which is not included',
+    }
 
 
 def touch_user(name, every=300):

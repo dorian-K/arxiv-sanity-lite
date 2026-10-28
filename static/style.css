@@ -138,7 +138,7 @@ h1 { font-size: 18px; margin: 0 0 12px; }
 }
 .linkbtn:hover { text-decoration: underline; }
 
-input[type=text], input[type=password], input[type=search], input[type=number], select {
+input[type=text], input[type=password], input[type=email], input[type=search], input[type=number], select {
     width: 100%;
     min-height: 36px;
     padding: 6px 10px;
@@ -451,10 +451,11 @@ textarea.form-control {
 .vote-down.on { color: var(--neg); background: var(--neg-soft); border-color: var(--neg); }
 
 /* narrow screens: about/stats move from the header to the footer */
-#footer { display: none; padding: 24px 16px 32px; text-align: center; font-size: 14px; color: var(--muted); }
+#footer { padding: 24px 16px 32px; text-align: center; font-size: 14px; color: var(--muted); }
+.footer-mobile { display: none; }
 @media (max-width: 480px) {
     .nav-secondary { display: none; }
-    #footer { display: block; }
+    .footer-mobile { display: inline; }
 }
 
 /* first visit after signing up */
@@ -480,3 +481,11 @@ label.check input { margin-top: 3px; width: 18px; height: 18px; flex: none; }
 .misfits li { margin: 4px 0; }
 .rel_fit { margin-top: 4px; font-size: 13px; color: var(--tag); }
 .rel_fit.misfit { color: var(--neg); font-weight: 600; }
+
+.btn-danger { color: #fff; background: var(--neg); border-color: var(--neg); }
+details.danger { margin-top: 12px; }
+details.danger summary { cursor: pointer; color: var(--neg); font-size: 14px; }
+details.danger form { margin-top: 10px; }
+.prose h2 { font-size: 17px; margin: 20px 0 6px; }
+.prose p, .prose li { line-height: 1.55; }
+.prose ul { padding-left: 20px; }

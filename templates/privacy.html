@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page"><section class="card prose">
+    <h1>Privacy policy</h1>
+    {% if not operator.name or not operator.address or not operator.email %}
+    <p class="form-error">The operator of this site hasn't filled in their contact details yet
+        (OPERATOR_NAME, OPERATOR_ADDRESS, OPERATOR_EMAIL).</p>
+    {% endif %}
+
+    <h2>Who is responsible</h2>
+    <p>{{ operator.name or '[name]' }}<br>{{ (operator.address or '[address]') | replace(';', '<br>' | safe) }}<br>
+        {{ operator.email or '[email]' }}</p>
+    <p>This site is run by one person, so there is no data protection officer.</p>
+
+    <h2>What is stored, and why</h2>
+    <ul>
+        <li><b>Your account</b>: username, password (only as a salted hash), the papers you save, mark as
+            "not for me" or neutral, per tag, your latest digest, and when you were last active.
+            Needed to provide the service you signed up for (Art. 6(1)(b) GDPR). Kept until you delete
+            the account.</li>
+        <li><b>Your email address</b>, only if you enter one: used for nothing but the weekly digest, which
+            only starts after you confirm the address through a link we mail to it (double opt-in). We
+            store when you confirmed, as the record of your consent (Art. 6(1)(a) GDPR). You can withdraw
+            any time through the link in every digest or on your profile; the address is then deleted.</li>
+        <li><b>Papers you add by link</b>: if a paper isn't here yet, this server asks arXiv for it. The
+            request contains only the paper's id, nothing about you. We keep a log of who added which
+            paper for two days, to enforce daily limits.</li>
+        <li><b>Technical data</b>: to keep the site working and protect it from abuse (Art. 6(1)(f) GDPR),
+            your IP address is held in memory for rate limits and forgotten within minutes, and an
+            address entered for the digest is held in memory for a day, to limit confirmation mails. The
+            application logs record requests without IP addresses; the mail server logs record
+            recipient addresses of delivered mail. All logs are rotated (at most 30 MB per service). The
+            reverse proxy in front of the site may log IP addresses for a short time as part of its
+            standard operation.</li>
+        <li><b>Sharing</b>: only if you turn on read-only sharing, others can view your tags,
+            recommendations and digest (never your email address). Off by default.</li>
+    </ul>
+
+    <h2>Cookies and third parties</h2>
+    <p>The only cookie is the session cookie that keeps you logged in, which is strictly necessary for
+        the service (§ 25(2) TDDDG, Art. 5(3) ePrivacy Directive), so no consent is asked for. There is no
+        tracking, no analytics, no advertising, and no third-party content: scripts and fonts come from
+        this server, so your browser contacts no one else. Links to arXiv lead to arXiv's own site.</p>
+
+    <h2>Who receives your data</h2>
+    <p>No one, apart from the hosting provider{{ ' (' + operator.hosting + ')' if operator.hosting }}, which
+        runs the server under a data processing agreement (Art. 28 GDPR). Digests are delivered directly by
+        this server to your mail provider. Nothing is sold or shared.</p>
+
+    <h2>Backups</h2>
+    <p>One backup copy of the account database is made daily and overwrites the previous one, so data you
+        delete is gone from it within a day.</p>
+
+    <h2>Your rights</h2>
+    <p>You can access and download everything stored about you (<a href="/export">download my data</a>,
+        Art. 15 and 20 GDPR), correct it (Art. 16), delete your account yourself on your
+        <a href="/profile">profile</a> (Art. 17), and restrict or object to processing (Art. 18 and 21).
+        Write to the address above for anything else. You can also complain to a data protection
+        supervisory authority, for example the one where you live.</p>
+</section></div>
+{% endblock %}

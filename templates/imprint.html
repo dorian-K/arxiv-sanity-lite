@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="page"><section class="card prose">
+    <h1>Imprint</h1>
+    {% if operator.name and operator.address and operator.email %}
+    <p>Information according to § 5 DDG:</p>
+    <p>{{ operator.name }}<br>{{ operator.address | replace(';', '<br>' | safe) }}</p>
+    <p>Email: {{ operator.email }}</p>
+    <p>Responsible for the content according to § 18(2) MStV: {{ operator.name }}, address as above.</p>
+    {% else %}
+    <p class="form-error">The operator of this site hasn't filled in their details yet
+        (OPERATOR_NAME, OPERATOR_ADDRESS, OPERATOR_EMAIL).</p>
+    {% endif %}
+    <p class="muted">Arxiv Resanity is open source, a fork of
+        <a href="https://github.com/karpathy/arxiv-sanity-lite">arxiv-sanity-lite</a>. Paper titles and abstracts
+        come from arXiv; the papers belong to their authors.</p>
+</section></div>
+{% endblock %}

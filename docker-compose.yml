@@ -11,6 +11,10 @@
 
 x-common: &common
   restart: unless-stopped
+  # logs are rotated, at most 3 x 10 MB per service (the privacy policy says so)
+  logging:
+    driver: json-file
+    options: {max-size: 10m, max-file: "3"}
   user: "${UID:-1000}:${GID:-1000}"
   volumes:
     - ${DATA_PATH:-./data}:/app/data
@@ -39,6 +43,18 @@ services:
       WEB_THREADS: ${WEB_THREADS:-4}
       FETCH_LIMIT_USER: ${FETCH_LIMIT_USER:-200}  # papers per user per day that /import may fetch from arXiv
       FETCH_LIMIT_TOTAL: ${FETCH_LIMIT_TOTAL:-2000}
+      # the web service mails the confirmation links of the double opt-in
+      MAIL_FROM: ${MAIL_FROM:-}
+      SMTP_HOST: ${SMTP_HOST:-mail}
+      SMTP_PORT: ${SMTP_PORT:-25}
+      SMTP_TLS: ${SMTP_TLS:-none}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      # who runs the site, for /privacy and /imprint (EU law)
+      OPERATOR_NAME: ${OPERATOR_NAME:-}
+      OPERATOR_ADDRESS: ${OPERATOR_ADDRESS:-}
+      OPERATOR_EMAIL: ${OPERATOR_EMAIL:-}
+      OPERATOR_HOSTING: ${OPERATOR_HOSTING:-}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/about', timeout=5)"]
       interval: 60s
@@ -82,6 +98,9 @@ services:
 
   mail:
     profiles: [mail]
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
     build: docker/mail
     image: arxiv-resanity-mail
     container_name: arxiv-resanity-mail
@@ -94,7 +113,7 @@ services:
     volumes:
       - mail-dkim:/dkim  # the dkim key; its public half is in your dns, so keep it
       - mail-spool:/var/spool/postfix  # the queue, so retries survive restarts
-    # no ports: only web/updater can reach it, as mail:25
+    # no ports: only the other services can reach it, as mail:25
 
 volumes:
   model-cache:

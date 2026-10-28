@@ -26,4 +26,5 @@ COPY . .
 RUN mkdir -p /app/data /cache && chmod 777 /app/data /cache
 
 EXPOSE 8000
-CMD ["sh", "-c", "exec gunicorn serve:app --bind 0.0.0.0:8000 --workers ${WEB_WORKERS:-2} --threads ${WEB_THREADS:-4} --timeout 120 --access-logfile -"]
+# access log without client ips or user agents (data minimization, see templates/privacy.html)
+CMD ["sh", "-c", "exec gunicorn serve:app --bind 0.0.0.0:8000 --workers ${WEB_WORKERS:-2} --threads ${WEB_THREADS:-4} --timeout 120 --access-logfile - --access-logformat '%(t)s \"%(r)s\" %(s)s %(b)s %(L)ss'"]

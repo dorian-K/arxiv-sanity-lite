@@ -3,12 +3,8 @@ Sends every user with an email address their digest: for each of their tags, the
 papers of the last few days (aslite/digest.py). The digest is also stored, and the
 email links to the /digest page that shows it with thumbs up/down.
 
-Mail goes out over plain SMTP, configured with environment variables:
-    SMTP_HOST      default localhost (in docker compose: the `mail` service)
-    SMTP_PORT      default 25
-    SMTP_TLS       none | starttls | ssl (default none, for a server on the same host/network)
-    SMTP_USER, SMTP_PASSWORD   if the server wants a login
-    MAIL_FROM      e.g. "Arxiv Resanity <digest@example.org>"
+Only confirmed addresses get it (double opt-in, see serve.py). Mail goes out over plain
+SMTP, configured as described in aslite/mail.py, plus
     PUBLIC_URL     where the site is reachable, e.g. https://sanity.example.org
 
     uv run python send_emails.py --dry-run 1 -u alice --save digest.html   # preview
@@ -27,12 +23,11 @@ import argparse
 import smtplib
 import datetime
 import zoneinfo
-from email.message import EmailMessage
-from email.utils import make_msgid, formataddr, parseaddr
+from email.utils import formataddr
 
 from itsdangerous import URLSafeSerializer
 
-from aslite import db, digest
+from aslite import db, digest, mail
 from aslite.db import load_features, get_papers_db, get_emails, get_secret_key
 
 DIGEST_SCHEDULE = os.environ.get('DIGEST_SCHEDULE', 'sun 08:00 Europe/Berlin')
@@ -71,7 +66,6 @@ def due(now):
 
 
 PUBLIC_URL = os.environ.get('PUBLIC_URL', 'http://localhost:5000').rstrip('/')
-MAIL_FROM = os.environ.get('MAIL_FROM', 'Arxiv Resanity <digest@localhost>')
 
 
 def unsubscribe_url(user):
@@ -127,27 +121,12 @@ def render(user, sections, papers, days):
 
 
 def send(to, subject, text, body, user, dry_run):
-    msg = EmailMessage()
-    msg['Subject'] = subject
-    msg['From'] = MAIL_FROM
-    msg['To'] = to
-    msg['Message-ID'] = make_msgid(domain=parseaddr(MAIL_FROM)[1].split('@')[-1] or None)
     # one-click unsubscribe (RFC 8058), which Gmail and others look for in bulk mail
-    msg['List-Unsubscribe'] = f'<{unsubscribe_url(user)}>'
-    msg['List-Unsubscribe-Post'] = 'List-Unsubscribe=One-Click'
-    msg.set_content(text)
-    msg.add_alternative(body, subtype='html')
-    if dry_run:
-        return
-    host, port = os.environ.get('SMTP_HOST', 'localhost'), int(os.environ.get('SMTP_PORT', '25'))
-    tls = os.environ.get('SMTP_TLS', 'none')
-    cls = smtplib.SMTP_SSL if tls == 'ssl' else smtplib.SMTP
-    with cls(host, port, timeout=60) as s:
-        if tls == 'starttls':
-            s.starttls()
-        if os.environ.get('SMTP_USER'):
-            s.login(os.environ['SMTP_USER'], os.environ.get('SMTP_PASSWORD', ''))
-        s.send_message(msg)
+    headers = {'List-Unsubscribe': f'<{unsubscribe_url(user)}>', 'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click'}
+    msg = mail.message(to, subject, text, body, headers)
+    if not dry_run:
+        mail.send(msg)
+    return msg
 
 
 if __name__ == "__main__":

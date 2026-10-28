@@ -58,6 +58,47 @@ FETCH_LIMIT_USER = int(os.environ.get('FETCH_LIMIT_USER', '200'))
 FETCH_LIMIT_TOTAL = int(os.environ.get('FETCH_LIMIT_TOTAL', '2000'))
 IMPORT_MAX_LINES = 100
 
+# generous per-client limits on the expensive requests: (requests, per seconds). a client
+# is the logged-in user, else the ip (correct behind the proxy thanks to TRUST_PROXY).
+# kept in memory per worker process, so with N workers a client gets up to N times this.
+# RATE_LIMITS=0 turns them off
+RATE_LIMITS = {
+    'rank': (120, 60),  # ranking by tags or by a paper trains a model, ~0.5-1s of cpu
+    'search': (240, 60),
+    'login': (30, 300),  # password hashing is deliberately slow
+    'import': (60, 3600),
+}
+RATE_LIMITS_ON = os.environ.get('RATE_LIMITS', '1') != '0'
+_buckets = {}
+_buckets_lock = threading.Lock()
+
+
+def rate_limited(kind, client=None):
+    """token bucket per (kind, client): True if this request is over the limit"""
+    if not RATE_LIMITS_ON:
+        return False
+    n, per = RATE_LIMITS[kind]
+    client = client or (('user:' + g.user) if g.user else ('ip:' + str(request.remote_addr)))
+    now = time.monotonic()
+    with _buckets_lock:
+        if len(_buckets) > 100000:  # forget idle clients now and then
+            _buckets.clear()
+        tokens, last = _buckets.get((kind, client), (n, now))
+        tokens = min(n, tokens + (now - last) * n / per)
+        if tokens < 1:
+            _buckets[(kind, client)] = (tokens, now)
+            return True
+        _buckets[(kind, client)] = (tokens - 1, now)
+        return False
+
+
+def too_many(kind):
+    n, per = RATE_LIMITS[kind]
+    window = f"{per // 60} minutes" if per >= 120 else f"{per} seconds"
+    msg = f"Too many requests ({n} per {window} for this kind of request), please wait a bit."
+    return msg, 429, {'Retry-After': str(max(1, per // n))}
+
+
 # -----------------------------------------------------------------------------
 # globals that manage the (lazy) loading of various state for a request
 
@@ -262,6 +303,8 @@ def main():
 
     # rank papers: by tags, by time, by random
     words = []  # only populated in the case of svm rank
+    if opt_rank in ('tags', 'pid', 'search') and rate_limited('search' if opt_rank == 'search' else 'rank'):
+        return too_many('search' if opt_rank == 'search' else 'rank')
     if opt_rank == 'search':
         pids, scores = search_rank(q=opt_q)
     elif opt_rank == 'tags':
@@ -499,6 +542,8 @@ def import_papers():
     context.update(results=[], text='', tag='', error='', limit=FETCH_LIMIT_USER, max_lines=IMPORT_MAX_LINES)
     if request.method == 'GET' or g.user is None:
         return render_template('import.html', **context)
+    if rate_limited('import'):
+        return too_many('import')
 
     text = request.form.get('text', '')
     tag = request.form.get('tag', '').strip()
@@ -583,6 +628,9 @@ def import_papers():
 def login():
     username = request.form.get('username', '').strip()
     password = request.form.get('password', '')
+    # per ip, and per account so guessing one password from many ips is slow too
+    if rate_limited('login', 'ip:' + str(request.remote_addr)) or rate_limited('login', 'name:' + username):
+        return profile(error="Too many login attempts, please wait a few minutes."), 429
     if not USERNAME_RE.match(username):
         return profile(error="Usernames are 1-40 letters, digits, '.', '_' or '-'."), 400
 

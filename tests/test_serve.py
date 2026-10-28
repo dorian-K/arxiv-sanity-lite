@@ -134,3 +134,23 @@ def test_import_papers(client, corpus, monkeypatch):
     r = client.post('/import', data={'text': '2502.00001\n2502.00002\n1706.03762'})
     assert 'over the daily fetch limit' in r.data.decode()
     assert calls[-1] == ['2502.00001']
+
+
+def test_rate_limits(client, corpus, monkeypatch):
+    import serve
+
+    monkeypatch.setattr(
+        serve, 'RATE_LIMITS', {'rank': (2, 60), 'search': (3, 60), 'login': (2, 300), 'import': (1, 3600)}
+    )
+    pid = next(iter(corpus))
+    assert [client.get(f'/?rank=pid&pid={pid}').status_code for _ in range(3)] == [200, 200, 429]
+    assert [client.get('/?q=vision').status_code for _ in range(4)] == [200, 200, 200, 429]
+    assert client.get('/').status_code == 200  # cheap pages are never limited
+    login(client)  # signs up; the login limit counts this attempt too
+    assert login(client, password='wrong password').status_code == 403
+    assert login(client, password='wrong password').status_code == 429
+    # logged in, a client is the user rather than the ip: a fresh budget, then the limit again
+    codes = [client.get(f'/?rank=pid&pid={pid}').status_code for _ in range(3)]
+    assert codes == [200, 200, 429]
+    r = client.get(f'/?rank=pid&pid={pid}')
+    assert r.status_code == 429 and int(r.headers['Retry-After']) >= 1

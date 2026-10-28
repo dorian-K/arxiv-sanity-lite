@@ -86,6 +86,17 @@ server {
 }
 ```
 
+Rate limits: generous per-client limits apply to the requests that cost CPU. A client is the logged-in user, else the IP address. Past a limit, the server answers 429 with a Retry-After header.
+
+| request | limit |
+|---|---|
+| ranking by tag or by a paper | 120 a minute |
+| search | 240 a minute |
+| login attempts | 30 per 5 minutes, per IP and per username |
+| add papers | 60 an hour, plus the arXiv fetch caps above |
+
+Ordinary page views are never limited. The limits are counted in memory per worker, so with N workers a client can get up to N times the limit. Edit `RATE_LIMITS` in `serve.py` to change them, or set `RATE_LIMITS=0` to turn them off. The nginx `limit_req` for `/login` above is optional on top.
+
 Memory: the features are memory-mapped, so all workers share one copy in the page cache, and each worker adds about 0.5 GB on five years of papers. The whole 460k-paper setup runs in 2–3 GB of RAM. `WEB_THREADS` adds concurrency without adding memory.
 
 #### Add papers by link

@@ -126,7 +126,7 @@ Once a week, every user with an email address on their profile gets the best new
 
 In docker, the updater sends the digest every Sunday at 08:00 German time (`DIGEST_SCHEDULE=sun 08:00 Europe/Berlin`, summer time included). It's off by default; set `DIGEST_ENABLED=1` once sending works (step 5 below). The first digest then goes out at the next Sunday slot, never on the spot. Set `PUBLIC_URL` (your site, for the links) and `MAIL_FROM` in `.env`. To try it without sending anything: `uv run python send_emails.py --dry-run 1 -u <user> --save digest.html`. Without email, users can still open `/digest` and make one on the spot.
 
-**Sending from your own VPS.** The `mail` service (`COMPOSE_PROFILES=mail`) is an outgoing-only Postfix that signs mail with DKIM and delivers straight to recipients' mail servers. It publishes no port, so only the updater can hand it mail. You need:
+**Sending from your own VPS.** The `arxiv_resanity_mail` service (enabled by `COMPOSE_PROFILES=mail`) is an outgoing-only Postfix that signs mail with DKIM and delivers straight to recipients' mail servers. It publishes no port, so only the other services (web for confirmation links, updater for digests) can hand it mail. You need:
 1. A VPS whose provider allows outgoing port 25. Check with `timeout 5 bash -c '</dev/tcp/gmail-smtp-in.l.google.com/25' && echo open`. Some providers unblock it on request.
 2. Reverse DNS of the VPS's IP set to `MAIL_HOSTNAME` (in the provider's panel), with an A record for that name pointing back to the IP.
 3. `MAIL_DOMAIN` (the domain in `MAIL_FROM`) and `MAIL_HOSTNAME` in `.env`, then `docker compose up -d`.

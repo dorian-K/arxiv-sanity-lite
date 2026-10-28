@@ -16,7 +16,8 @@ dependencies = [
 
 [project.optional-dependencies]
 # local embeddings (compute.py --embed_model st:...); not needed for api:/Ollama embeddings
-embed = ["sentence-transformers>=6.0", "torch>=2.6"]
+# (pillow + torchvision: multimodal models such as embeddinggemma-2 load their image processor even for text)
+embed = ["sentence-transformers>=6.0", "torch>=2.6", "torchvision", "pillow"]
 # send_emails.py
 email = ["sendgrid>=6.12"]
 # thumb_daemon.py (also needs ImageMagick's `convert` on PATH)
@@ -38,6 +39,7 @@ explicit = true
 
 [tool.uv.sources]
 torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+torchvision = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

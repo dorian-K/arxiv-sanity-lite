@@ -6,6 +6,7 @@ Two backends, picked by the model string:
 - "st:<huggingface model>"  runs locally with sentence-transformers, e.g.
       st:BAAI/bge-small-en-v1.5      (33M params, fast on CPU)
       st:google/embeddinggemma-300m
+      st:google/embeddinggemma-2     (270M text-only, Oct 2026; ~1 paper/s on 6 CPU cores)
       st:Qwen/Qwen3-Embedding-0.6B   (better, but slow on a small CPU box)
 - "api:<model name>"        calls any OpenAI-compatible /v1/embeddings endpoint,
       configured with the env vars EMBED_API_BASE and EMBED_API_KEY. This also
@@ -26,11 +27,26 @@ import numpy as np
 from aslite.db import get_embeddings_db
 
 
-def paper_text(p):
+# per-model settings for sentence-transformers models that need more than the defaults:
+#   text_format     how title + abstract are put together (some models are trained with prefixes)
+#   config_kwargs   passed to the HF config, e.g. to skip loading unused encoders
+#   max_seq_length  cap on input tokens; abstracts fit in 512 and long contexts cost CPU time
+ST_MODEL_CONFIGS = {
+    # multimodal, but text-only loading drops the vision/audio encoders (740M -> 270M params).
+    # documents with a title are trained with this prefix, see the model card
+    'google/embeddinggemma-2': dict(
+        text_format='title: {title} | text: {summary}',
+        config_kwargs={'vision_config': None, 'audio_config': None},
+        max_seq_length=512,
+    ),
+}
+
+
+def paper_text(p, text_format='{title}\n\n{summary}'):
     """ the text we embed for a paper: title and abstract, whitespace-normalized """
     title = ' '.join(p['title'].split())
     summary = ' '.join(p['summary'].split())
-    return title + '\n\n' + summary
+    return text_format.format(title=title, summary=summary)
 
 
 class SentenceTransformerBackend:
@@ -38,9 +54,14 @@ class SentenceTransformerBackend:
     def __init__(self, name):
         import torch # lazy: torch is heavy
         from sentence_transformers import SentenceTransformer
+        cfg = ST_MODEL_CONFIGS.get(name, {})
+        self.text_format = cfg.get('text_format', '{title}\n\n{summary}')
         # some models default to bfloat16, which is many times slower on most CPUs
         dtype = torch.float32 if not torch.cuda.is_available() else 'auto'
-        self.model = SentenceTransformer(name, trust_remote_code=False, model_kwargs={'dtype': dtype})
+        self.model = SentenceTransformer(name, trust_remote_code=False, model_kwargs={'dtype': dtype},
+                                         config_kwargs=cfg.get('config_kwargs'))
+        if 'max_seq_length' in cfg:
+            self.model.max_seq_length = cfg['max_seq_length']
 
     def encode(self, texts):
         x = self.model.encode(texts, batch_size=32, normalize_embeddings=True,
@@ -54,6 +75,7 @@ class APIBackend:
         self.name = name
         self.base = os.environ.get('EMBED_API_BASE', 'https://api.openai.com/v1').rstrip('/')
         self.key = os.environ.get('EMBED_API_KEY', '')
+        self.text_format = '{title}\n\n{summary}'
 
     def encode(self, texts):
         body = json.dumps({'model': self.name, 'input': texts}).encode('utf-8')
@@ -97,10 +119,14 @@ def embed_papers(pids, pdb, model, batch_size=64, log_every=1000):
         print(f"embeddings for {model}: {len(pids) - len(missing)} cached, {len(missing)} to compute")
         if missing:
             backend = get_backend(model)
+            texts = {pid: paper_text(pdb[pid], backend.text_format) for pid in missing}
+            # batches get padded to their longest text, so group similar lengths together;
+            # on CPU this saves about a third of the compute
+            missing.sort(key=lambda pid: len(texts[pid]))
             t0 = time.time()
             for i in range(0, len(missing), batch_size):
                 batch = missing[i:i + batch_size]
-                x = backend.encode([paper_text(pdb[pid]) for pid in batch])
+                x = backend.encode([texts[pid] for pid in batch])
                 for pid, v in zip(batch, x):
                     cache[pid] = v.astype(np.float16) # half precision is plenty and halves the db
                 cache.commit()

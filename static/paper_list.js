@@ -57,23 +57,30 @@ const TagPicker = ({ mode, tags, onPick, onCancel }) => {
 // rankings whose scores mean something to show next to the title
 const SHOW_SCORE = ['tags', 'pid', 'search'];
 
-// one-click like / downvote for a given tag (the digest page), toggling like the server does
-const QuickVote = ({ pid, tag, liked, downvoted, onChange }) => {
+// one-click votes for a given tag (the digest page): like, neutral (seen, no opinion: hidden
+// from later digests, not used for training) or downvote. one state per paper and tag,
+// clicking the active one undoes it
+const VOTES = [
+    { key: 'like', label: '👍 Like', on: '👍 Liked', add: '/add/', sub: '/sub/' },
+    { key: 'seen', label: '😐 Neutral', on: '😐 Neutral', add: '/seen/', sub: '/unseen/' },
+    { key: 'down', label: '👎 Not for me', on: '👎 Not for me', add: '/addneg/', sub: '/subneg/' },
+];
+const QuickVote = ({ pid, tag, state, onChange }) => {
     const enc = pid + '/' + encodeURIComponent(tag);
-    const like = () => tagRequest((liked ? '/sub/' : '/add/') + enc).then(() => onChange(liked ? null : 'like')).catch(() => {});
-    const down = () => tagRequest((downvoted ? '/subneg/' : '/addneg/') + enc).then(() => onChange(downvoted ? null : 'down')).catch(() => {});
+    const click = v => tagRequest((state === v.key ? v.sub : v.add) + enc)
+        .then(() => onChange(state === v.key ? null : v.key)).catch(() => {});
     return html`
         <div class="quickvote">
-            <button class=${'btn btn-small vote-up' + (liked ? ' on' : '')} aria-pressed=${liked} onClick=${like}
-                    title=${'more like this for ' + tag}>👍 ${liked ? 'liked' : 'more like this'}</button>
-            <button class=${'btn btn-small vote-down' + (downvoted ? ' on' : '')} aria-pressed=${downvoted} onClick=${down}
-                    title=${'not what ' + tag + ' is about'}>👎 ${downvoted ? 'downvoted' : 'not for me'}</button>
+            ${VOTES.map(v => html`
+            <button key=${v.key} class=${'btn btn-small vote-' + v.key + (state === v.key ? ' on' : '')}
+                    aria-pressed=${state === v.key} onClick=${() => click(v)}>${state === v.key ? v.on : v.label}</button>`)}
         </div>`;
 };
 
 const Paper = ({ paper: p, quickTag }) => {
     const [utags, setUtags] = useState(p.utags);
     const [ntags, setNtags] = useState(p.ntags);
+    const [stags, setStags] = useState(p.stags || []);
     const [picker, setPicker] = useState(null); // null | 'add' | 'neg'
     const [open, setOpen] = useState(false);
 
@@ -109,12 +116,15 @@ const Paper = ({ paper: p, quickTag }) => {
             <span class="rel_tags">${p.tags}</span>
         </div>
         ${user && quickTag ? html`
-        <${QuickVote} pid=${p.id} tag=${quickTag} liked=${utags.includes(quickTag)} downvoted=${ntags.includes(quickTag)}
+        <${QuickVote} pid=${p.id} tag=${quickTag}
+            state=${utags.includes(quickTag) ? 'like' : ntags.includes(quickTag) ? 'down' : stags.includes(quickTag) ? 'seen' : null}
             onChange=${v => {
+                // the server keeps one state per paper and tag, so the others are gone now
                 setUtags(u => (v === 'like' ? withTag(u, quickTag) : without(u, quickTag)));
                 setNtags(n => (v === 'down' ? withTag(n, quickTag) : without(n, quickTag)));
+                setStags(x => (v === 'seen' ? withTag(x, quickTag) : without(x, quickTag)));
             }} />` : null}
-        ${user ? html`
+        ${user && !quickTag ? html`
         <div class="rel_utags">
             <button class=${'btn btn-small rel_utag_add' + (picker === 'add' ? ' on' : '')} onClick=${() => toggle('add')}>+ Save</button>
             <button class=${'btn btn-small rel_utag_neg' + (picker === 'neg' ? ' on' : '')} onClick=${() => toggle('neg')}

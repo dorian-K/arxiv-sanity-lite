@@ -446,7 +446,8 @@ textarea.form-control {
 .digest-tag { margin: 0 0 10px; font-size: 20px; }
 .digest-tag a { color: var(--tag); }
 .quickvote { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
-.vote-up.on { color: var(--tag); background: var(--tag-soft); border-color: var(--tag); }
+.vote-like.on { color: var(--tag); background: var(--tag-soft); border-color: var(--tag); }
+.vote-seen.on { color: var(--text); background: var(--surface-2); border-color: var(--muted); }
 .vote-down.on { color: var(--neg); background: var(--neg-soft); border-color: var(--neg); }
 
 /* narrow screens: about/stats move from the header to the footer */

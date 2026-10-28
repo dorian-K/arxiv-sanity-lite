@@ -113,6 +113,14 @@ def get_tags():
     return g._tags
 
 
+def get_seen_tags():
+    if g.user is None:
+        return {}
+    if not hasattr(g, '_seen_tags'):
+        g._seen_tags = db.get_tags(g.user, neg=db.SEEN)
+    return g._seen_tags
+
+
 def get_neg_tags():
     if g.user is None:
         return {}
@@ -194,6 +202,7 @@ def render_pid(pid, d=None):
         tags=', '.join(t['term'] for t in d['tags']),
         utags=[t for t, pids in tags.items() if pid in pids],
         ntags=[t for t, pids in neg_tags.items() if pid in pids],
+        stags=[t for t, pids in get_seen_tags().items() if pid in pids],
         summary=d['summary'],
         thumb_url=thumb_url,
     )
@@ -330,7 +339,7 @@ def main():
 
     # optionally hide papers we already have (tagged or downvoted)
     if opt_skip_have == 'yes':
-        have = set().union(*get_tags().values(), *get_neg_tags().values())
+        have = set().union(*get_tags().values(), *get_neg_tags().values(), *get_seen_tags().values())
         keep = [i for i, pid in enumerate(pids) if pid not in have]
         pids, scores = [pids[i] for i in keep], [scores[i] for i in keep]
 
@@ -523,6 +532,27 @@ def subneg(pid=None, tag=None):
     if not db.untag_paper(g.user, pid, tag, neg=True):
         return "user hasn't downvoted paper %s for tag %s" % (pid, tag)
     return "ok removed downvote of pid %s for tag %s" % (pid, tag)
+
+
+@app.route('/seen/<pid>/<tag>', methods=['POST'])
+def seen(pid=None, tag=None):
+    """neutral: seen it, no opinion. hidden from later digests, not used for training"""
+    err = _check_tag(tag)
+    if err:
+        return err
+    if pid not in get_papers():
+        return "error, unknown paper %s" % (pid,)
+    db.tag_paper(g.user, pid, tag, neg=db.SEEN)
+    return "ok"
+
+
+@app.route('/unseen/<pid>/<tag>', methods=['POST'])
+def unseen(pid=None, tag=None):
+    if g.user is None:
+        return "error, not logged in"
+    if not db.untag_paper(g.user, pid, tag, neg=db.SEEN):
+        return "paper %s isn't marked neutral for tag %s" % (pid, tag)
+    return "ok"
 
 
 @app.route('/del/<tag>', methods=['POST'])

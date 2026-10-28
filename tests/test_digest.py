@@ -125,3 +125,22 @@ def test_if_due_waits_for_the_next_slot(features, monkeypatch):
     assert not send_emails.due(t0 + 3600)  # same week
     assert send_emails.due(t0 + 7 * 86400)  # a sunday slot has passed
     assert not send_emails.due(t0 + 7 * 86400 + 600)  # but only once
+
+
+def test_neutral_hides_without_training(client, corpus):
+    from conftest import login
+
+    v = vision(corpus)
+    login(client)
+    for p in v[:4]:
+        client.post(f'/add/{p}/cv')
+    client.post('/digest')
+    first = db.get_digest('alice')['sections'][0]['papers'][0][0]
+    assert client.post(f'/seen/{first}/cv').data == b'ok'
+    assert db.get_tags('alice', neg=db.SEEN) == {'cv': {first}}
+    assert first not in db.get_tags('alice')['cv'] and db.get_tags('alice', neg=True) == {}  # not a like or downvote
+    client.post('/digest')  # the next digest leaves it out
+    assert first not in [p for s in db.get_digest('alice')['sections'] for p, _ in s['papers']]
+    client.post(f'/add/{first}/cv')  # liking replaces neutral
+    assert db.get_tags('alice', neg=db.SEEN) == {}
+    assert client.post(f'/unseen/{first}/cv').data.startswith(b"paper")

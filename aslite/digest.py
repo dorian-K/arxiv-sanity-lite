@@ -11,13 +11,13 @@ from aslite import db
 from aslite.rank import rank
 
 
-def compute(features, times, tags, neg_tags, days=7, per_tag=10, feats='auto', model='auto', now=None):
+def compute(features, times, tags, neg_tags, days=7, per_tag=10, feats='auto', model='auto', now=None, skip=()):
     """
     [{'tag', 'papers': [[pid, score], ...]}, ...] for every tag with recommendations.
     times is {pid: time} (PapersDB.times()); one model is trained per tag
     """
     now = now or time.time()
-    have = set().union(*tags.values(), *neg_tags.values())
+    have = set().union(*tags.values(), *neg_tags.values(), skip)
     recent = {p for p, t in times.items() if now - t < days * 86400} - have
     sections = []
     for tag in sorted(tags):
@@ -31,4 +31,7 @@ def compute(features, times, tags, neg_tags, days=7, per_tag=10, feats='auto', m
 
 
 def compute_for(user, features, times, days=7, per_tag=10, **kwargs):
-    return compute(features, times, db.get_tags(user), db.get_tags(user, neg=True), days, per_tag, **kwargs)
+    # papers marked neutral ("seen") count as rated: left out, but not used for training
+    neg = db.get_tags(user, neg=True)
+    seen = set().union(*db.get_tags(user, neg=db.SEEN).values())
+    return compute(features, times, db.get_tags(user), neg, days, per_tag, skip=seen, **kwargs)

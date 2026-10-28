@@ -252,7 +252,8 @@ CREATE TABLE IF NOT EXISTS users (
     email TEXT NOT NULL DEFAULT '',
     last_active INTEGER NOT NULL DEFAULT 0
 ) WITHOUT ROWID;
--- one row per (user, tag, paper): a paper is either liked (neg = 0) or downvoted (neg = 1)
+-- one row per (user, tag, paper): liked (neg = 0), downvoted (neg = 1) or seen without an
+-- opinion (neg = 2, the digest's neutral button: not shown again, not used for training)
 CREATE TABLE IF NOT EXISTS tags (
     user TEXT NOT NULL,
     tag TEXT NOT NULL,
@@ -330,8 +331,11 @@ def touch_user(name, every=300):
     _run('UPDATE users SET last_active = ? WHERE name = ? AND last_active < ?', (now, name, now - every))
 
 
+LIKED, DOWNVOTED, SEEN = 0, 1, 2
+
+
 def get_tags(user, neg=False):
-    """{tag: set(pids)} of the user's likes (or downvotes with neg=True)"""
+    """{tag: set(pids)} of the user's likes (downvotes with neg=True, neutral ones with neg=SEEN)"""
     out = {}
     for tag, pid in _query('SELECT tag, pid FROM tags WHERE user = ? AND neg = ?', (user, int(neg))):
         out.setdefault(tag, set()).add(pid)
@@ -347,7 +351,7 @@ def get_all_tags(neg=False):
 
 
 def tag_paper(user, pid, tag, neg=False):
-    """likes (or downvotes) pid for tag. replaces the opposite, since a paper can't be both"""
+    """likes (downvotes, marks as seen) pid for tag, replacing whichever of those it was"""
     _run(
         'INSERT INTO tags (user, tag, pid, neg) VALUES (?, ?, ?, ?) ON CONFLICT DO UPDATE SET neg = excluded.neg',
         (user, tag, pid, int(neg)),

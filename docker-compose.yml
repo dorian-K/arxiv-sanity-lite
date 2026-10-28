@@ -25,6 +25,7 @@ services:
       args:
         EXTRAS: --extra serve
     image: arxiv-resanity-web
+    container_name: arxiv-resanity-web  # for a proxy in docker: http://arxiv-resanity-web:8000
     ports:
       # only reachable from this machine; if the proxy runs elsewhere, put its
       # interface's address here instead of 127.0.0.1
@@ -51,6 +52,7 @@ services:
       args:
         EXTRAS: --extra embed
     image: arxiv-resanity-updater
+    container_name: arxiv-resanity-updater
     command: ["sh", "docker/update.sh"]
     volumes:
       - ${DATA_PATH:-./data}:/app/data
@@ -82,6 +84,7 @@ services:
     profiles: [mail]
     build: docker/mail
     image: arxiv-resanity-mail
+    container_name: arxiv-resanity-mail
     restart: unless-stopped
     environment:
       MAIL_DOMAIN: ${MAIL_DOMAIN:-}

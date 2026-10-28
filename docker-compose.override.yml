@@ -1,36 +1,22 @@
-# Puts every service in its own network, created outside compose. docker compose reads this
-# file automatically next to docker-compose.yml, so create the networks once before `up`:
+# Puts all services on one network of their own, created outside compose, instead of the
+# default one. docker compose reads this file automatically next to docker-compose.yml, so
+# create the network once before `up`:
 #
-#   docker network create arxiv-resanity-web
-#   docker network create arxiv-resanity-updater
-#   docker network create arxiv-resanity-mail
+#   docker network create arxiv-resanity
 #
-# web      only its own network. a reverse proxy running in docker can join it and use
-#          http://web:8000; the 127.0.0.1:${PORT} binding for a proxy on the host stays
-# updater  its own network (arXiv, Hugging Face), plus mail's, to hand over the digests
-# mail     its own network: delivers to the recipients' servers, reachable only from updater
-# Other names: set WEB_NETWORK / UPDATER_NETWORK / MAIL_NETWORK in .env.
+# An nginx in docker joins the same network (`docker network connect arxiv-resanity <nginx>`)
+# and proxies to http://arxiv-resanity-web:8000, the web container's name. The
+# 127.0.0.1:${PORT} binding for a proxy on the host stays. Another name: RESANITY_NETWORK in .env.
 
 services:
   web:
-    networks:
-      web:
-        aliases: [arxiv-resanity-web]
+    networks: [resanity]
   updater:
-    networks:
-      updater: {}
-      mail: {}
+    networks: [resanity]
   mail:
-    networks:
-      mail: {}
+    networks: [resanity]
 
 networks:
-  web:
+  resanity:
     external: true
-    name: ${WEB_NETWORK:-arxiv-resanity-web}
-  updater:
-    external: true
-    name: ${UPDATER_NETWORK:-arxiv-resanity-updater}
-  mail:
-    external: true
-    name: ${MAIL_NETWORK:-arxiv-resanity-mail}
+    name: ${RESANITY_NETWORK:-arxiv-resanity}

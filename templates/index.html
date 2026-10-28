@@ -140,6 +140,8 @@ var move_page = function(int_offset) {
     <nav class="tabs" aria-label="{{ gvars.tags }}">
         <a href="/?rank=tags&tags={{ gvars.tags | urlencode }}&skip_have=yes{{ '&time_filter=%d' % for_you_days if all }}{{ '&mix=turns' if gvars.mix == 'turns' }}" class="{{ 'active' if gvars.rank == 'tags' }}">Recommended</a>
         <a href="/?rank=saved&tags={{ gvars.tags | urlencode }}" class="{{ 'active' if gvars.rank == 'saved' }}">Saved ({{ n_saved }})</a>
+        <a href="/?rank=down&tags={{ gvars.tags | urlencode }}" class="{{ 'active' if gvars.rank == 'down' }}"
+           title="papers you marked as not for {{ 'a tag' if all else 'this tag' }}">Not for {{ 'a tag' if all else 'this tag' }} ({{ n_down }})</a>
     </nav>
     <p class="muted">
         {% if gvars.rank == 'tags' %}
@@ -152,6 +154,9 @@ var move_page = function(int_offset) {
         the {{ n_saved }} papers you saved{{ where }}{% if gvars.skip_have == 'yes' %}; the saved ones themselves are under "Saved"{% endif %}.
         {% if not readonly %}👍 / 👎 on each paper teach it what you want.{% endif %}
         {% endif %}
+        {% elif gvars.rank == 'down' %}
+        Papers you marked as not for {{ 'one of your tags' if all else gvars.tags }}, newest first. They teach the tag what it
+        isn't about, and only stay out of that tag's recommendations.{% if not readonly %} × on "not for …" undoes one.{% endif %}
         {% else %}
         All papers you saved{{ where }}, newest first.
         {% endif %}

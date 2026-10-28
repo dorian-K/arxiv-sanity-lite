@@ -342,9 +342,9 @@ def svm_rank(tags: str = '', pid: str = '', C=None, feats='auto', model='auto'):
     return (*rank(features, pos, neg, feats=feats, model=model, C=C), unindexed, len(pos))
 
 
-def saved_rank(tags: str = ''):
-    """the papers saved to these tags ('all' = every tag), newest first"""
-    tags_db = get_tags()
+def saved_rank(tags: str = '', neg=False):
+    """the papers saved to these tags ('all' = every tag), newest first; neg: the ones marked not for them"""
+    tags_db = get_neg_tags() if neg else get_tags()
     names = set(tags_db) if tags == 'all' else set(tags.split(','))
     pos = set().union(*(pids for t, pids in tags_db.items() if t in names))
     times = get_times()[0]
@@ -379,7 +379,7 @@ def default_context():
     return context
 
 
-RANKS = ('search', 'tags', 'saved', 'pid', 'time', 'random')
+RANKS = ('search', 'tags', 'saved', 'down', 'pid', 'time', 'random')
 # training a model over every paper takes seconds on a big corpus: the page comes back at
 # once with a placeholder and fetches these results in the background (?format=json)
 SLOW_RANKS = ('tags', 'pid')
@@ -416,8 +416,19 @@ def _tags_fingerprint():
     )
 
 
-def _filtered(pids, opt_time_filter, skip_have):
-    """indices of the papers that pass the time window and, with skip_have, aren't rated yet"""
+def _rated(scope=None):
+    """
+    papers to hide as already rated: saved to any tag, or marked not for / neutral for one
+    of the tags in scope (None: any). a paper marked "not for" one tag can still be right
+    for another, so it only disappears where it was rated
+    """
+    neg, seen = get_neg_tags(), get_seen_tags()
+    names = set(neg) | set(seen) if scope is None else scope
+    return set().union(*get_tags().values(), *(neg.get(t, ()) for t in names), *(seen.get(t, ()) for t in names))
+
+
+def _filtered(pids, opt_time_filter, skip_have, scope=None):
+    """indices of the papers that pass the time window and, with skip_have, aren't rated (see _rated)"""
     keep = range(len(pids))
     if opt_time_filter:
         times = get_times()[0]
@@ -425,7 +436,7 @@ def _filtered(pids, opt_time_filter, skip_have):
         deltat = int(opt_time_filter) * 60 * 60 * 24  # allowed time delta in seconds
         keep = [i for i in keep if (tnow - times.get(pids[i], 0)) < deltat]
     if skip_have:
-        have = set().union(*get_tags().values(), *get_neg_tags().values(), *get_seen_tags().values())
+        have = _rated(scope)
         keep = [i for i in keep if pids[i] not in have]
     return list(keep)
 
@@ -442,7 +453,7 @@ def _ranked_tags_in_turns(tag_names, opt_time_filter, opt_skip_have, C, opt_feat
         pids, scores, _, u, n = svm_rank(tags=t, C=C, feats=opt_feats, model=opt_model)
         unindexed, n_pos = unindexed + u, n_pos + n
         if pids:
-            keep = _filtered(pids, opt_time_filter, opt_skip_have == 'yes')
+            keep = _filtered(pids, opt_time_filter, opt_skip_have == 'yes', scope={t})
             lists.append([(pids[i], scores[i], (i + 1) / len(pids), t) for i in keep])
     out, seen = [], set()
     for row in zip_longest(*lists):
@@ -474,15 +485,16 @@ def _ranked(opt_rank, opt_q, opt_tags, opt_pid, opt_time_filter, opt_skip_have, 
         pids, scores, words, unindexed, n_pos = svm_rank(tags=opt_tags, C=C, feats=opt_feats, model=opt_model)
     elif opt_rank == 'pid':
         pids, scores, words, unindexed, n_pos = svm_rank(pid=opt_pid, C=C, feats=opt_feats, model=opt_model)
-    elif opt_rank == 'saved':
-        pids, scores = saved_rank(tags=opt_tags)
+    elif opt_rank in ('saved', 'down'):
+        pids, scores = saved_rank(tags=opt_tags, neg=opt_rank == 'down')
     elif opt_rank == 'time':
         pids, scores = time_rank()
     else:
         pids, scores = random_rank()
 
     # where each paper landed among all papers, before filters: shown as "top 0.3%"
-    keep = _filtered(pids, opt_time_filter, opt_skip_have == 'yes' and opt_rank != 'saved')
+    scope = {t for t in opt_tags.split(',') if t} if opt_rank == 'tags' and opt_tags != 'all' else None
+    keep = _filtered(pids, opt_time_filter, opt_skip_have == 'yes' and opt_rank not in ('saved', 'down'), scope)
     pct = [(i + 1) / len(pids) for i in keep] if opt_rank in SLOW_RANKS else None
     return {
         'pids': [pids[i] for i in keep],
@@ -640,9 +652,10 @@ def main():
         )
     )
     # the page about one tag (or 'all'): tabs for its recommendations and its saved papers
-    tag_names = [t for t in opt_tags.split(',') if t] if opt_rank in ('tags', 'saved') else []
+    tag_names = [t for t in opt_tags.split(',') if t] if opt_rank in ('tags', 'saved', 'down') else []
     context['tag_view'] = bool(tag_names) and all(t == 'all' or t in tags for t in tag_names)
     context['n_saved'] = len(saved_rank(opt_tags)[0]) if context['tag_view'] else 0
+    context['n_down'] = len(saved_rank(opt_tags, neg=True)[0]) if context['tag_view'] else 0
     context['gvars'] = {}
     context['gvars']['rank'] = opt_rank
     context['gvars']['tags'] = opt_tags

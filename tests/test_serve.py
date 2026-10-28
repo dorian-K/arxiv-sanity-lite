@@ -307,3 +307,23 @@ def test_for_you_can_let_each_tag_pick_in_turns(client, corpus):
 
     page = client.get('/?rank=time&model=logreg&feats=tfidf').data.decode()
     assert f'placeholder="default: {DEFAULT_C[("logreg", "tfidf")]:g}"' in page
+
+
+def test_downvotes_are_visible_and_only_hide_for_their_tag(client, corpus):
+    login(client)
+    vision = [p for p in corpus if corpus[p]['tags'][0]['term'] == 'cs.CV']
+    for p in vision[:4]:
+        client.post(f'/add/{p}/cv')
+        client.post(f'/add/{p}/images')
+    bad = vision[5]
+    client.post(f'/addneg/{bad}/cv')
+    # the tag page lists its downvotes in their own tab
+    page = client.get('/?rank=down&tags=cv').data.decode()
+    assert 'Not for this tag (1)' in page and f'"id": "{bad}"' in page
+    assert f'"id": "{bad}"' not in client.get('/?rank=down&tags=images').data.decode()
+    # hidden from the tag it was marked for, but still recommended for the other one
+    ids = lambda tag: [
+        p['id'] for p in client.get(f'/?rank=tags&tags={tag}&skip_have=yes&format=json').get_json()['papers']
+    ]
+    assert bad not in ids('cv') and bad in ids('images')
+    assert not set(vision[:4]) & set(ids('images'))  # saved papers stay hidden everywhere

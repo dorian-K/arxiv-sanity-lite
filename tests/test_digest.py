@@ -233,3 +233,12 @@ def test_papers_per_tag_in_the_digest(client, corpus):
     assert db.export_user('alice')['digest_papers_per_tag'] == {'nlp': digest.MAX_PER_TAG}
     client.post('/del/nlp')
     assert db.get_digest_sizes('alice') == {}
+
+
+def test_digest_hides_a_downvote_only_for_its_tag(features, corpus):
+    v = vision(corpus)
+    times = {p: corpus[p]['_time'] for p in corpus}
+    tags = {'cv': set(v[:4]), 'images': set(v[:4])}
+    first = digest.compute(features, times, tags, {}, per_tag=3)[0]['papers'][0][0]
+    sections = {s['tag']: [p for p, _ in s['papers']] for s in digest.compute(features, times, tags, {'cv': {first}})}
+    assert first not in sections['cv'] and first in sections['images']

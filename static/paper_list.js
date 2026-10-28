@@ -227,6 +227,7 @@ const Paper = ({ paper: p, quickTag }) => {
 
 const EMPTY = {
     saved: 'No papers saved here yet. Hit "+ Save" on a paper, or paste links on the add page.',
+    down: 'Nothing marked as not for this tag.',
     tags: 'Nothing new to recommend here. Try a longer time window under "Ranking options", or save a few more papers.',
     search: 'No papers match this search.',
 };
@@ -289,7 +290,7 @@ const Tag = ({ tag: t }) => {
         if (!confirm("delete the tag '" + t.name + "' and its downvotes? the papers stay in the database")) return;
         tagRequest('/del/' + encodeURIComponent(t.name)).then(() => window.location.reload()).catch(() => {});
     };
-    const active = (gvars.rank === 'tags' || gvars.rank === 'saved') && gvars.tags.split(',').includes(t.name);
+    const active = ['tags', 'saved', 'down'].includes(gvars.rank) && gvars.tags.split(',').includes(t.name);
     return html`
         <span class=${'chip chip-tag chip-count' + (t.name === 'all' ? ' rel_utag_all' : '') + (active ? ' active' : '')}>
             <a href=${tagUrl(t.name)}>${t.name}${t.n !== undefined ? html` <small>${t.n}</small>` : null}</a>

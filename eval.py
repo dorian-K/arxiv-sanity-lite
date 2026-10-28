@@ -50,6 +50,8 @@ def prepare_si(args):
     pos, neg = defaultdict(set), defaultdict(set)
     with open(args.ratings) as f:
         for row in csv.DictReader(f):
+            if '/' in row['arxiv_id']:
+                continue # old-style ids (hep-th/0408218): aslite.arxiv stores them under a mangled id
             (pos if row['rating'] == '1' else neg)[row['user_id']].add(row['arxiv_id'])
     users = [u for u in pos if len(pos[u]) >= args.min_pos and len(neg[u]) >= args.min_neg]
     print(f"{len(users)} users have >= {args.min_pos} likes and >= {args.min_neg} downvotes")

@@ -97,10 +97,10 @@ h1 { font-size: 18px; margin: 0 0 12px; }
     color: var(--accent-text);
 }
 #header a { color: var(--accent-text); }
-#home-link { font-weight: 700; font-size: 18px; letter-spacing: -.01em; }
+#home-link { font-weight: 700; font-size: 18px; letter-spacing: -.01em; white-space: nowrap; }
 #home-link span { font-weight: 400; opacity: .85; }
 #header nav { display: flex; gap: 18px; font-size: 15px; }
-#header nav a { opacity: .9; }
+#header nav a { opacity: .9; white-space: nowrap; }
 #header nav a:hover { opacity: 1; text-decoration: none; }
 .nav-user { font-weight: 600; max-width: 12ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -384,6 +384,20 @@ input:focus, select:focus, .btn:focus-visible, .iconbtn:focus-visible {
 #profile-login-form, #email-form { max-width: 420px; margin-top: 16px; }
 #profile-login-form label { font-size: 14px; color: var(--muted); }
 .form-error { color: var(--neg); font-weight: 600; }
+textarea.form-control {
+    width: 100%;
+    padding: 8px 10px;
+    font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--text);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    resize: vertical;
+}
+#import-form { margin-top: 16px; }
+#import-form label { font-size: 14px; color: var(--muted); }
+.import-results { width: 100%; }
+.import-results td { vertical-align: top; overflow-wrap: anywhere; }
 .form-group { margin-bottom: 10px; }
 .form-control { margin-top: 4px; }
 
@@ -399,7 +413,7 @@ input:focus, select:focus, .btn:focus-visible, .iconbtn:focus-visible {
 
 @media (max-width: 600px) {
     body { font-size: 15px; }
-    #header nav { gap: 14px; font-size: 14px; }
+    #header nav { gap: 12px; font-size: 14px; }
     .rel_paper, .card { padding: 14px; border-radius: 8px; }
     .rel_title { font-size: 17px; }
     .rel_img { display: none; }
@@ -407,3 +421,6 @@ input:focus, select:focus, .btn:focus-visible, .iconbtn:focus-visible {
     #optgrid { grid-template-columns: 1fr 1fr; }
     .iconbtn { width: 36px; height: 36px; }
 }
+
+/* after .stattable, which right-aligns its last column */
+.stattable.import-results td:last-child { text-align: left; font-weight: normal; padding-right: 0; width: 40%; }

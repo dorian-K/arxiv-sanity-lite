@@ -25,6 +25,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 from aslite import db
 from aslite.db import get_papers_db, get_secret_key, load_features, features_exist, PAPERS_DB_FILE
+from aslite.arxiv import find_arxiv_id, fetch_papers_by_id, OLD_ARXIV_ID_RE
 from aslite.rank import rank, resolve_feats, resolve_model, has_embeddings, FEATS, MODELS
 
 # -----------------------------------------------------------------------------
@@ -51,6 +52,11 @@ if int(os.environ.get('TRUST_PROXY', '0')) > 0:
     n = int(os.environ['TRUST_PROXY'])
     app.wsgi_app = ProxyFix(app.wsgi_app, x_for=n, x_proto=n, x_host=n, x_prefix=n)
 ALLOW_SIGNUP = os.environ.get('ALLOW_SIGNUP', '1') == '1'
+# papers a user (and everyone together) may fetch from arXiv per day via /import, so the
+# server can't be used to hammer arXiv. papers we already have don't count
+FETCH_LIMIT_USER = int(os.environ.get('FETCH_LIMIT_USER', '200'))
+FETCH_LIMIT_TOTAL = int(os.environ.get('FETCH_LIMIT_TOTAL', '2000'))
+IMPORT_MAX_LINES = 100
 
 # -----------------------------------------------------------------------------
 # globals that manage the (lazy) loading of various state for a request
@@ -193,7 +199,15 @@ def svm_rank(tags: str = '', pid: str = '', C=None, feats='auto', model='auto'):
 def search_rank(q: str = ''):
     if not q:
         return [], []  # no query? no results
-    return get_papers().search(q)  # full-text index, see aslite/db.py
+    pids, scores = get_papers().search(q)  # full-text index, see aslite/db.py
+    # an arXiv url or id in the query: show that paper first
+    pid = find_arxiv_id(q)
+    if pid and pid in get_papers():
+        pids, scores = (
+            [pid] + [p for p in pids if p != pid],
+            [max(scores, default=0) + 1] + [sc for p, sc in zip(pids, scores, strict=True) if p != pid],
+        )
+    return pids, scores
 
 
 # -----------------------------------------------------------------------------
@@ -476,6 +490,89 @@ def delete_tag(tag=None):
 
     print("deleted tag %s for user %s" % (tag, g.user))
     return "ok"
+
+
+@app.route('/import', methods=['GET', 'POST'])
+def import_papers():
+    """add papers by arXiv url or id, one per line, fetching the ones we don't have"""
+    context = default_context()
+    context.update(results=[], text='', tag='', error='', limit=FETCH_LIMIT_USER, max_lines=IMPORT_MAX_LINES)
+    if request.method == 'GET' or g.user is None:
+        return render_template('import.html', **context)
+
+    text = request.form.get('text', '')
+    tag = request.form.get('tag', '').strip()
+    context.update(text=text, tag=tag)
+    if tag:
+        err = _check_tag(tag)
+        if err:
+            context['error'] = err
+            return render_template('import.html', **context), 400
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if len(lines) > IMPORT_MAX_LINES:
+        context['error'] = f"At most {IMPORT_MAX_LINES} lines at a time."
+        return render_template('import.html', **context), 400
+
+    # one result per line: (input, pid or None, status)
+    results, wanted = [], []
+    for line in lines:
+        pid = find_arxiv_id(line)
+        if pid is None:
+            old = OLD_ARXIV_ID_RE.search(line)
+            results.append([line, None, 'old-style arXiv ids are not supported' if old else 'no arXiv id found'])
+        else:
+            results.append([line, pid, None])
+            wanted.append(pid)
+    wanted = list(dict.fromkeys(wanted))
+
+    pdb = get_papers()
+    have = set(pdb.get_many(wanted))
+    missing = [p for p in wanted if p not in have]
+    day_ago = time.time() - 86400
+    budget = min(FETCH_LIMIT_USER - db.count_fetches(day_ago, g.user), FETCH_LIMIT_TOTAL - db.count_fetches(day_ago))
+    to_fetch, over = missing[: max(0, budget)], set(missing[max(0, budget) :])
+    fetched, failed = set(), set()
+    for i in range(0, len(to_fetch), 100):
+        batch = to_fetch[i : i + 100]
+        try:
+            with db.arxiv_slot():
+                found = fetch_papers_by_id(batch)
+        except Exception as e:  # arXiv down or rate limiting us: report it, don't retry here
+            print("arxiv fetch failed: %s" % (e,))
+            failed |= set(batch)
+            continue
+        pdb.upsert(found.values())
+        for pid in batch:
+            db.log_fetch(g.user, pid)  # misses count too: each one was a request
+        fetched |= set(found)
+    if fetched:
+        db.request_compute()
+
+    for r in results:
+        pid = r[1]
+        if pid is None:
+            continue
+        if pid in have:
+            r[2] = 'already here'
+        elif pid in fetched:
+            r[2] = 'added from arXiv'
+        elif pid in over:
+            r[2] = 'over the daily fetch limit, try again tomorrow'
+        elif pid in failed:
+            r[2] = 'arXiv could not be reached, try again later'
+        else:
+            r[2] = 'not found on arXiv'
+            r[1] = None
+        if tag and r[1]:
+            db.tag_paper(g.user, pid, tag)
+    found = pdb.get_many([r[1] for r in results if r[1]])
+    context['results'] = [
+        {'line': line, 'pid': pid, 'status': status, 'title': found[pid]['title'] if pid in found else ''}
+        for line, pid, status in results
+    ]
+    context['n_new'] = len(fetched)
+    context['features'] = load_features()['ptoi'] if features_exist() else {}
+    return render_template('import.html', **context)
 
 
 # -----------------------------------------------------------------------------

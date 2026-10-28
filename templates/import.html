@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+
+{% block variables %}
+{% endblock %}
+
+{% block content %}
+<div id="importwrap" class="page">
+    <section class="card">
+        <h1>Add papers</h1>
+        {% if not user %}
+        <p class="muted">Please <a href="/profile">log in</a> to add papers.</p>
+        {% else %}
+        <p class="muted">
+            One arXiv link or id per line, up to {{ max_lines }} at a time: arxiv.org/abs or /pdf links,
+            Hugging Face or alphaXiv paper pages, DOIs, or bare ids like 2401.12345. Papers of any year
+            and category work; ones that aren't here yet are fetched from arXiv (up to {{ limit }} a day).
+        </p>
+        {% if error %}<p class="form-error">{{ error }}</p>{% endif %}
+        <form id="import-form" action="/import" method="post">
+            <div class="form-group">
+                <textarea class="form-control" name="text" rows="8" required spellcheck="false"
+                          placeholder="https://arxiv.org/abs/1706.03762&#10;2401.12345">{{ text }}</textarea>
+            </div>
+            <div class="form-group">
+                <label for="import-tag">Add them to tag (optional)</label>
+                <input class="form-control" type="text" id="import-tag" name="tag" value="{{ tag }}" maxlength="100"
+                       autocapitalize="none" spellcheck="false">
+            </div>
+            <button type="submit" class="btn btn-primary">Add papers</button>
+        </form>
+        {% endif %}
+    </section>
+
+    {% if results %}
+    <section class="card">
+        <h1>Results</h1>
+        <table class="stattable import-results">
+            {% for r in results %}
+            <tr>
+                <td>
+                    {% if r.pid %}<a href="/?rank=pid&pid={{ r.pid }}">{{ r.title or r.pid }}</a>
+                    {% else %}<code>{{ r.line }}</code>{% endif %}
+                </td>
+                <td class="{{ 'muted' if r.pid else 'form-error' }}">
+                    {{ r.status }}{% if r.pid and r.pid not in features %}, used for recommendations after the next update{% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </table>
+        {% if tag %}<p><a href="/?rank=tags&tags={{ tag | urlencode }}">Show recommendations for {{ tag }}</a></p>{% endif %}
+    </section>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block elements %}
+{% endblock %}

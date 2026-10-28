@@ -88,6 +88,16 @@ server {
 
 Memory: the features are memory-mapped, so all workers share one copy in the page cache, and each worker adds about 0.5 GB on five years of papers. The whole 460k-paper setup runs in 2–3 GB of RAM. `WEB_THREADS` adds concurrency without adding memory.
 
+#### Add papers by link
+
+Logged-in users get an **add** page (`/import`). Paste arXiv links or ids there, one per line and up to 100 at a time. It understands abs/pdf links, Hugging Face and alphaXiv paper pages, DOIs and bare ids, and can tag the papers in the same step. Papers of any year or category work. The ones that aren't in the database yet are fetched from the arXiv API in one call per 100 ids:
+- At most one call every 3.5 s across all server processes.
+- At most `FETCH_LIMIT_USER` (200) fetched papers per user per day, and `FETCH_LIMIT_TOTAL` (2000) for everyone together.
+
+A new paper counts for recommendations once its features are computed. The docker updater does that within `COMPUTE_MIN_INTERVAL` (an hour); without docker, it happens at the next `compute.py` run. Pasting an arXiv link into the search box also shows that paper first.
+
+Old-style ids (hep-th/0408218) aren't supported.
+
 #### Upgrading from the sqlitedict storage
 
 Data from before the move to plain SQLite (`papers.db`, `dict.db`, `embeddings.db`, `features.p`) has to be converted once. The script only reads the old files:

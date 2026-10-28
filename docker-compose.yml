@@ -35,6 +35,8 @@ services:
       ALLOW_SIGNUP: ${ALLOW_SIGNUP:-1}
       WEB_WORKERS: ${WEB_WORKERS:-2}
       WEB_THREADS: ${WEB_THREADS:-4}
+      FETCH_LIMIT_USER: ${FETCH_LIMIT_USER:-200}  # papers per user per day that /import may fetch from arXiv
+      FETCH_LIMIT_TOTAL: ${FETCH_LIMIT_TOTAL:-2000}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/about', timeout=5)"]
       interval: 60s
@@ -61,6 +63,7 @@ services:
       COMPUTE_ARGS: ${COMPUTE_ARGS:---max_docs 100000}
       DAEMON_NUM: ${DAEMON_NUM:-2000}
       UPDATE_INTERVAL: ${UPDATE_INTERVAL:-86400}
+      COMPUTE_MIN_INTERVAL: ${COMPUTE_MIN_INTERVAL:-3600}  # features for papers users added, at most this often
 
 volumes:
   model-cache:

@@ -9,6 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Git author is `Dorian Koch <do.ko1605.dk@gmail.com>`, set in the repo's local git config.
 - Flag evaluation caveats yourself, as soon as you see them, and fix them before drawing conclusions. Don't sit on a concern you noticed. (Example: the arxiv_daemon background papers are newer than every Scholar Inbox rating, so eval scores against them are inflated. Use `eval.py run --pool rated`.)
 - Never hammer arXiv; the user does not want to be banned. Pause ≥3s between API calls (harvest_papers.py uses 5s), honor 503 Retry-After, back off on errors, and don't re-download what is already in papers.sqlite. For bulk data, use the Hugging Face snapshot (import_snapshot.py) instead of arXiv's APIs.
+- arXiv calls a user can trigger (`/import`) must go through `db.arxiv_slot()` (one call per 3.5 s across processes) and count against `FETCH_LIMIT_USER`/`FETCH_LIMIT_TOTAL` via the `fetches` table. Never fetch from a GET handler.
 - Work and commit directly on `master`; don't create feature branches, even if a pasted prompt asks for one.
 
 ## Commands

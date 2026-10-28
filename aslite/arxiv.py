@@ -2,6 +2,7 @@
 Utils for dealing with arxiv API and related processing
 """
 
+import re
 import time
 import logging
 import urllib.request
@@ -94,6 +95,45 @@ def filter_latest_version(idvs):
 
     filt = [f"{pid}v{v}" for pid, v in pid_to_v.items()]
     return filt
+
+
+# new-style arXiv ids (since 2007), with an optional version: 2401.12345, 0704.0001v2
+ARXIV_ID_RE = re.compile(r'(?<![\d])(\d{4}\.\d{4,5})(?:v\d+)?(?![\d])')
+# old-style ids like hep-th/0408218, which we can't store (the id has a slash)
+OLD_ARXIV_ID_RE = re.compile(r'\b[a-z-]+(?:\.[A-Z]{2})?/\d{7}\b')
+USER_AGENT = 'arxiv-sanity-lite (self-hosted; fetches single papers on user request, >= 3s apart)'
+
+
+def find_arxiv_id(text):
+    """the arXiv id in a url or bare id (arxiv.org/abs|pdf/..., alphaxiv, hf.co/papers, ...), or None"""
+    m = ARXIV_ID_RE.search(text)
+    return m.group(1) if m else None
+
+
+def fetch_papers_by_id(ids):
+    """
+    papers for up to 100 new-style ids in one API call, as {pid: paper}. ids arXiv doesn't
+    know are missing from the result. callers must space calls >= 3s (see db.arxiv_slot)
+    """
+    assert len(ids) <= 100 and all(ARXIV_ID_RE.fullmatch(i) for i in ids)
+    url = 'https://export.arxiv.org/api/query?id_list=%s&max_results=%d' % (','.join(ids), len(ids))
+    req = urllib.request.Request(url, headers={'User-Agent': USER_AGENT})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        response = r.read()
+    out = {}
+    for e in feedparser.parse(response).entries:
+        try:
+            j = encode_feedparser_dict(e)
+            idv, rawid, version = parse_arxiv_url(j['id'])
+            if not j.get('title') or not j.get('updated_parsed'):
+                continue  # arXiv's placeholder for an id it doesn't have
+            j.update(_idv=idv, _id=rawid, _version=version)
+            j['_time'] = time.mktime(j['updated_parsed'])
+            j['_time_str'] = time.strftime('%b %d %Y', j['updated_parsed'])
+            out[rawid] = j
+        except (AssertionError, KeyError, ValueError):
+            continue
+    return out
 
 
 # daemon categories; the bulk importers (harvest_papers.py, import_snapshot.py) filter on these too

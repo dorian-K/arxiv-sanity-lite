@@ -1,4 +1,5 @@
 import importlib
+import os
 
 import pytest
 
@@ -83,3 +84,53 @@ def test_search_uses_the_index(client, corpus):
     assert all(corpus[p]['tags'][0]['term'] == 'cs.CV' for p in pids)
     assert search_papers('"; DROP TABLE papers; --') == ([], [])  # user input never reaches FTS syntax
     assert b'2601.' in client.get('/?q=vision').data
+
+
+def test_import_papers(client, corpus, monkeypatch):
+    import random
+
+    import serve
+    from aslite import db
+    from conftest import make_paper
+
+    old = make_paper(1, 'vision', random.Random(1))
+    old.update(_id='1706.03762', _idv='1706.03762v7', title='an old paper about attention')
+    calls = []
+
+    def fake_fetch(ids):
+        calls.append(list(ids))
+        return {i: old for i in ids if i == '1706.03762'}
+
+    monkeypatch.setattr(serve, 'fetch_papers_by_id', fake_fetch)
+    monkeypatch.setattr(db, 'arxiv_slot', lambda: __import__('contextlib').nullcontext())
+    have = next(iter(corpus))
+    text = '\n'.join(
+        [
+            f'https://arxiv.org/abs/{have}v1',  # already here
+            'https://arxiv.org/pdf/1706.03762v7.pdf',  # fetched, outside any date window
+            '2501.99999',  # arXiv doesn't know it
+            'hep-th/0408218',
+            'just some words',
+            '',
+        ]
+    )
+    assert b'log in' in client.post('/import', data={'text': text}).data  # logged out: nothing happens
+    assert calls == []
+
+    login(client)
+    r = client.post('/import', data={'text': text, 'tag': 'reading'})
+    assert r.status_code == 200
+    page = r.data.decode()
+    for s in ['already here', 'added from arXiv', 'not found on arXiv', 'old-style', 'no arXiv id found']:
+        assert s in page, s
+    assert calls == [['1706.03762', '2501.99999']]  # one api call for everything missing
+    assert db.get_tags('alice')['reading'] == {have, '1706.03762'}
+    assert os.path.exists(db.COMPUTE_FLAG_FILE)
+    assert db.get_papers_db()['1706.03762']['title'] == 'an old paper about attention'
+    assert b'1706.03762' in client.get('/?q=arxiv.org/abs/1706.03762').data
+
+    # fetches count against the daily limit; papers we already have don't
+    monkeypatch.setattr(serve, 'FETCH_LIMIT_USER', 3)
+    r = client.post('/import', data={'text': '2502.00001\n2502.00002\n1706.03762'})
+    assert 'over the daily fetch limit' in r.data.decode()
+    assert calls[-1] == ['2502.00001']

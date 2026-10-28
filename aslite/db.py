@@ -18,10 +18,12 @@ import re
 import json
 import time
 import pickle
+import fcntl
 import shutil
 import sqlite3
 import secrets
 import threading
+from contextlib import contextmanager
 
 import numpy as np
 import scipy.sparse as sp
@@ -362,6 +364,38 @@ def count_fetches(since, user=None):
     if user is None:
         return _query('SELECT count(*) FROM fetches WHERE time > ?', (since,))[0][0]
     return _query('SELECT count(*) FROM fetches WHERE time > ? AND user = ?', (since, user))[0][0]
+
+
+ARXIV_LOCK_FILE = os.path.join(DATA_DIR, 'arxiv.lock')
+# set by serve.py when users added papers; the docker updater then recomputes features
+COMPUTE_FLAG_FILE = os.path.join(DATA_DIR, 'compute_requested')
+
+
+@contextmanager
+def arxiv_slot(pause=3.5):
+    """
+    waits for our turn to call the arXiv API: at most one call per `pause` seconds across
+    all processes on this machine (web workers, scripts), as arXiv asks
+    """
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(ARXIV_LOCK_FILE, 'a+') as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        try:
+            f.seek(0)
+            last = float(f.read() or 0)
+            time.sleep(max(0.0, last + pause - time.time()))
+            yield
+        finally:
+            f.seek(0)
+            f.truncate()
+            f.write(str(time.time()))
+            f.flush()
+            fcntl.flock(f, fcntl.LOCK_UN)
+
+
+def request_compute():
+    with open(COMPUTE_FLAG_FILE, 'w') as f:
+        f.write(str(time.time()))
 
 
 def get_secret_key():

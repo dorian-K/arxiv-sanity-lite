@@ -69,6 +69,15 @@ def test_tag_names_and_query_params_are_checked(client, corpus):
         assert client.get('/?' + q).status_code == 200
 
 
+def test_import_suggests_existing_tags(client, corpus):
+    login(client)
+    a, b = list(corpus)[:2]
+    client.post(f'/add/{a}/cv')
+    client.post(f'/addneg/{b}/nlp')
+    page = client.get('/import').data
+    assert b'<option value="cv">' in page and b'<option value="nlp">' in page
+
+
 def test_state_changes_need_same_site_posts(client):
     login(client)
     assert client.get('/add/2601.00001/x').status_code == 405  # no more GET <img src=...> tricks

@@ -658,6 +658,8 @@ def import_papers():
     """add papers by arXiv url or id, one per line, fetching the ones we don't have"""
     context = default_context()
     context.update(results=[], text='', tag='', error='', limit=FETCH_LIMIT_USER, max_lines=IMPORT_MAX_LINES)
+    # the user's tags, suggested by the tag field (a new name creates a tag)
+    context['user_tags'] = sorted(set(db.get_tags(g.user)) | set(db.get_tags(g.user, neg=True))) if g.user else []
     if request.method == 'GET' or g.user is None:
         return render_template('import.html', **context)
     if rate_limited('import'):

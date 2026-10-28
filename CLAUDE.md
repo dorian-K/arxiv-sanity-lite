@@ -12,6 +12,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Commands
 
+The shell is zsh, which doesn't word-split an unquoted `$VAR`. A command stored in a variable has to be expanded as `${=VAR}`, and a list of ids should be looped over as an array (`for p in ${=P}`). A failed split often shows up only as an empty log.
+
+
 Dependencies are managed with uv (`pyproject.toml` + `uv.lock`, Python 3.12+, `package = false`). Every script runs from the repo root, because paths such as `data/`, `static/thumb` and `secret_key.txt` are relative to it.
 
 ```bash

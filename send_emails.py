@@ -17,12 +17,7 @@ import argparse
 import sendgrid
 from sendgrid.helpers.mail import Email, To, Content, Mail
 
-from aslite.db import load_features
-from aslite.db import get_tags_db
-from aslite.db import get_metas_db
-from aslite.db import get_papers_db
-from aslite.db import get_email_db
-from aslite.db import get_neg_tags_db
+from aslite.db import load_features, get_papers_db, get_all_tags, get_emails
 from aslite.rank import rank, resolve_feats, resolve_model
 
 # -----------------------------------------------------------------------------
@@ -97,7 +92,7 @@ def calculate_recommendation(
 
         # filter by time to only recent papers
         deltat = time_delta * 60 * 60 * 24  # allowed time delta in seconds
-        keep = [i for i, pid in enumerate(pids) if (tnow - metas[pid]['_time']) < deltat]
+        keep = [i for i, pid in enumerate(pids) if (tnow - times.get(pid, 0)) < deltat]
         pids, scores = [pids[i] for i in keep], [scores[i] for i in keep]
 
         # finally exclude the papers we already have tagged or downvoted
@@ -241,26 +236,12 @@ if __name__ == "__main__":
     tnow = time.time()
     tnow_str = time.strftime('%b %d', time.localtime(tnow))  # e.g. "Nov 27"
 
-    # read entire db simply into RAM
-    with get_tags_db() as tags_db:
-        all_tags = {k: v for k, v in tags_db.items()}
-
-    with get_neg_tags_db() as neg_db:
-        all_neg_tags = {k: v for k, v in neg_db.items()}
-
-    # read entire db simply into RAM
-    with get_metas_db() as mdb:
-        metas = {k: v for k, v in mdb.items()}
-
-    # read entire db simply into RAM
-    with get_email_db() as edb:
-        emails = {k: v for k, v in edb.items()}
-
-    # read tfidf features into RAM
+    all_tags = get_all_tags()
+    all_neg_tags = get_all_tags(neg=True)
+    emails = get_emails()
     features = load_features()
-
-    # keep the papers as only a handle, since this can be larger
-    pdb = get_papers_db()
+    pdb = get_papers_db()  # only a handle, papers are read as needed
+    times = pdb.times()
 
     # iterate all users, create recommendations, send emails
     num_sent = 0

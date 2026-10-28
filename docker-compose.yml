@@ -54,7 +54,7 @@ services:
       - model-cache:/cache
     environment:
       <<: *env
-      # must match the model features.p was computed with, or a run embeds the whole
+      # must match the model the features were computed with, or a run embeds the whole
       # corpus again (on CPU). empty = tfidf only
       EMBED_MODEL: ${EMBED_MODEL-st:google/embeddinggemma-2}
       HF_TOKEN: ${HF_TOKEN:-}  # embeddinggemma is gated: accept its license on huggingface.co first

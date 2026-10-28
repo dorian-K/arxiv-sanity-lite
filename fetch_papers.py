@@ -16,7 +16,7 @@ import logging
 import argparse
 
 from aslite.arxiv import get_response_ids, parse_response
-from aslite.db import get_papers_db, get_metas_db
+from aslite.db import get_papers_db
 
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(message)s')
@@ -32,8 +32,7 @@ if __name__ == '__main__':
             ids += [line.strip() for line in f if line.strip()]
     ids = [re.sub(r'v\d+$', '', i) for i in ids]  # drop version suffixes
 
-    pdb = get_papers_db(flag='c', autocommit=False)
-    mdb = get_metas_db(flag='c', autocommit=False)
+    pdb = get_papers_db()
     todo = list(dict.fromkeys(i for i in ids if i not in pdb))
     logging.info("%d ids given, %d not in the database yet", len(ids), len(todo))
 
@@ -51,20 +50,12 @@ if __name__ == '__main__':
         else:
             logging.error("giving up on batch starting at %d", k)
             continue
-        # both tables live in one sqlite file, so commit one before writing the other
-        for p in papers:
-            pdb[p['_id']] = p
-        pdb.commit()
-        for p in papers:
-            mdb[p['_id']] = {'_time': p['_time']}
-        mdb.commit()
-        nnew += len(papers)
+        nnew += pdb.upsert(papers)
         logging.info(
             "fetched %d/%d (got %d papers back for %d ids)", k + len(batch), len(todo), len(papers), len(batch)
         )
         time.sleep(3)  # arxiv asks for 3s between api calls
 
     pdb.close()
-    mdb.close()
     logging.info("added %d papers", nnew)
     sys.exit(0 if nnew > 0 else 1)

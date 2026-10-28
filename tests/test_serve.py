@@ -39,11 +39,10 @@ def test_tag_rank_and_downvote(client, corpus):
 
     # liking a downvoted paper moves it from neg_tags to tags
     client.post(f'/add/{vision[4]}/cv')
-    from aslite.db import get_tags_db, get_neg_tags_db
+    from aslite.db import get_tags
 
-    with get_tags_db() as tdb, get_neg_tags_db() as ndb:
-        assert vision[4] in tdb['alice']['cv']
-        assert vision[4] not in ndb['alice'].get('cv', set())
+    assert vision[4] in get_tags('alice')['cv']
+    assert vision[4] not in get_tags('alice', neg=True).get('cv', set())
 
 
 def test_passwords(client):
@@ -76,8 +75,9 @@ def test_closed_signups(client, monkeypatch):
 
 
 def test_search_uses_the_index(client, corpus):
-    from aslite.db import search_papers
+    from aslite.db import get_papers_db
 
+    search_papers = get_papers_db().search
     pids, scores = search_papers('vision convol')  # prefix match
     assert pids and scores == sorted(scores, reverse=True)
     assert all(corpus[p]['tags'][0]['term'] == 'cs.CV' for p in pids)

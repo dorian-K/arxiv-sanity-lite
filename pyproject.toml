@@ -11,7 +11,6 @@ dependencies = [
     "numpy>=2.0",
     "scikit-learn>=1.9",
     "scipy>=1.18",
-    "sqlitedict>=2.1",
 ]
 
 [project.optional-dependencies]

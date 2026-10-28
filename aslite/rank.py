@@ -59,8 +59,6 @@ DEFAULTS = dict(
     V=0.8,  # logreg: share of negative weight on downvotes vs random papers
 )
 
-_concat_cache = {}
-
 
 def has_embeddings(features):
     return features.get('x_emb') is not None
@@ -84,24 +82,32 @@ def resolve_model(features, model):
     return model
 
 
-def _matrix(features, feats, alpha):
+def _rows(features, feats, alpha, rows):
+    """the training matrix: rows of the chosen feature set (rows=None: all papers)"""
+    take = (lambda m: m) if rows is None else (lambda m: m[rows])
     if feats == 'tfidf':
-        return features['x']
+        return take(features['x'])
     if feats == 'emb':
-        return features['x_emb']
+        return np.asarray(take(features['x_emb']))
     if feats == 'concat':
-        key = (id(features), alpha)
-        if key not in _concat_cache:
-            _concat_cache.clear()  # only keep the current features file around
-            emb = sp.csr_matrix(features['x_emb'] * alpha)
-            _concat_cache[key] = sp.hstack([features['x'], emb], format='csr')
-        return _concat_cache[key]
+        emb = sp.csr_matrix(np.asarray(take(features['x_emb'])) * alpha)
+        return sp.hstack([take(features['x']), emb], format='csr')
     raise ValueError(feats)
 
 
-def _fit_score(x, pos, neg, model, C, opts, seed):
-    """fits one linear model on rows of x, returns (scores for all rows, coef vector)"""
-    n = x.shape[0]
+def _decision(features, feats, alpha, coef, intercept):
+    """scores of all papers, without materializing the concat matrix (it would be a full copy)"""
+    if feats == 'tfidf':
+        return features['x'] @ coef + intercept
+    if feats == 'emb':
+        return features['x_emb'] @ coef + intercept
+    n_vocab = features['x'].shape[1]
+    return features['x'] @ coef[:n_vocab] + alpha * (features['x_emb'] @ coef[n_vocab:]) + intercept
+
+
+def _fit_score(features, feats, alpha, pos, neg, model, C, opts, seed):
+    """fits one linear model, returns (scores for all papers, coef vector)"""
+    n = len(features['pids'])
 
     if model == 'svm':
         y = np.zeros(n, dtype=np.float32)
@@ -109,7 +115,7 @@ def _fit_score(x, pos, neg, model, C, opts, seed):
         w = np.ones(n, dtype=np.float32)
         if len(neg):
             w[neg] = opts['svm_neg_weight']
-        rows = np.arange(n)
+        rows = None
         cap = opts['svm_max_neg']
         if cap and n - len(pos) - len(neg) > cap:
             # big corpus: train on a random sample of the untagged papers instead of all of
@@ -124,10 +130,9 @@ def _fit_score(x, pos, neg, model, C, opts, seed):
             w = w[rows] * (n / len(rows))
             y = y[rows]
         clf = svm.LinearSVC(class_weight='balanced', max_iter=10000, tol=1e-6, C=C, dual=True)
-        clf.fit(x[rows] if len(rows) < n else x, y, sample_weight=w)
-        return clf.decision_function(x), clf.coef_[0]
+        clf.fit(_rows(features, feats, alpha, rows), y, sample_weight=w)
 
-    if model == 'logreg':
+    elif model == 'logreg':
         rng = np.random.default_rng(seed)
         taken = np.zeros(n, dtype=bool)
         taken[pos] = True
@@ -149,10 +154,13 @@ def _fit_score(x, pos, neg, model, C, opts, seed):
         # S+1 regardless of how many papers someone rated, which keeps C comparable
         # across users (the same point the paper makes about its nT correction)
         clf = LogisticRegression(C=C, solver='liblinear', max_iter=1000)
-        clf.fit(x[rows], y, sample_weight=w)
-        return clf.decision_function(x), clf.coef_[0]
+        clf.fit(_rows(features, feats, alpha, rows), y, sample_weight=w)
 
-    raise ValueError(f"unknown model {model!r}, options: {MODELS}")
+    else:
+        raise ValueError(f"unknown model {model!r}, options: {MODELS}")
+
+    coef = clf.coef_[0]
+    return _decision(features, feats, alpha, coef, clf.intercept_[0]), coef
 
 
 def _zscore(s):
@@ -176,7 +184,7 @@ def rank(features, pos_pids, neg_pids=(), feats='auto', model='auto', C=None, **
     model = resolve_model(features, model)
 
     pids = features['pids']
-    ptoi = {p: i for i, p in enumerate(pids)}
+    ptoi = features.get('ptoi') or {p: i for i, p in enumerate(pids)}
     pos = np.array(sorted({ptoi[p] for p in pos_pids if p in ptoi}), dtype=np.int64)
     neg = np.array(sorted({ptoi[p] for p in neg_pids if p in ptoi} - set(pos.tolist())), dtype=np.int64)
     if len(pos) == 0:
@@ -190,14 +198,13 @@ def rank(features, pos_pids, neg_pids=(), feats='auto', model='auto', C=None, **
         return C if C is not None else DEFAULT_C[(model, f)]
 
     if feats == 'fusion':
-        s_t, coef_t = _fit_score(features['x'], pos, neg, model, C_for('tfidf'), opts, seed)
-        s_e, _ = _fit_score(features['x_emb'], pos, neg, model, C_for('emb'), opts, seed)
+        s_t, coef_t = _fit_score(features, 'tfidf', 1.0, pos, neg, model, C_for('tfidf'), opts, seed)
+        s_e, _ = _fit_score(features, 'emb', 1.0, pos, neg, model, C_for('emb'), opts, seed)
         w = opts['fusion_w']
         s = w * _zscore(s_e) + (1 - w) * _zscore(s_t)
         words = _top_words(features, coef_t)
     else:
-        x = _matrix(features, feats, opts['alpha'])
-        s, coef = _fit_score(x, pos, neg, model, C_for(feats), opts, seed)
+        s, coef = _fit_score(features, feats, opts['alpha'], pos, neg, model, C_for(feats), opts, seed)
         s = 100 * s if model == 'svm' else s  # keep the original svm score scale
         n_vocab = features['x'].shape[1]
         words = _top_words(features, coef[:n_vocab]) if feats in ('tfidf', 'concat') else []

@@ -10,7 +10,7 @@ import time
 import random
 import requests
 from subprocess import Popen
-from aslite.db import get_papers_db, get_metas_db
+from aslite.db import get_papers_db
 
 # create the tmp directory if it does not exist, where we will do temporary work
 TMP_DIR = 'tmp'
@@ -24,10 +24,8 @@ if not os.path.exists(THUMB_DIR):
 # open the database, determine which papers we'll try to get thumbs for
 pdb = get_papers_db()
 n = len(pdb)
-mdb = get_metas_db()
-metas = list(mdb.items())
-metas.sort(key=lambda kv: kv[1]['_time'], reverse=True)  # most recent papers first
-keys = [k for k, v in metas[:5000]]  # only the most recent papers
+times = pdb.times()
+keys = sorted(times, key=times.get, reverse=True)[:5000]  # only the most recent papers
 
 for i, key in enumerate(keys):
     time.sleep(0.01)  # for safety

@@ -45,7 +45,6 @@ dependencies = [
     { name = "numpy" },
     { name = "scikit-learn" },
     { name = "scipy" },
-    { name = "sqlitedict" },
 ]
 
 [package.optional-dependencies]
@@ -99,7 +98,6 @@ requires-dist = [
     { name = "sendgrid", marker = "extra == 'email'", specifier = ">=6.12" },
     { name = "sentence-transformers", marker = "extra == 'embed'", specifier = ">=6.0" },
     { name = "sentence-transformers", marker = "extra == 'embed-gpu'", specifier = ">=6.0" },
-    { name = "sqlitedict", specifier = ">=2.1" },
     { name = "torch", marker = "sys_platform == 'linux' and extra == 'embed'", specifier = ">=2.6", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "arxiv-sanity-lite", extra = "embed" } },
     { name = "torch", marker = "sys_platform == 'linux' and extra == 'embed-gpu'", specifier = ">=2.6", index = "https://download.pytorch.org/whl/cu126", conflict = { package = "arxiv-sanity-lite", extra = "embed-gpu" } },
     { name = "torch", marker = "sys_platform != 'linux' and extra == 'embed'", specifier = ">=2.6" },
@@ -1723,12 +1721,6 @@ sdist = { url = "https://files.pythonhosted.org/packages/58/15/8b3609fd3830ef7b2
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e0/f9/0595336914c5619e5f28a1fb793285925a8cd4b432c9da0a987836c7f822/shellingham-1.5.4-py2.py3-none-any.whl", hash = "sha256:7ecfff8f2fd72616f7481040475a65b2bf8af90a56c89140852d1120324e8686", size = 9755, upload-time = "2023-10-24T04:13:38.866Z" },
 ]
-
-[[package]]
-name = "sqlitedict"
-version = "2.1.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/12/9a/7620d1e9dcb02839ed6d4b14064e609cdd7a8ae1e47289aa0456796dd9ca/sqlitedict-2.1.0.tar.gz", hash = "sha256:03d9cfb96d602996f1d4c2db2856f1224b96a9c431bdd16e78032a72940f9e8c", size = 21846, upload-time = "2022-12-03T13:39:13.102Z" }
 
 [[package]]
 name = "sympy"

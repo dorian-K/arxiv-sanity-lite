@@ -23,8 +23,8 @@ from flask import session
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import generate_password_hash, check_password_hash
 
-from aslite.db import get_papers_db, get_metas_db, get_tags_db, get_neg_tags_db, get_last_active_db, get_email_db
-from aslite.db import get_users_db, get_secret_key, load_features, search_papers, FEATURES_FILE, PAPERS_DB_FILE
+from aslite import db
+from aslite.db import get_papers_db, get_secret_key, load_features, features_exist, PAPERS_DB_FILE
 from aslite.rank import rank, resolve_feats, resolve_model, has_embeddings, FEATS, MODELS
 
 # -----------------------------------------------------------------------------
@@ -60,9 +60,7 @@ def get_tags():
     if g.user is None:
         return {}
     if not hasattr(g, '_tags'):
-        with get_tags_db() as tags_db:
-            tags_dict = tags_db[g.user] if g.user in tags_db else {}
-        g._tags = tags_dict
+        g._tags = db.get_tags(g.user)
     return g._tags
 
 
@@ -70,9 +68,7 @@ def get_neg_tags():
     if g.user is None:
         return {}
     if not hasattr(g, '_neg_tags'):
-        with get_neg_tags_db() as neg_db:
-            neg_dict = neg_db[g.user] if g.user in neg_db else {}
-        g._neg_tags = neg_dict
+        g._neg_tags = db.get_tags(g.user, neg=True)
     return g._neg_tags
 
 
@@ -89,13 +85,12 @@ _times_lock = threading.Lock()
 def get_times():
     """
     (pid -> time, pids newest first) for all papers. reading every meta takes seconds on a
-    big corpus, so each worker keeps them in memory until papers.db changes
+    big corpus, so each worker keeps them in memory until the papers database changes
     """
-    mtime = os.path.getmtime(PAPERS_DB_FILE) if os.path.isfile(PAPERS_DB_FILE) else 0
+    mtime = db.db_mtime(PAPERS_DB_FILE)
     with _times_lock:
         if _times_cache.get('mtime') != mtime:
-            with get_metas_db() as mdb:
-                times = {k: v['_time'] for k, v in mdb.items()}
+            times = get_papers().times()
             _times_cache.update(mtime=mtime, times=times, order=sorted(times, key=times.get, reverse=True))
         return _times_cache['times'], _times_cache['order']
 
@@ -112,8 +107,7 @@ def before_request():
     # record activity on this user so we can reserve periodic
     # recommendations heavy compute only for active users
     if g.user:
-        with get_last_active_db(flag='c') as last_active_db:
-            last_active_db[g.user] = int(time.time())
+        db.touch_user(g.user)
 
 
 @app.after_request
@@ -135,14 +129,13 @@ def close_connection(error=None):
 # ranking utilities for completing the search/rank/filter requests
 
 
-def render_pid(pid):
+def render_pid(pid, d=None):
     # render a single paper with just the information we need for the UI
-    pdb = get_papers()
     tags = get_tags()
     neg_tags = get_neg_tags()
     thumb_path = 'static/thumb/' + pid + '.jpg'
     thumb_url = thumb_path if os.path.isfile(thumb_path) else ''
-    d = pdb[pid]
+    d = d or get_papers()[pid]
     return dict(
         weight=0.0,
         id=d['_id'],
@@ -175,7 +168,7 @@ def svm_rank(tags: str = '', pid: str = '', C=None, feats='auto', model='auto'):
 
     # tag can be one tag or a few comma-separated tags or 'all' for all tags we have in db
     # pid can be a specific paper id to set as positive for a kind of nearest neighbor search
-    if not (tags or pid):
+    if not (tags or pid) or not features_exist():  # no features before compute.py's first run
         return [], [], []
 
     features = load_features()
@@ -200,28 +193,7 @@ def svm_rank(tags: str = '', pid: str = '', C=None, feats='auto', model='auto'):
 def search_rank(q: str = ''):
     if not q:
         return [], []  # no query? no results
-    found = search_papers(q)  # the full-text index from compute.py
-    if found is not None:
-        return found
-    # no index yet: scan every paper (slow on big corpora)
-    qs = q.lower().strip().split()  # split query by spaces and lowercase
-
-    pdb = get_papers()
-    match = lambda s: sum(min(3, s.lower().count(qp)) for qp in qs)
-    matchu = lambda s: sum(int(s.lower().count(qp) > 0) for qp in qs)
-    pairs = []
-    for pid, p in pdb.items():
-        score = 0.0
-        score += 10.0 * matchu(' '.join([a['name'] for a in p['authors']]))
-        score += 20.0 * matchu(p['title'])
-        score += 1.0 * match(p['summary'])
-        if score > 0:
-            pairs.append((score, pid))
-
-    pairs.sort(reverse=True)
-    pids = [p[1] for p in pairs]
-    scores = [p[0] for p in pairs]
-    return pids, scores
+    return get_papers().search(q)  # full-text index, see aslite/db.py
 
 
 # -----------------------------------------------------------------------------
@@ -266,7 +238,7 @@ def main():
         C = float(opt_svm_c)
     except ValueError:
         C = None
-    features_ok = os.path.isfile(FEATURES_FILE)
+    features_ok = features_exist()
     if opt_model not in MODELS:
         opt_model = 'auto'
     if opt_feats not in FEATS or (features_ok and opt_feats != 'tfidf' and not has_embeddings(load_features())):
@@ -314,7 +286,8 @@ def main():
     scores = scores[start_index:end_index]
 
     # render all papers to just the information we need for the UI
-    papers = [render_pid(pid) for pid in pids]
+    found = get_papers().get_many(pids)
+    papers = [render_pid(pid, found[pid]) for pid in pids]
     for i, p in enumerate(papers):
         p['weight'] = float(scores[i])
 
@@ -366,11 +339,15 @@ def inspect():
         return "error, malformed pid"  # todo: better error handling
 
     # load the tfidf vectors, the vocab, and the idf table
+    if not features_exist():
+        return "no features yet, run compute.py"
     features = load_features()
     x = features['x']
     idf = features['idf']
     ivocab = {v: k for k, v in features['vocab'].items()}
-    pix = features['pids'].index(pid)
+    if pid not in features['ptoi']:
+        return "this paper has no features yet, they are computed with the next update"
+    pix = features['ptoi'][pid]
     wixs = np.flatnonzero(np.asarray(x[pix].todense()))
     words = []
     for ix in wixs:
@@ -399,9 +376,8 @@ def profile(error=''):
     context = default_context()
     context['error'] = error
     context['allow_signup'] = ALLOW_SIGNUP
-    with get_email_db() as edb:
-        email = edb.get(g.user, '')
-        context['email'] = email
+    user = db.get_user(g.user) if g.user else None
+    context['email'] = user['email'] if user else ''
     return render_template('profile.html', **context)
 
 
@@ -437,22 +413,6 @@ def about():
 # tag related endpoints: add, delete tags for any paper
 
 
-def _update_membership(get_db, pid, tag, present):
-    """add (present=True) or remove pid from the user's tag in the given tags-like db"""
-    with get_db(flag='c') as db:
-        d = db[g.user] if g.user in db else {}
-        if present:
-            d.setdefault(tag, set()).add(pid)
-        elif tag in d and pid in d[tag]:
-            d[tag].remove(pid)
-            if len(d[tag]) == 0:  # if this was the last paper in this tag, also delete the tag
-                del d[tag]
-        else:
-            return d, False
-        db[g.user] = d
-    return d, True
-
-
 def _check_tag(tag):
     if g.user is None:
         return "error, not logged in"
@@ -468,18 +428,18 @@ def add(pid=None, tag=None):
     err = _check_tag(tag)
     if err:
         return err
-    d, _ = _update_membership(get_tags_db, pid, tag, True)
-    _update_membership(get_neg_tags_db, pid, tag, False)  # a paper can't be both liked and downvoted
+    if pid not in get_papers():
+        return "error, unknown paper %s" % (pid,)
+    db.tag_paper(g.user, pid, tag)  # replaces a downvote: a paper can't be both liked and downvoted
     print("added paper %s to tag %s for user %s" % (pid, tag, g.user))
-    return "ok: " + str(d)  # return back the user library for debugging atm
+    return "ok"
 
 
 @app.route('/sub/<pid>/<tag>', methods=['POST'])
 def sub(pid=None, tag=None):
     if g.user is None:
         return "error, not logged in"
-    _, changed = _update_membership(get_tags_db, pid, tag, False)
-    if not changed:
+    if not db.untag_paper(g.user, pid, tag):
         return "user doesn't have paper %s in tag %s" % (pid, tag)
     return "ok removed pid %s from tag %s" % (pid, tag)
 
@@ -490,18 +450,18 @@ def addneg(pid=None, tag=None):
     err = _check_tag(tag)
     if err:
         return err
-    d, _ = _update_membership(get_neg_tags_db, pid, tag, True)
-    _update_membership(get_tags_db, pid, tag, False)
+    if pid not in get_papers():
+        return "error, unknown paper %s" % (pid,)
+    db.tag_paper(g.user, pid, tag, neg=True)
     print("downvoted paper %s for tag %s for user %s" % (pid, tag, g.user))
-    return "ok: " + str(d)
+    return "ok"
 
 
 @app.route('/subneg/<pid>/<tag>', methods=['POST'])
 def subneg(pid=None, tag=None):
     if g.user is None:
         return "error, not logged in"
-    _, changed = _update_membership(get_neg_tags_db, pid, tag, False)
-    if not changed:
+    if not db.untag_paper(g.user, pid, tag, neg=True):
         return "user hasn't downvoted paper %s for tag %s" % (pid, tag)
     return "ok removed downvote of pid %s for tag %s" % (pid, tag)
 
@@ -511,43 +471,15 @@ def delete_tag(tag=None):
     if g.user is None:
         return "error, not logged in"
 
-    with get_tags_db(flag='c') as tags_db:
-        if g.user not in tags_db:
-            return "user does not have a library"
-
-        d = tags_db[g.user]
-
-        if tag not in d:
-            return "user does not have this tag"
-
-        # delete the tag
-        del d[tag]
-
-        # write back to database
-        tags_db[g.user] = d
-
-    # and its downvotes, if any
-    with get_neg_tags_db(flag='c') as neg_db:
-        if g.user in neg_db and tag in neg_db[g.user]:
-            nd = neg_db[g.user]
-            del nd[tag]
-            neg_db[g.user] = nd
+    if not db.delete_tag(g.user, tag):
+        return "user does not have this tag"
 
     print("deleted tag %s for user %s" % (tag, g.user))
-    return "ok: " + str(d)  # return back the user library for debugging atm
+    return "ok"
 
 
 # -----------------------------------------------------------------------------
 # endpoints to log in and out
-
-
-def _known_user(username):
-    """has this user ever stored anything (from before accounts had passwords)?"""
-    for get_db in (get_tags_db, get_neg_tags_db, get_email_db):
-        with get_db() as db:
-            if username in db:
-                return True
-    return False
 
 
 @app.route('/login', methods=['POST'])
@@ -557,19 +489,18 @@ def login():
     if not USERNAME_RE.match(username):
         return profile(error="Usernames are 1-40 letters, digits, '.', '_' or '-'."), 400
 
-    with get_users_db(flag='c') as udb:
-        pw_hash = udb.get(username)
-        if pw_hash is None:
-            # a new account, or one made before passwords existed: the first password set
-            # claims it. with signups closed, only `flask set-password` can create accounts
-            if not ALLOW_SIGNUP:
-                return profile(error="Signups are closed on this server."), 403
-            if len(password) < MIN_PASSWORD:
-                return profile(error=f"Choose a password of at least {MIN_PASSWORD} characters."), 400
-            udb[username] = generate_password_hash(password)
-            print("registered user %s%s" % (username, " (existing data)" if _known_user(username) else ""))
-        elif not check_password_hash(pw_hash, password):
-            return profile(error="Wrong username or password."), 403
+    user = db.get_user(username)
+    if user is None or user['pw_hash'] is None:
+        # a new account, or one made before passwords existed: the first password set
+        # claims it. with signups closed, only `flask set-password` can create accounts
+        if not ALLOW_SIGNUP:
+            return profile(error="Signups are closed on this server."), 403
+        if len(password) < MIN_PASSWORD:
+            return profile(error=f"Choose a password of at least {MIN_PASSWORD} characters."), 400
+        db.set_password(username, generate_password_hash(password))
+        print("registered user %s%s" % (username, " (existing data)" if user else ""))
+    elif not check_password_hash(user['pw_hash'], password):
+        return profile(error="Wrong username or password."), 403
 
     session.clear()
     session.permanent = True
@@ -590,8 +521,7 @@ def set_password(username, password):
     """create a user or reset their password, e.g. when signups are closed"""
     if not USERNAME_RE.match(username):
         raise click.BadParameter('invalid username')
-    with get_users_db(flag='c') as udb:
-        udb[username] = generate_password_hash(password)
+    db.set_password(username, generate_password_hash(password))
     print(f"password set for {username}")
 
 
@@ -608,7 +538,6 @@ def register_email():
         proper_email = re.match(r'^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,4}$', email, re.IGNORECASE)
         if email == '' or proper_email:  # allow empty email, meaning no email
             # everything checks out, write to the database
-            with get_email_db(flag='c') as edb:
-                edb[g.user] = email
+            db.set_email(g.user, email)
 
     return redirect(url_for('profile'))

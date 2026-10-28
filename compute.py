@@ -11,7 +11,7 @@ import numpy as np
 from sklearn.decomposition import PCA
 from sklearn.feature_extraction.text import TfidfVectorizer
 
-from aslite.db import get_papers_db, save_features, build_search_index
+from aslite.db import get_papers_db, save_features
 from aslite.embed import embed_papers
 
 # -----------------------------------------------------------------------------
@@ -61,23 +61,25 @@ if __name__ == '__main__':
         min_df=args.min_df,
     )
 
-    pdb = get_papers_db(flag='r')
+    pdb = get_papers_db()
+    pids = pdb.keys()
 
     def make_corpus(training: bool):
         assert isinstance(training, bool)
 
         # determine which papers we will use to build tfidf
-        if training and args.max_docs > 0 and args.max_docs < len(pdb):
+        if training and args.max_docs > 0 and args.max_docs < len(pids):
             # crop to a random subset of papers
-            keys = list(pdb.keys())
+            keys = list(pids)
             shuffle(keys)
-            keys = keys[: args.max_docs]
+            keep = set(keys[: args.max_docs])
         else:
-            keys = pdb.keys()
+            keep = None
 
-        # yield the abstracts of the papers
-        for p in keys:
-            d = pdb[p]
+        # yield the abstracts of the papers, streamed in the same order as pids
+        for pid, d in pdb.items():
+            if keep is not None and pid not in keep:
+                continue
             author_str = ' '.join([a['name'] for a in d['authors']])
             yield ' '.join([d['title'], d['summary'], author_str])
 
@@ -86,9 +88,9 @@ if __name__ == '__main__':
 
     print("running inference...")
     x = v.transform(make_corpus(training=False)).astype(np.float32)
+    assert x.shape[0] == len(pids), "papers were added while computing, run compute.py again"
     print(x.shape)
 
-    pids = list(pdb.keys())
     features = {
         'pids': pids,
         'x': x,
@@ -112,6 +114,3 @@ if __name__ == '__main__':
 
     print("saving to features to disk...")
     save_features(features)
-
-    print("building the search index...")
-    build_search_index(pdb)

@@ -2,13 +2,29 @@
 Database support functions.
 The idea is that none of the individual scripts deal directly with the file system.
 Any of the file system I/O and the associated settings are in this single file.
+
+Storage, all in DATA_DIR:
+    papers.sqlite      papers, one row each, plus an FTS5 index for search that triggers
+                       keep in sync. written by the fetch/import scripts, read by everything
+    users.sqlite       accounts, tags and downvotes, written by serve.py
+    embeddings.sqlite  per-paper embedding cache of compute.py, per model
+    features/          what compute.py produces for ranking: .npy arrays that every reader
+                       memory-maps, so web workers share one copy in the page cache
+All databases run in WAL mode, so the web server keeps reading while the updater writes.
 """
 
 import os
 import re
-import sqlite3, zlib, pickle, tempfile, secrets, time
-from sqlitedict import SqliteDict
-from contextlib import contextmanager
+import json
+import time
+import pickle
+import shutil
+import sqlite3
+import secrets
+import threading
+
+import numpy as np
+import scipy.sparse as sp
 
 # -----------------------------------------------------------------------------
 # global configuration
@@ -16,166 +32,336 @@ from contextlib import contextmanager
 # override to keep several corpora apart, e.g. ARXIV_SANITY_DATA=data/5y for a bulk import
 DATA_DIR = os.environ.get('ARXIV_SANITY_DATA', 'data')
 
+PAPERS_DB_FILE = os.path.join(DATA_DIR, 'papers.sqlite')
+USERS_DB_FILE = os.path.join(DATA_DIR, 'users.sqlite')
+EMBEDDINGS_DB_FILE = os.path.join(DATA_DIR, 'embeddings.sqlite')
+FEATURES_DIR = os.path.join(DATA_DIR, 'features')
+
 # -----------------------------------------------------------------------------
-# utilities for safe writing of a pickle file
+# sqlite plumbing
+
+_schema_done = set()
+_schema_lock = threading.Lock()
 
 
-# Context managers for atomic writes courtesy of
-# http://stackoverflow.com/questions/2333872/atomic-writing-to-file-with-python
-@contextmanager
-def _tempfile(*args, **kws):
-    """Context for temporary file.
-    Will find a free temporary filename upon entering
-    and will try to delete the file on leaving
-    Parameters
-    ----------
-    suffix : string
-        optional file suffix
+def connect(path, schema):
+    """a connection with the schema in place (created once per process and file)"""
+    os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+    con = sqlite3.connect(path, timeout=60, check_same_thread=False)
+    con.execute('PRAGMA busy_timeout = 60000')
+    con.execute('PRAGMA synchronous = NORMAL')  # safe with WAL, and much faster for bulk writes
+    key = os.path.abspath(path)
+    if key not in _schema_done:
+        with _schema_lock:
+            con.execute('PRAGMA journal_mode = WAL')  # stored in the file, so only needed once
+            con.executescript(schema)
+            _schema_done.add(key)
+    return con
+
+
+def snapshot(src, dst):
+    """consistent copy of a live database (e.g. to send it to another machine)"""
+    s, d = sqlite3.connect(src), sqlite3.connect(dst)
+    with d:
+        s.backup(d)
+    s.close()
+    d.close()
+
+
+def db_mtime(path):
+    """changes whenever anything is written to the database, WAL included"""
+    return tuple(os.path.getmtime(p) if os.path.exists(p) else 0 for p in (path, path + '-wal'))
+
+
+# -----------------------------------------------------------------------------
+# papers
+
+PAPERS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS papers (
+    n INTEGER PRIMARY KEY,      -- stable rowid, which the search index refers to
+    id TEXT NOT NULL UNIQUE,    -- 2601.00001
+    version INTEGER NOT NULL,
+    time REAL NOT NULL,         -- when the latest version came out (unix time)
+    time_str TEXT NOT NULL,
+    published TEXT NOT NULL,    -- first version, 2026-01-01T00:00:00Z
+    title TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    authors TEXT NOT NULL,      -- json list of names
+    categories TEXT NOT NULL,   -- json list, primary category first
+    comment TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS papers_time ON papers(time);
+
+-- full-text search over the papers table itself (external content: nothing is stored twice)
+CREATE VIRTUAL TABLE IF NOT EXISTS papers_fts USING fts5(
+    title, authors, summary, content='papers', content_rowid='n',
+    tokenize='unicode61 remove_diacritics 2'
+);
+CREATE TRIGGER IF NOT EXISTS papers_ai AFTER INSERT ON papers BEGIN
+    INSERT INTO papers_fts(rowid, title, authors, summary) VALUES (new.n, new.title, new.authors, new.summary);
+END;
+CREATE TRIGGER IF NOT EXISTS papers_ad AFTER DELETE ON papers BEGIN
+    INSERT INTO papers_fts(papers_fts, rowid, title, authors, summary)
+        VALUES ('delete', old.n, old.title, old.authors, old.summary);
+END;
+CREATE TRIGGER IF NOT EXISTS papers_au AFTER UPDATE ON papers BEGIN
+    INSERT INTO papers_fts(papers_fts, rowid, title, authors, summary)
+        VALUES ('delete', old.n, old.title, old.authors, old.summary);
+    INSERT INTO papers_fts(rowid, title, authors, summary) VALUES (new.n, new.title, new.authors, new.summary);
+END;
+"""
+_COLS = 'id, version, time, time_str, published, title, summary, authors, categories, comment'
+# bm25 weights per column: a word in the title counts for more than one in the abstract
+SEARCH_WEIGHTS = (20.0, 10.0, 1.0)
+
+
+def _row_to_paper(r):
+    """a row as the paper dict the rest of the code uses (the shape arxiv_daemon.py always stored)"""
+    pid, version, t, time_str, published, title, summary, authors, cats, comment = r
+    return {
+        '_id': pid,
+        '_idv': f'{pid}v{version}',
+        '_version': version,
+        '_time': t,
+        '_time_str': time_str,
+        'link': f'https://arxiv.org/abs/{pid}v{version}',
+        'published': published,
+        'title': title,
+        'summary': summary,
+        'authors': [{'name': a} for a in json.loads(authors)],
+        'tags': [{'term': c} for c in json.loads(cats)],
+        'arxiv_comment': comment,
+    }
+
+
+def _paper_to_row(p):
+    return (
+        p['_id'],
+        int(p['_version']),
+        float(p['_time']),
+        p['_time_str'],
+        p.get('published', ''),
+        p['title'],
+        p['summary'],
+        json.dumps([a['name'] for a in p['authors']], ensure_ascii=False),
+        json.dumps([t['term'] for t in p['tags']]),
+        p.get('arxiv_comment') or '',
+    )
+
+
+class PapersDB:
+    """
+    the papers. reads like a dict of pid -> paper dict (`pid in db`, `db[pid]`, `len(db)`,
+    `db.keys()`, `db.items()`), writes go through upsert. use as a context manager or close()
     """
 
-    fd, name = tempfile.mkstemp(*args, **kws)
-    os.close(fd)
+    def __init__(self, path=None):
+        self.path = path or PAPERS_DB_FILE
+        self.con = connect(self.path, PAPERS_SCHEMA)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+    def close(self):
+        self.con.close()
+
+    def __len__(self):
+        return self.con.execute('SELECT count(*) FROM papers').fetchone()[0]
+
+    def __contains__(self, pid):
+        return self.con.execute('SELECT 1 FROM papers WHERE id = ?', (pid,)).fetchone() is not None
+
+    def __getitem__(self, pid):
+        r = self.con.execute(f'SELECT {_COLS} FROM papers WHERE id = ?', (pid,)).fetchone()
+        if r is None:
+            raise KeyError(pid)
+        return _row_to_paper(r)
+
+    def get_many(self, pids):
+        """{pid: paper} for the pids that exist, in one query per 500"""
+        pids, out = list(pids), {}
+        for i in range(0, len(pids), 500):
+            chunk = pids[i : i + 500]
+            q = f"SELECT {_COLS} FROM papers WHERE id IN ({','.join('?' * len(chunk))})"
+            for r in self.con.execute(q, chunk):
+                out[r[0]] = _row_to_paper(r)
+        return out
+
+    def keys(self):
+        return [r[0] for r in self.con.execute('SELECT id FROM papers ORDER BY n')]
+
+    def items(self):
+        """(pid, paper) for all papers, in insertion order, streamed"""
+        for r in self.con.execute(f'SELECT {_COLS} FROM papers ORDER BY n'):
+            yield r[0], _row_to_paper(r)
+
+    def times(self):
+        """{pid: time of the latest version}"""
+        return dict(self.con.execute('SELECT id, time FROM papers'))
+
+    def upsert(self, papers):
+        """
+        stores papers that are new, or newer versions of ones we have, in one transaction.
+        returns how many were written
+        """
+        with self.con:
+            cur = self.con.executemany(
+                f"INSERT INTO papers ({_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(id) DO UPDATE SET "
+                + ', '.join(f'{c} = excluded.{c}' for c in _COLS.split(', ')[1:])
+                + " WHERE excluded.time > papers.time",
+                (_paper_to_row(p) for p in papers),
+            )
+        return cur.rowcount  # counts papers only, not the search index rows the triggers write
+
+    def search(self, q, limit=2000):
+        """
+        best matching (pids, scores) for a free-text query. any word may match, words of 3+
+        letters also as prefixes, so 'diffus' finds diffusion
+        """
+        words = re.findall(r'\w+', q.lower())
+        if not words:
+            return [], []
+        match = ' OR '.join(f'"{w}"*' if len(w) >= 3 else f'"{w}"' for w in words)
+        bm25 = 'bm25(papers_fts, %s)' % ', '.join(str(w) for w in SEARCH_WEIGHTS)
+        rows = self.con.execute(
+            f"SELECT p.id, -{bm25} FROM papers_fts JOIN papers p ON p.n = papers_fts.rowid "
+            f"WHERE papers_fts MATCH ? ORDER BY {bm25} LIMIT ?",
+            (match, limit),
+        ).fetchall()
+        return [r[0] for r in rows], [float(r[1]) for r in rows]
+
+
+def get_papers_db(path=None):
+    return PapersDB(path)
+
+
+# -----------------------------------------------------------------------------
+# users: accounts, tags, downvotes
+
+USERS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS users (
+    name TEXT PRIMARY KEY,
+    pw_hash TEXT,                  -- NULL for accounts from before passwords existed
+    email TEXT NOT NULL DEFAULT '',
+    last_active INTEGER NOT NULL DEFAULT 0
+) WITHOUT ROWID;
+-- one row per (user, tag, paper): a paper is either liked (neg = 0) or downvoted (neg = 1)
+CREATE TABLE IF NOT EXISTS tags (
+    user TEXT NOT NULL,
+    tag TEXT NOT NULL,
+    pid TEXT NOT NULL,
+    neg INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user, tag, pid)
+) WITHOUT ROWID;
+-- papers fetched from arXiv on a user's request, for rate limiting
+CREATE TABLE IF NOT EXISTS fetches (
+    time REAL NOT NULL,
+    user TEXT NOT NULL,
+    pid TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS fetches_time ON fetches(time);
+"""
+
+
+def users_db():
+    return connect(USERS_DB_FILE, USERS_SCHEMA)
+
+
+def _run(sql, args=()):
+    """one statement in its own transaction; returns the number of changed rows"""
+    con = users_db()
     try:
-        yield name
+        with con:
+            return con.execute(sql, args).rowcount
     finally:
-        try:
-            os.remove(name)
-        except OSError as e:
-            if e.errno == 2:
-                pass
-            else:
-                raise e
+        con.close()
 
 
-@contextmanager
-def open_atomic(filepath, *args, **kwargs):
-    """Open temporary file object that atomically moves to destination upon
-    exiting.
-    Allows reading and writing to and from the same filename.
-    Parameters
-    ----------
-    filepath : string
-        the file path to be opened
-    fsync : bool
-        whether to force write the file to disk
-    kwargs : mixed
-        Any valid keyword arguments for :code:`open`
-    """
-    fsync = kwargs.pop('fsync', False)
-
-    with _tempfile(dir=os.path.dirname(filepath)) as tmppath:
-        with open(tmppath, *args, **kwargs) as f:
-            yield f
-            if fsync:
-                f.flush()
-                os.fsync(f.fileno())
-        os.rename(tmppath, filepath)
+def _query(sql, args=()):
+    con = users_db()
+    try:
+        return con.execute(sql, args).fetchall()
+    finally:
+        con.close()
 
 
-def safe_pickle_dump(obj, fname):
-    """
-    prevents a case where one process could be writing a pickle file
-    while another process is reading it, causing a crash. the solution
-    is to write the pickle file to a temporary file and then move it.
-    """
-    with open_atomic(fname, 'wb') as f:
-        pickle.dump(obj, f, -1)  # -1 specifies highest binary protocol
+def get_user(name):
+    """{'name', 'pw_hash', 'email', 'last_active'} or None"""
+    r = _query('SELECT name, pw_hash, email, last_active FROM users WHERE name = ?', (name,))
+    return dict(zip(('name', 'pw_hash', 'email', 'last_active'), r[0], strict=True)) if r else None
 
 
-# -----------------------------------------------------------------------------
-
-
-class CompressedSqliteDict(SqliteDict):
-    """overrides the encode/decode methods to use zlib, so we get compressed storage"""
-
-    def __init__(self, *args, **kwargs):
-
-        def encode(obj):
-            return sqlite3.Binary(zlib.compress(pickle.dumps(obj, pickle.HIGHEST_PROTOCOL)))
-
-        def decode(obj):
-            return pickle.loads(zlib.decompress(bytes(obj)))
-
-        super().__init__(*args, **kwargs, encode=encode, decode=decode)
-
-
-# -----------------------------------------------------------------------------
-"""
-some docs to self:
-flag='c': default mode, open for read/write, and creating the db/table if necessary
-flag='r': open for read-only
-"""
-
-
-def _flag(filename, tablename, flag):
-    """
-    sqlitedict refuses to open a missing file or table read-only. tables only get
-    created on first write, so on a fresh install (or for a user who never tagged
-    anything) reads would crash; open those with 'c' instead, which creates them empty
-    """
-    if flag == 'r' and (not os.path.isfile(filename) or tablename not in SqliteDict.get_tablenames(filename)):
-        return 'c'
-    return flag
-
-
-# stores info about papers, and also their lighter-weight metadata
-PAPERS_DB_FILE = os.path.join(DATA_DIR, 'papers.db')
-# stores account-relevant info, like which tags exist for which papers
-DICT_DB_FILE = os.path.join(DATA_DIR, 'dict.db')
-
-
-def get_papers_db(flag='r', autocommit=True):
-    assert flag in ['r', 'c']
-    pdb = CompressedSqliteDict(
-        PAPERS_DB_FILE, tablename='papers', flag=_flag(PAPERS_DB_FILE, 'papers', flag), autocommit=autocommit
+def set_password(name, pw_hash):
+    _run(
+        'INSERT INTO users (name, pw_hash) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET pw_hash = excluded.pw_hash',
+        (name, pw_hash),
     )
-    return pdb
 
 
-def get_metas_db(flag='r', autocommit=True):
-    assert flag in ['r', 'c']
-    mdb = SqliteDict(
-        PAPERS_DB_FILE, tablename='metas', flag=_flag(PAPERS_DB_FILE, 'metas', flag), autocommit=autocommit
+def set_email(name, email):
+    _run(
+        'INSERT INTO users (name, email) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET email = excluded.email',
+        (name, email),
     )
-    return mdb
 
 
-def get_tags_db(flag='r', autocommit=True):
-    assert flag in ['r', 'c']
-    tdb = CompressedSqliteDict(
-        DICT_DB_FILE, tablename='tags', flag=_flag(DICT_DB_FILE, 'tags', flag), autocommit=autocommit
+def get_emails():
+    """{user: email} for users who registered one"""
+    return dict(_query("SELECT name, email FROM users WHERE email != ''"))
+
+
+def touch_user(name, every=300):
+    """records activity; writes at most once per `every` seconds per user"""
+    now = int(time.time())
+    _run('UPDATE users SET last_active = ? WHERE name = ? AND last_active < ?', (now, name, now - every))
+
+
+def get_tags(user, neg=False):
+    """{tag: set(pids)} of the user's likes (or downvotes with neg=True)"""
+    out = {}
+    for tag, pid in _query('SELECT tag, pid FROM tags WHERE user = ? AND neg = ?', (user, int(neg))):
+        out.setdefault(tag, set()).add(pid)
+    return out
+
+
+def get_all_tags(neg=False):
+    """{user: {tag: set(pids)}} for everyone"""
+    out = {}
+    for user, tag, pid in _query('SELECT user, tag, pid FROM tags WHERE neg = ?', (int(neg),)):
+        out.setdefault(user, {}).setdefault(tag, set()).add(pid)
+    return out
+
+
+def tag_paper(user, pid, tag, neg=False):
+    """likes (or downvotes) pid for tag. replaces the opposite, since a paper can't be both"""
+    _run(
+        'INSERT INTO tags (user, tag, pid, neg) VALUES (?, ?, ?, ?) ON CONFLICT DO UPDATE SET neg = excluded.neg',
+        (user, tag, pid, int(neg)),
     )
-    return tdb
 
 
-def get_neg_tags_db(flag='r', autocommit=True):
-    """like tags, but for explicit downvotes: user -> {tag: set(pids)}"""
-    assert flag in ['r', 'c']
-    ntdb = CompressedSqliteDict(
-        DICT_DB_FILE, tablename='neg_tags', flag=_flag(DICT_DB_FILE, 'neg_tags', flag), autocommit=autocommit
-    )
-    return ntdb
+def untag_paper(user, pid, tag, neg=False):
+    """removes a like (or downvote); returns whether there was one"""
+    return _run('DELETE FROM tags WHERE user = ? AND tag = ? AND pid = ? AND neg = ?', (user, tag, pid, int(neg))) > 0
 
 
-def get_last_active_db(flag='r', autocommit=True):
-    assert flag in ['r', 'c']
-    ladb = SqliteDict(
-        DICT_DB_FILE, tablename='last_active', flag=_flag(DICT_DB_FILE, 'last_active', flag), autocommit=autocommit
-    )
-    return ladb
+def delete_tag(user, tag):
+    """removes a tag with all its likes and downvotes; returns whether it existed"""
+    return _run('DELETE FROM tags WHERE user = ? AND tag = ?', (user, tag)) > 0
 
 
-def get_email_db(flag='r', autocommit=True):
-    assert flag in ['r', 'c']
-    edb = SqliteDict(DICT_DB_FILE, tablename='email', flag=_flag(DICT_DB_FILE, 'email', flag), autocommit=autocommit)
-    return edb
+def log_fetch(user, pid):
+    _run('INSERT INTO fetches (time, user, pid) VALUES (?, ?, ?)', (time.time(), user, pid))
 
 
-def get_users_db(flag='r', autocommit=True):
-    """user -> password hash (werkzeug.security format)"""
-    assert flag in ['r', 'c']
-    udb = SqliteDict(DICT_DB_FILE, tablename='users', flag=_flag(DICT_DB_FILE, 'users', flag), autocommit=autocommit)
-    return udb
+def count_fetches(since, user=None):
+    if user is None:
+        return _query('SELECT count(*) FROM fetches WHERE time > ?', (since,))[0][0]
+    return _query('SELECT count(*) FROM fetches WHERE time > ? AND user = ?', (since, user))[0][0]
 
 
 def get_secret_key():
@@ -201,93 +387,143 @@ def get_secret_key():
     return key
 
 
-# full-text index over titles, authors and abstracts for the search box, rebuilt by compute.py
-SEARCH_DB_FILE = os.path.join(DATA_DIR, 'search.db')
-# column weights for bm25: (pid), title, authors, abstract. a word in the title counts
-# for more than one in the abstract, as in the original substring search
-SEARCH_WEIGHTS = (0.0, 20.0, 10.0, 1.0)
+# -----------------------------------------------------------------------------
+# embedding cache
+
+EMBEDDINGS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS embeddings (
+    model TEXT NOT NULL,
+    pid TEXT NOT NULL,
+    vec BLOB NOT NULL,  -- float16
+    PRIMARY KEY (model, pid)
+) WITHOUT ROWID;
+"""
 
 
-def build_search_index(pdb):
-    """writes a fresh FTS5 index of all papers in pdb, then swaps it in atomically"""
-    tmp = SEARCH_DB_FILE + '.tmp'
-    if os.path.exists(tmp):
-        os.remove(tmp)
-    con = sqlite3.connect(tmp)
-    con.execute(
-        "CREATE VIRTUAL TABLE papers USING fts5(pid UNINDEXED, title, authors, summary, "
-        "tokenize='unicode61 remove_diacritics 2')"
-    )
-    rows = ((pid, p['title'], ' '.join(a['name'] for a in p['authors']), p['summary']) for pid, p in pdb.items())
-    con.executemany("INSERT INTO papers VALUES (?, ?, ?, ?)", rows)
-    con.execute("INSERT INTO papers(papers) VALUES ('optimize')")
-    con.commit()
-    con.close()
-    os.replace(tmp, SEARCH_DB_FILE)
+class EmbeddingCache:
+    """pid -> float16 vector for one model string"""
 
+    def __init__(self, model, path=None):
+        self.model = model
+        self.con = connect(path or EMBEDDINGS_DB_FILE, EMBEDDINGS_SCHEMA)
 
-def search_papers(q, limit=2000):
-    """
-    best matching (pids, scores) for a free-text query, any word may match (words of 3+
-    letters also as prefixes, so 'diffus' finds diffusion). None if there is no index yet
-    """
-    if not os.path.isfile(SEARCH_DB_FILE):
-        return None
-    words = re.findall(r'\w+', q.lower())
-    if not words:
-        return [], []
-    match = ' OR '.join(f'"{w}"*' if len(w) >= 3 else f'"{w}"' for w in words)
-    bm25 = 'bm25(papers, %s)' % ', '.join(str(w) for w in SEARCH_WEIGHTS)
-    con = sqlite3.connect(f'file:{SEARCH_DB_FILE}?mode=ro', uri=True)
-    try:
-        rows = con.execute(
-            f"SELECT pid, -{bm25} FROM papers WHERE papers MATCH ? ORDER BY {bm25} LIMIT ?", (match, limit)
-        ).fetchall()
-    finally:
-        con.close()
-    return [r[0] for r in rows], [float(r[1]) for r in rows]
+    def __enter__(self):
+        return self
 
+    def __exit__(self, *exc):
+        self.close()
 
-# caches dense embeddings of papers, one table per embedding model
-EMBEDDINGS_DB_FILE = os.path.join(DATA_DIR, 'embeddings.db')
+    def close(self):
+        self.con.close()
 
+    def pids(self):
+        return {r[0] for r in self.con.execute('SELECT pid FROM embeddings WHERE model = ?', (self.model,))}
 
-def get_embeddings_db(model, flag='r', autocommit=True):
-    """pid -> float16 embedding vector, for the given model string"""
-    assert flag in ['r', 'c']
-    tablename = 'emb_' + re.sub(r'[^A-Za-z0-9]+', '_', model)
-    edb = SqliteDict(
-        EMBEDDINGS_DB_FILE, tablename=tablename, flag=_flag(EMBEDDINGS_DB_FILE, tablename, flag), autocommit=autocommit
-    )
-    return edb
+    def put(self, pids, x):
+        with self.con:
+            self.con.executemany(
+                'INSERT OR REPLACE INTO embeddings (model, pid, vec) VALUES (?, ?, ?)',
+                ((self.model, p, np.asarray(v, dtype=np.float16).tobytes()) for p, v in zip(pids, x, strict=True)),
+            )
+
+    def matrix(self, pids):
+        """float32 matrix with the rows of pids, which must all be cached"""
+        ix = {p: i for i, p in enumerate(pids)}
+        x, seen = None, 0
+        for pid, vec in self.con.execute('SELECT pid, vec FROM embeddings WHERE model = ?', (self.model,)):
+            i = ix.get(pid)
+            if i is None:
+                continue
+            v = np.frombuffer(vec, dtype=np.float16)
+            if x is None:
+                x = np.zeros((len(pids), len(v)), dtype=np.float32)
+            x[i] = v
+            seen += 1
+        if seen != len(pids):
+            raise KeyError(f"{len(pids) - seen} papers have no cached {self.model} embedding")
+        return x
 
 
 # -----------------------------------------------------------------------------
-"""
-our "feature store" is currently just a pickle file, may want to consider hdf5 in the future
-"""
+# features: what compute.py writes for ranking
+#
+# every write goes to a new directory features/<version>/; features/current is a symlink
+# to the newest one and is swapped atomically, so readers never see half a write. the
+# arrays are memory-mapped: all processes share them through the page cache, and a
+# process that is still using an old version keeps its mapping after it is deleted.
 
-# stores tfidf features a bunch of other metadata
-FEATURES_FILE = os.path.join(DATA_DIR, 'features.p')
+_ARRAYS = ('x_data', 'x_indices', 'x_indptr', 'x_emb')
+
+
+def features_exist(path=None):
+    path = path or FEATURES_DIR
+    if path.endswith('.p'):
+        return os.path.isfile(path)
+    return os.path.exists(os.path.join(path, 'current'))
 
 
 def save_features(features):
-    """takes the features dict and save it to disk in a simple pickle file"""
-    safe_pickle_dump(features, FEATURES_FILE)
+    os.makedirs(FEATURES_DIR, exist_ok=True)
+    version = str(time.time_ns())
+    d = os.path.join(FEATURES_DIR, version)
+    os.makedirs(d)
+    x = features['x'].tocsr()
+    arrays = {'x_data': x.data, 'x_indices': x.indices, 'x_indptr': x.indptr}
+    if features.get('x_emb') is not None:
+        arrays['x_emb'] = np.ascontiguousarray(features['x_emb'], dtype=np.float32)
+    for k, v in arrays.items():
+        np.save(os.path.join(d, k + '.npy'), v)
+    meta = {k: v for k, v in features.items() if k not in ('x', 'x_emb', 'ptoi')}
+    meta['x_shape'] = x.shape
+    with open(os.path.join(d, 'meta.p'), 'wb') as f:
+        pickle.dump(meta, f, -1)
+    link = os.path.join(FEATURES_DIR, 'current')
+    tmp = link + '.tmp'
+    if os.path.lexists(tmp):
+        os.remove(tmp)
+    os.symlink(version, tmp)
+    os.replace(tmp, link)
+    for old in os.listdir(FEATURES_DIR):
+        if old not in (version, 'current') and old.isdigit():
+            shutil.rmtree(os.path.join(FEATURES_DIR, old), ignore_errors=True)
 
 
-_features_cache = {'mtime': None, 'features': None}
+def _load(d):
+    with open(os.path.join(d, 'meta.p'), 'rb') as f:
+        features = pickle.load(f)
+    a = {}
+    for k in _ARRAYS:
+        p = os.path.join(d, k + '.npy')
+        if os.path.isfile(p):
+            a[k] = np.load(p, mmap_mode='r')
+    shape = features.pop('x_shape')
+    features['x'] = sp.csr_matrix((a['x_data'], a['x_indices'], a['x_indptr']), shape=shape, copy=False)
+    features['x_emb'] = a.get('x_emb')
+    return features
 
 
-def load_features():
+_features_cache = {}
+_features_lock = threading.Lock()
+
+
+def load_features(path=None):
     """
-    loads the features dict from disk. the result is cached in memory and only
-    re-read when compute.py has written a new file, so serving a request does not
-    re-unpickle the whole feature matrix every time.
+    the features dict: pids, x (sparse tfidf), vocab, idf, and x_emb / emb_model with
+    embeddings, plus ptoi (pid -> row). cached per process until compute.py writes a new
+    version. path can also be an old-style features .p pickle (e.g. for eval.py)
     """
-    mtime = os.path.getmtime(FEATURES_FILE)
-    if _features_cache['mtime'] != mtime:
-        with open(FEATURES_FILE, 'rb') as f:
-            _features_cache['features'] = pickle.load(f)
-        _features_cache['mtime'] = mtime
-    return _features_cache['features']
+    path = path or FEATURES_DIR
+    with _features_lock:
+        if path.endswith('.p'):
+            key = (path, os.path.getmtime(path))
+        else:
+            key = (path, os.path.realpath(os.path.join(path, 'current')))
+        if _features_cache.get('key') != key:
+            if path.endswith('.p'):
+                with open(path, 'rb') as f:
+                    features = pickle.load(f)
+            else:
+                features = _load(key[1])
+            features['ptoi'] = {p: i for i, p in enumerate(features['pids'])}
+            _features_cache.update(key=key, features=features)
+        return _features_cache['features']

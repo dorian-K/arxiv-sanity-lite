@@ -41,29 +41,28 @@ def make_paper(i, topic, rng):
 @pytest.fixture
 def corpus(tmp_path, monkeypatch):
     """
-    temp working dir with data/papers.db holding 120 papers: every 6th is about vision, the
+    temp working dir with data/papers.sqlite holding 120 papers: every 6th is about vision, the
     rest about language. a minority topic, like a real tag, because every unlabeled paper is a
     training negative and with half the corpus on-topic a weakly regularized model just
     learns to push the unlabeled on-topic papers down
     """
     monkeypatch.chdir(tmp_path)
     (tmp_path / 'data').mkdir()
-    from aslite.db import get_papers_db, get_metas_db
+    from aslite.db import get_papers_db
 
     rng = random.Random(0)
     papers = {}
-    with get_papers_db(flag='c') as pdb, get_metas_db(flag='c') as mdb:
+    with get_papers_db() as pdb:
         for i in range(120):
             p = make_paper(i, 'vision' if i % 6 == 0 else 'language', rng)
-            pdb[p['_id']] = p
-            mdb[p['_id']] = {'_time': p['_time']}
             papers[p['_id']] = p
+        pdb.upsert(papers.values())
     return papers
 
 
 @pytest.fixture
 def features(corpus):
-    """runs compute.py on the corpus, like the cron job would, and returns data/features.p"""
+    """runs compute.py on the corpus, like the cron job would, and returns the features"""
     subprocess.run(
         [sys.executable, os.path.join(REPO, 'compute.py'), '--min_df', '1', '--max_df', '1.0'],
         check=True,

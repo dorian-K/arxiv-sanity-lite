@@ -11,7 +11,8 @@ ENV UV_COMPILE_BYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PATH=/app/.venv/bin:$PATH \
-    HF_HOME=/cache/huggingface
+    HF_HOME=/cache/huggingface \
+    HOME=/tmp
 
 WORKDIR /app
 ARG EXTRAS="--extra serve"

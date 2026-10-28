@@ -11,7 +11,7 @@ import logging
 import argparse
 
 from aslite.arxiv import get_response, parse_response
-from aslite.db import get_papers_db, get_metas_db
+from aslite.db import get_papers_db
 
 if __name__ == '__main__':
     logging.basicConfig(
@@ -39,13 +39,11 @@ if __name__ == '__main__':
     # query string of papers to look for
     q = 'cat:cs.CV+OR+cat:cs.LG+OR+cat:cs.CL+OR+cat:cs.AI+OR+cat:cs.NE+OR+cat:cs.RO'
 
-    pdb = get_papers_db(flag='c')
-    mdb = get_metas_db(flag='c')
+    pdb = get_papers_db()
     prevn = len(pdb)
 
     def store(p):
-        pdb[p['_id']] = p
-        mdb[p['_id']] = {'_time': p['_time']}
+        pdb.upsert([p])
 
     # fetch the latest papers
     total_updated = 0

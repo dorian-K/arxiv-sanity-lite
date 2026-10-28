@@ -1,6 +1,6 @@
 #!/bin/sh
 # The updater service: fetch new papers from arXiv, then recompute the features the web
-# service ranks with (it picks up the new features.p by itself). Repeats every
+# service ranks with (it picks up the new data/features by itself). Repeats every
 # UPDATE_INTERVAL seconds. arxiv_daemon.py pauses 3-6s between its requests and stops
 # as soon as it reaches papers it already has, so a daily run is a handful of requests.
 set -u

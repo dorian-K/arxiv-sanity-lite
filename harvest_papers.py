@@ -22,7 +22,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 
 from aslite.arxiv import make_paper, CATEGORIES
-from aslite.db import get_papers_db, get_metas_db, DATA_DIR
+from aslite.db import get_papers_db, DATA_DIR
 
 OAI = 'https://oaipmh.arxiv.org/oai'
 NS = {'oai': 'http://www.openarchives.org/OAI/2.0/', 'raw': 'http://arxiv.org/OAI/arXivRaw/'}
@@ -94,8 +94,7 @@ if __name__ == '__main__':
         state = {'since': since_day, 'token': None, 'pages': 0, 'kept': 0, 'seen': 0}
     logging.info("harvesting set %s, papers first submitted since %s, into %s", args.set, since_day, DATA_DIR)
 
-    pdb = get_papers_db(flag='c', autocommit=False)
-    mdb = get_metas_db(flag='c', autocommit=False)
+    pdb = get_papers_db()
     while True:
         if state['token']:
             url = f"{OAI}?verb=ListRecords&resumptionToken={urllib.request.quote(state['token'])}"
@@ -122,19 +121,12 @@ if __name__ == '__main__':
             if r and r[1] >= since and CATEGORIES & {t['term'] for t in r[0]['tags']}:
                 papers.append(r[0])
 
-        # both tables live in one sqlite file, so commit one before writing the other
-        new = [p for p in papers if p['_id'] not in pdb or pdb[p['_id']]['_time'] < p['_time']]
-        for p in new:
-            pdb[p['_id']] = p
-        pdb.commit()
-        for p in new:
-            mdb[p['_id']] = {'_time': p['_time']}
-        mdb.commit()
+        n_new = pdb.upsert(papers)  # only writes papers that are new or have a newer version
 
         tok = root.find('.//oai:resumptionToken', NS)
         state['token'] = tok.text.strip() if tok is not None and tok.text and tok.text.strip() else None
         state['pages'] += 1
-        state['kept'] += len(new)
+        state['kept'] += n_new
         with open(STATE_FILE, 'w') as f:
             json.dump(state, f)
         total = tok.get('completeListSize') if tok is not None else None
@@ -151,5 +143,4 @@ if __name__ == '__main__':
         time.sleep(PAUSE)
 
     pdb.close()
-    mdb.close()
     logging.info("done: %d papers stored", state['kept'])

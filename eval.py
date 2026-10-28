@@ -36,11 +36,10 @@ import random
 import argparse
 from collections import defaultdict
 
-import pickle
 
 import numpy as np
 
-from aslite.db import load_features, get_tags_db, get_neg_tags_db, DATA_DIR
+from aslite.db import load_features, get_all_tags, DATA_DIR
 from aslite.rank import rank
 
 SI_PROFILES = os.path.join(DATA_DIR, 'si_profiles.json')
@@ -86,11 +85,11 @@ def load_profiles(source):
         with open(SI_PROFILES) as f:
             return {k: (set(v['pos']), set(v['neg'])) for k, v in json.load(f).items()}
     profiles = {}
-    with get_tags_db() as tdb, get_neg_tags_db() as ndb:
-        for user, tags in tdb.items():
-            negs = ndb[user] if user in ndb else {}
-            for tag, pids in tags.items():
-                profiles[f"{user}/{tag}"] = (set(pids), set(negs.get(tag, set())))
+    all_neg = get_all_tags(neg=True)
+    for user, tags in get_all_tags().items():
+        negs = all_neg.get(user, {})
+        for tag, pids in tags.items():
+            profiles[f"{user}/{tag}"] = (set(pids), set(negs.get(tag, set())))
     return profiles
 
 
@@ -114,6 +113,7 @@ def restrict_to(features, keep):
     """
     ix = [i for i, p in enumerate(features['pids']) if p in keep]
     out = dict(features)
+    out.pop('ptoi', None)  # rank() rebuilds it for the smaller pool
     out['pids'] = [features['pids'][i] for i in ix]
     out['x'] = features['x'][ix]
     if features.get('x_emb') is not None:
@@ -122,11 +122,7 @@ def restrict_to(features, keep):
 
 
 def run(args):
-    if args.features:
-        with open(args.features, 'rb') as f:
-            features = pickle.load(f)
-    else:
-        features = load_features()
+    features = load_features(args.features or None)
     profiles = load_profiles(args.source)
     if args.pool == 'rated':
         features = restrict_to(features, set().union(*(p | n for p, n in profiles.values())))
@@ -280,7 +276,7 @@ if __name__ == '__main__':
     r.add_argument(
         '--features',
         default='',
-        help='features pickle to use instead of data/features.p, '
+        help='features to use instead of data/features: a features dir or an old-style .p pickle, '
         'e.g. a copy made with another --embed_model, to compare embedding models',
     )
 

@@ -86,7 +86,16 @@ server {
 }
 ```
 
-Memory: each web worker keeps the features in RAM, about 1–2 GB for five years of papers. Size `WEB_WORKERS` to fit; `WEB_THREADS` adds concurrency without more memory.
+Memory: the features are memory-mapped, so all workers share one copy in the page cache, and each worker adds about 0.5 GB on five years of papers. The whole 460k-paper setup runs in 2–3 GB of RAM. `WEB_THREADS` adds concurrency without adding memory.
+
+#### Upgrading from the sqlitedict storage
+
+Data from before the move to plain SQLite (`papers.db`, `dict.db`, `embeddings.db`, `features.p`) has to be converted once. The script only reads the old files:
+
+```bash
+uv run python migrate_db.py                            # data/
+ARXIV_SANITY_DATA=data/5y uv run python migrate_db.py  # each other corpus
+```
 
 #### Requirements
 
@@ -105,7 +114,7 @@ uv run pytest                        # smoke tests on a synthetic corpus, no net
 
 By default nothing changes: papers are ranked with tfidf SVMs as above. On top of that you can:
 
-**Add dense embeddings.** `compute.py --embed_model ...` also embeds every paper's title and abstract and stores the vectors next to the tfidf features. Embeddings are cached in `data/embeddings.db`, so the periodic run only embeds the new papers. Two ways to get them:
+**Add dense embeddings.** `compute.py --embed_model ...` also embeds every paper's title and abstract and stores the vectors next to the tfidf features. Embeddings are cached in `data/embeddings.sqlite`, so the periodic run only embeds the new papers. Two ways to get them:
 
 ```bash
 # locally, with sentence-transformers (uv sync --extra embed)
@@ -130,9 +139,9 @@ The word list under "inspect" still shows the tfidf words, also for `concat` and
 
 **Downvote papers.** The new ✗ button on a paper asks for a tag and marks the paper as *not* what that tag is about. Downvotes are used as explicit negatives when ranking that tag, hidden by `skip_have`, and shown as crossed-out tags on the paper (click one to undo). Liking a paper for a tag removes its downvote for that tag and vice versa.
 
-**Import years of papers.** `uv sync --extra bulk`, then `uv run python import_snapshot.py --years 5` imports from the [arXiv metadata snapshot on Hugging Face](https://huggingface.co/datasets/librarian-bots/arxiv-metadata-snapshot) (a weekly CC0 mirror of the Kaggle dataset, 2.7GB). Nothing is requested from arXiv. Each file is checked against its published sha256 and the total row count, and the import prints papers per month so gaps show up. `--check data/papers.db` reports how many papers fetched directly from arXiv are in the snapshot. Afterwards, one `arxiv_daemon.py` run fills in the last few days. 5 years of the daemon's categories is about 460k papers (660MB). Set `ARXIV_SANITY_DATA=data/5y` to keep it apart from your main corpus. `harvest_papers.py` does the same through arXiv's OAI-PMH interface (no download, but about 5 hours of polite requests).
+**Import years of papers.** `uv sync --extra bulk`, then `uv run python import_snapshot.py --years 5` imports from the [arXiv metadata snapshot on Hugging Face](https://huggingface.co/datasets/librarian-bots/arxiv-metadata-snapshot) (a weekly CC0 mirror of the Kaggle dataset, 2.7GB). Nothing is requested from arXiv. Each file is checked against its published sha256 and the total row count, and the import prints papers per month so gaps show up. `--check data/papers.sqlite` reports how many papers fetched directly from arXiv are in the snapshot. Afterwards, one `arxiv_daemon.py` run fills in the last few days. 5 years of the daemon's categories is about 460k papers (1.3GB including the search index). Set `ARXIV_SANITY_DATA=data/5y` to keep it apart from your main corpus. `harvest_papers.py` does the same through arXiv's OAI-PMH interface (no download, but about 5 hours of polite requests).
 
-**Embed on a GPU machine.** `./gpu_embed.sh user@host [model] [data dir]` copies the code and `papers.db` over ssh, runs `compute.py` there with CUDA torch (`uv sync --extra embed-gpu`), and copies `embeddings.db` and `features.p` back. EmbeddingGemma 2 over 500k papers takes minutes on an H100, against days on a CPU. Afterwards the daily CPU run only embeds new papers.
+**Embed on a GPU machine.** `./gpu_embed.sh user@host [model] [data dir]` copies the code and `papers.sqlite` over ssh, runs `compute.py` there with CUDA torch (`uv sync --extra embed-gpu`), and copies `embeddings.sqlite` and `features/` back. Accounts and tags (`users.sqlite`) stay local. EmbeddingGemma 2 over 500k papers takes minutes on an H100, against days on a CPU. Afterwards the daily CPU run only embeds new papers.
 
 **Fetch specific papers.** `uv run python fetch_papers.py <arxiv ids>` (or `--file ids.txt`) adds papers by id, e.g. older papers you want to tag. Run `compute.py` afterwards.
 
@@ -167,7 +176,6 @@ uv run python eval.py run --source si --pool rated
 
 #### Todos
 
-- The metas table should not be a sqlitedict but a proper sqlite table, for efficiency
 
 #### License
 

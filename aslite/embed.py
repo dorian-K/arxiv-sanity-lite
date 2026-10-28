@@ -13,7 +13,7 @@ Two backends, picked by the model string:
       covers a local Ollama server (EMBED_API_BASE=http://localhost:11434/v1),
       which keeps torch off a small server entirely.
 
-Embeddings are cached per paper in data/embeddings.db, keyed by model name, so
+Embeddings are cached per paper in data/embeddings.sqlite, keyed by model name, so
 the periodic compute.py run only embeds papers that are new since last time.
 """
 
@@ -24,7 +24,7 @@ import urllib.request
 
 import numpy as np
 
-from aslite.db import get_embeddings_db
+from aslite.db import EmbeddingCache
 
 
 # per-model settings for sentence-transformers models that need more than the defaults:
@@ -114,31 +114,25 @@ def embed_papers(pids, pdb, model, batch_size=64, log_every=1000):
     Returns an (len(pids), d) float32 matrix of unit-norm embeddings, aligned with pids.
     Only papers missing from the cache for this model are actually embedded.
     """
-    cache = get_embeddings_db(model, flag='c', autocommit=False)
-    try:
-        missing = [pid for pid in pids if pid not in cache]
+    with EmbeddingCache(model) as cache:
+        have = cache.pids()
+        missing = [pid for pid in pids if pid not in have]
         print(f"embeddings for {model}: {len(pids) - len(missing)} cached, {len(missing)} to compute")
         if missing:
             backend = get_backend(model)
-            texts = {pid: paper_text(pdb[pid], backend.text_format) for pid in missing}
+            texts = {pid: paper_text(p, backend.text_format) for pid, p in pdb.get_many(missing).items()}
             # batches get padded to their longest text, so group similar lengths together;
             # on CPU this saves about a third of the compute
             missing.sort(key=lambda pid: len(texts[pid]))
             t0 = time.time()
             for i in range(0, len(missing), batch_size):
                 batch = missing[i : i + batch_size]
-                x = backend.encode([texts[pid] for pid in batch])
-                for pid, v in zip(
-                    batch, x, strict=True
-                ):  # a backend returning the wrong count must not misalign the cache
-                    cache[pid] = v.astype(np.float16)  # half precision is plenty and halves the db
-                cache.commit()
+                # put() zips strictly: a backend returning the wrong count must not misalign the cache
+                cache.put(batch, backend.encode([texts[pid] for pid in batch]))
                 done = i + len(batch)
                 if done % log_every < batch_size or done == len(missing):
                     rate = done / max(time.time() - t0, 1e-6)
                     print(f"  embedded {done}/{len(missing)} ({rate:.1f} papers/s)")
-        x = np.stack([cache[pid] for pid in pids]).astype(np.float32)
-    finally:
-        cache.close()
+        x = cache.matrix(pids)
     x /= np.linalg.norm(x, axis=1, keepdims=True) + 1e-12
     return x

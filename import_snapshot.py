@@ -7,7 +7,7 @@ snapshot doesn't have yet.
 
     uv sync --extra bulk
     ARXIV_SANITY_DATA=data/5y uv run python import_snapshot.py --years 5
-    ARXIV_SANITY_DATA=data/5y uv run python import_snapshot.py --years 5 --check data/papers.db
+    ARXIV_SANITY_DATA=data/5y uv run python import_snapshot.py --years 5 --check data/papers.sqlite
 
 Verification, before anything is imported:
 - every file is checked against the size and sha256 Hugging Face lists for the pinned
@@ -31,7 +31,7 @@ from collections import Counter
 import pyarrow.parquet as pq
 
 from aslite.arxiv import make_paper, CATEGORIES
-from aslite.db import get_papers_db, get_metas_db, CompressedSqliteDict, DATA_DIR
+from aslite.db import get_papers_db, DATA_DIR
 
 REPO = 'librarian-bots/arxiv-metadata-snapshot'
 REVISION = 'c428226b689a0e17db2cd55265133b9eca15d97f'  # 2026-10-27; --revision main for the latest
@@ -86,7 +86,7 @@ if __name__ == '__main__':
     parser.add_argument('--revision', default=REVISION, help='dataset revision (commit sha, or main)')
     parser.add_argument('--cache', default='data/arxiv-snapshot', help='where the parquet files are kept')
     parser.add_argument(
-        '--check', nargs='*', default=[], help='papers.db files fetched from arXiv to check coverage against'
+        '--check', nargs='*', default=[], help='papers.sqlite files fetched from arXiv to check coverage against'
     )
     args = parser.parse_args()
 
@@ -111,8 +111,7 @@ if __name__ == '__main__':
 
     # import
     since = time.time() - args.years * 365.25 * 86400
-    pdb = get_papers_db(flag='c', autocommit=False)
-    mdb = get_metas_db(flag='c', autocommit=False)
+    pdb = get_papers_db()
     months, kept_ids, newest = Counter(), set(), 0.0
     n_new = 0
     for path in paths:
@@ -136,24 +135,15 @@ if __name__ == '__main__':
                 kept_ids.add(p['_id'])
                 months[time.strftime('%Y-%m', time.gmtime(first))] += 1
                 newest = max(newest, first)
-                if p['_id'] not in pdb or pdb[p['_id']]['_time'] < p['_time']:
-                    papers.append(p)
-            # both tables live in one sqlite file, so commit one before writing the other
-            for p in papers:
-                pdb[p['_id']] = p
-            pdb.commit()
-            for p in papers:
-                mdb[p['_id']] = {'_time': p['_time']}
-            mdb.commit()
-            n_new += len(papers)
+                papers.append(p)
+            n_new += pdb.upsert(papers)  # only writes papers that are new or have a newer version
         print(f"  imported {os.path.basename(path)}: {len(kept_ids)} papers in window so far")
     print(
         f"{len(kept_ids)} papers first submitted since {time.strftime('%Y-%m-%d', time.gmtime(since))}, "
-        f"{n_new} new or updated in {DATA_DIR}/papers.db (now {len(pdb)}); newest submission "
+        f"{n_new} new or updated in {DATA_DIR}/papers.sqlite (now {len(pdb)}); newest submission "
         f"{time.strftime('%Y-%m-%d', time.gmtime(newest))}"
     )
     pdb.close()
-    mdb.close()
 
     # 3. papers per month: a hole in the snapshot would show up as a dip
     print("\npapers per month (first submission):")
@@ -163,7 +153,7 @@ if __name__ == '__main__':
     # 4. coverage against papers fetched straight from arXiv
     for ref in args.check:
         should, have = 0, 0
-        with CompressedSqliteDict(ref, tablename='papers', flag='r') as rdb:
+        with get_papers_db(ref) as rdb:
             for pid, p in rdb.items():
                 first = time.mktime(time.strptime(p['published'], '%Y-%m-%dT%H:%M:%SZ'))
                 # in the window, in our categories, and old enough to be in the snapshot

@@ -22,6 +22,7 @@ uv sync                                    # core + dev (pytest); --extra embed|
 uv sync --extra embed                      # sentence-transformers for compute.py --embed_model st:...
                                            # (uv sync drops extras you don't list, so pass every one you need)
 uv run pytest                              # smoke tests, synthetic corpus in a temp dir, no network
+uv run ruff check . && uv run ruff format . # lint (bug-finding rules) + format; run both before committing
 uv run pytest tests/test_rank.py -k logreg # single test
 
 uv run python arxiv_daemon.py --num 2000   # pull new papers from the arxiv API into data/papers.db

@@ -19,7 +19,16 @@ var move_page = function(int_offset) {
 {% block content %}
 
 {% if not user %}
-<div id="log-fun-warn"><a href="/profile">Log in or sign up</a> to tag papers and get recommendations.</div>
+<div id="log-fun-warn"><a href="/profile">Log in or sign up</a> to save papers and get recommendations.</div>
+{% elif not tags %}
+<section class="card onboarding">
+    <h1>Welcome! Three steps to your recommendations</h1>
+    <ol>
+        <li><b>Find a few papers you like</b>: search below, browse the newest, or paste arXiv links on the <a href="/import">add</a> page.</li>
+        <li><b>Hit + Save</b> on each and give them a tag, like <i>diffusion</i> or <i>robot learning</i>. One tag per topic you follow.</li>
+        <li><b>Open "For you"</b>: new papers ranked by your tags. "✗ Not for me" on a bad match makes it better, and every Sunday your <a href="/digest">digest</a> collects the week's best.</li>
+    </ol>
+</section>
 {% endif %}
 
 <section id="controls">
@@ -89,9 +98,11 @@ var move_page = function(int_offset) {
 
     <!-- some hand-coded common choices for faster and more convenient operation -->
     <nav id="cbox_fast" aria-label="shortcuts">
-        <a href="/?rank=tags&tags=all&time_filter=7&skip_have=yes">For you · last week</a>
-        <a href="/?rank=tags&tags=all&time_filter=3&skip_have=yes">For you · last 3 days</a>
-        <a href="/?rank=time">Newest</a>
+        {% if tags %}
+        <a href="/?rank=tags&tags=all&time_filter=7&skip_have=yes" class="{{ 'active' if gvars.rank == 'tags' and gvars.tags == 'all' and gvars.time_filter == '7' }}">For you · last week</a>
+        <a href="/?rank=tags&tags=all&time_filter=3&skip_have=yes" class="{{ 'active' if gvars.rank == 'tags' and gvars.tags == 'all' and gvars.time_filter == '3' }}">For you · last 3 days</a>
+        {% endif %}
+        <a href="/?rank=time" class="{{ 'active' if gvars.rank == 'time' and not gvars.time_filter }}">Newest</a>
         <a href="/?rank=random&time_filter=7">Random · last week</a>
     </nav>
 </section>

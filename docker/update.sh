@@ -36,6 +36,9 @@ while true; do
         requested=0
         if [ -f data/compute_requested ]; then requested=1; fi
         rm -f data/compute_requested  # this run covers those papers too
+        # one copy of the accounts/tags/votes database, refreshed daily, in data/backups/
+        python -c "from aslite.db import backup_users; print('backed up users to', backup_users())" \
+            || echo "backup failed"
         if python arxiv_daemon.py --num "${DAEMON_NUM:-2000}" || [ "$requested" = 1 ]; then
             compute
         else

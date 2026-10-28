@@ -49,3 +49,19 @@ def test_features_are_memory_mapped_and_versioned(features):
     assert again is not features  # a new version gets picked up
     assert (again['x'] != features['x']).nnz == 0
     assert not os.path.exists(first)  # old versions are cleaned up
+
+
+def test_backup_users(corpus):
+    import sqlite3
+    import time
+
+    db.tag_paper('alice', next(iter(corpus)), 'cv')
+    db.log_fetch('alice', 'old')
+    db._run('UPDATE fetches SET time = ?', (time.time() - 3 * 86400,))
+    db.log_fetch('alice', 'new')
+    path = db.backup_users()
+    assert path.endswith('backups/users.sqlite')
+    con = sqlite3.connect(path)
+    assert con.execute('SELECT user, tag FROM tags').fetchall() == [('alice', 'cv')]
+    assert [r[0] for r in con.execute('SELECT pid FROM fetches')] == ['new']  # old log rows pruned
+    db.backup_users()  # replaces the one copy

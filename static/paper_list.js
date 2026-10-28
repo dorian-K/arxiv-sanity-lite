@@ -14,39 +14,47 @@ function tagRequest(path) {
     });
 }
 
-const UTag = ({ tag }) => html`
-    <a class="chip chip-tag" href=${'/?rank=tags&tags=' + encodeURIComponent(tag)}>${tag}</a>`;
+// a tag the paper is in: the name links to the tag's page, x takes the paper out of it
+const UTag = ({ tag, onRemove }) => html`
+    <span class="chip chip-tag chip-removable">
+        <a href=${'/?rank=tags&tags=' + encodeURIComponent(tag)}>${tag}</a>
+        <button class="chip-x" title=${'remove from ' + tag} aria-label=${'remove from ' + tag} onClick=${onRemove}>×</button>
+    </span>`;
 
+// a tag the paper was marked "not for": x undoes that
 const NTag = ({ tag, onUndo }) => html`
-    <button class="chip chip-neg" title="downvoted for this tag, click to undo" onClick=${onUndo}>${tag}</button>`;
+    <span class="chip chip-neg chip-removable" title=${'marked as not for ' + tag}>
+        <span>not for ${tag}</span>
+        <button class="chip-x" title="undo" aria-label=${'undo not for ' + tag} onClick=${onUndo}>×</button>
+    </span>`;
 
-const EDITOR_LABELS = {
-    add: 'add to tag',
-    sub: 'remove from tag',
-    neg: 'not for tag',
-};
-
-// inline replacement for prompt(): a text field with the user's tags as suggestions
-const TagEditor = ({ mode, suggestions, onSubmit, onCancel }) => {
+// picks the tag for "save" / "not for me": the user's tags as one-tap chips, or a new name
+const TagPicker = ({ mode, tags, onPick, onCancel }) => {
     const [value, setValue] = useState('');
-    const listId = 'tagsugg-' + mode;
     const submit = e => {
         e.preventDefault();
         const tag = value.trim();
-        if (tag) onSubmit(tag);
+        if (tag) onPick(tag);
     };
+    const save = mode === 'add';
     return html`
-        <form class=${'tag-editor tag-editor-' + mode} onSubmit=${submit}>
-            <input autoFocus list=${listId} value=${value} placeholder=${EDITOR_LABELS[mode] + '…'}
-                   aria-label=${EDITOR_LABELS[mode]}
-                   onInput=${e => setValue(e.target.value)}
-                   onKeyDown=${e => e.key === 'Escape' && onCancel()} />
-            <datalist id=${listId}>${suggestions.map(s => html`<option key=${s} value=${s} />`)}</datalist>
-            <button type="submit" class="btn btn-small btn-primary">${mode === 'sub' ? 'remove' : 'save'}</button>
-            <button type="button" class="btn btn-small" onClick=${onCancel}>cancel</button>
-        </form>`;
+        <div class=${'tag-picker tag-picker-' + mode}>
+            <div class="tag-picker-label">${save ? 'Save to' : 'Not what this tag is about:'}</div>
+            ${tags.length ? html`
+            <div class="tag-picker-tags">
+                ${tags.map(t => html`<button key=${t} class="chip chip-pick" onClick=${() => onPick(t)}>${t}</button>`)}
+            </div>` : null}
+            <form class="tag-picker-new" onSubmit=${submit}>
+                <input autoFocus=${tags.length === 0} value=${value} onInput=${e => setValue(e.target.value)}
+                       onKeyDown=${e => e.key === 'Escape' && onCancel()} maxLength="100"
+                       placeholder=${tags.length ? 'or a new tag…' : 'name a tag, e.g. diffusion'} aria-label="new tag" />
+                <button type="submit" class="btn btn-small btn-primary" disabled=${!value.trim()}>${save ? 'Save' : 'OK'}</button>
+                <button type="button" class="btn btn-small" onClick=${onCancel}>Cancel</button>
+            </form>
+        </div>`;
 };
 
+// rankings whose scores mean something to show next to the title
 const SHOW_SCORE = ['tags', 'pid', 'search'];
 
 // one-click like / downvote for a given tag (the digest page), toggling like the server does
@@ -66,31 +74,25 @@ const QuickVote = ({ pid, tag, liked, downvoted, onChange }) => {
 const Paper = ({ paper: p, quickTag }) => {
     const [utags, setUtags] = useState(p.utags);
     const [ntags, setNtags] = useState(p.ntags);
-    const [editor, setEditor] = useState(null); // null | 'add' | 'sub' | 'neg'
+    const [picker, setPicker] = useState(null); // null | 'add' | 'neg'
     const [open, setOpen] = useState(false);
 
     const without = (list, tag) => list.filter(t => t !== tag);
     const withTag = (list, tag) => (list.includes(tag) ? list : [...list, tag]);
 
-    const apply = tag => {
-        const enc = p.id + '/' + encodeURIComponent(tag);
-        const req = { add: '/add/', sub: '/sub/', neg: '/addneg/' }[editor] + enc;
-        const mode = editor;
-        tagRequest(req).then(() => {
-            // mirror the server: liking and downvoting for one tag exclude each other
-            if (mode === 'add') { setUtags(u => withTag(u, tag)); setNtags(n => without(n, tag)); }
-            if (mode === 'sub') { setUtags(u => without(u, tag)); }
-            if (mode === 'neg') { setNtags(n => withTag(n, tag)); setUtags(u => without(u, tag)); }
-            setEditor(null);
-        }).catch(() => {});
-    };
-    const undoNeg = tag => {
-        if (!confirm("remove downvote of this paper for tag '" + tag + "'?")) return;
-        tagRequest('/subneg/' + p.id + '/' + encodeURIComponent(tag)).then(() => setNtags(n => without(n, tag))).catch(() => {});
-    };
-
-    const toggle = mode => setEditor(e => (e === mode ? null : mode));
-    const suggestions = editor === 'sub' ? utags : userTagNames;
+    const enc = tag => p.id + '/' + encodeURIComponent(tag);
+    // mirror the server: saving and "not for" one tag exclude each other
+    const save = tag => tagRequest('/add/' + enc(tag)).then(() => {
+        setUtags(u => withTag(u, tag)); setNtags(n => without(n, tag)); setPicker(null);
+    }).catch(() => {});
+    const notFor = tag => tagRequest('/addneg/' + enc(tag)).then(() => {
+        setNtags(n => withTag(n, tag)); setUtags(u => without(u, tag)); setPicker(null);
+    }).catch(() => {});
+    const unsave = tag => tagRequest('/sub/' + enc(tag)).then(() => setUtags(u => without(u, tag))).catch(() => {});
+    const undoNeg = tag => tagRequest('/subneg/' + enc(tag)).then(() => setNtags(n => without(n, tag))).catch(() => {});
+    const toggle = mode => setPicker(m => (m === mode ? null : mode));
+    // offer the tags this paper isn't in yet; new tags typed here join the list for the next paper
+    const pickable = (picker === 'add' ? userTagNames.filter(t => !utags.includes(t)) : userTagNames.filter(t => !ntags.includes(t)));
     const long = p.summary.length > 360;
     const showScore = SHOW_SCORE.includes(gvars.rank);
 
@@ -114,13 +116,15 @@ const Paper = ({ paper: p, quickTag }) => {
             }} />` : null}
         ${user ? html`
         <div class="rel_utags">
-            <button class="iconbtn rel_utag_add" title="add to a tag" aria-label="add to a tag" onClick=${() => toggle('add')}>+</button>
-            <button class="iconbtn rel_utag_sub" title="remove from a tag" aria-label="remove from a tag" onClick=${() => toggle('sub')} disabled=${utags.length === 0}>−</button>
-            <button class="iconbtn rel_utag_neg" title="downvote: not what a tag is about" aria-label="downvote for a tag" onClick=${() => toggle('neg')}>✗</button>
-            ${utags.map(t => html`<${UTag} key=${'u' + t} tag=${t} />`)}
+            <button class=${'btn btn-small rel_utag_add' + (picker === 'add' ? ' on' : '')} onClick=${() => toggle('add')}>+ Save</button>
+            <button class=${'btn btn-small rel_utag_neg' + (picker === 'neg' ? ' on' : '')} onClick=${() => toggle('neg')}
+                    title="not what one of your tags is about: improves its recommendations">✗ Not for me</button>
+            ${utags.map(t => html`<${UTag} key=${'u' + t} tag=${t} onRemove=${() => unsave(t)} />`)}
             ${ntags.map(t => html`<${NTag} key=${'n' + t} tag=${t} onUndo=${() => undoNeg(t)} />`)}
         </div>` : null}
-        ${editor ? html`<${TagEditor} mode=${editor} suggestions=${suggestions} onSubmit=${apply} onCancel=${() => setEditor(null)} />` : null}
+        ${picker ? html`<${TagPicker} mode=${picker} tags=${pickable}
+            onPick=${t => { if (!userTagNames.includes(t)) userTagNames.push(t); (picker === 'add' ? save : notFor)(t); }}
+            onCancel=${() => setPicker(null)} />` : null}
         <div class=${'rel_abs' + (long && !open ? ' clamped' : '')} onClick=${() => long && !open && setOpen(true)}>
             <${MathText} text=${p.summary} />
         </div>

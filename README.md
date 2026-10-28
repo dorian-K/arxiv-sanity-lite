@@ -97,6 +97,8 @@ Rate limits: generous per-client limits apply to the requests that cost CPU. A c
 
 Ordinary page views are never limited. The limits are counted in memory per worker, so with N workers a client can get up to N times the limit. Edit `RATE_LIMITS` in `serve.py` to change them, or set `RATE_LIMITS=0` to turn them off. The nginx `limit_req` for `/login` above is optional on top.
 
+Backup: once a day the updater writes one consistent copy of `users.sqlite` (accounts, tags, votes: the only data that can't be rebuilt; KBs to a few MB) to `data/backups/users.sqlite`, replacing the previous copy. Copy it off the VPS however you like. Everything else can be rebuilt: papers from the snapshot and arXiv, features with `compute.py`.
+
 Memory: the features are memory-mapped, so all workers share one copy in the page cache, and each worker adds about 0.5 GB on five years of papers. The whole 460k-paper setup runs in 2–3 GB of RAM. `WEB_THREADS` adds concurrency without adding memory.
 
 #### Weekly digest

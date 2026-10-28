@@ -380,6 +380,20 @@ def log_fetch(user, pid):
     _run('INSERT INTO fetches (time, user, pid) VALUES (?, ?, ?)', (time.time(), user, pid))
 
 
+def backup_users(dest=None):
+    """
+    one consistent copy of users.sqlite (accounts, tags, votes: the only data that can't
+    be rebuilt), replaced atomically each time. also drops fetch log rows older than the
+    day the rate limits look at, the one table that would otherwise keep growing
+    """
+    _run('DELETE FROM fetches WHERE time < ?', (time.time() - 2 * 86400,))
+    dest = dest or os.path.join(DATA_DIR, 'backups', 'users.sqlite')
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    snapshot(USERS_DB_FILE, dest + '.tmp')
+    os.replace(dest + '.tmp', dest)
+    return dest
+
+
 def count_fetches(since, user=None):
     if user is None:
         return _query('SELECT count(*) FROM fetches WHERE time > ?', (since,))[0][0]

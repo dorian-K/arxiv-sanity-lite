@@ -213,6 +213,7 @@ input:focus, select:focus, .btn:focus-visible, .iconbtn:focus-visible {
     border-radius: 999px;
 }
 #cbox_fast a:hover { border-color: var(--link); text-decoration: none; }
+#cbox_fast a.active { border-color: var(--accent); color: var(--accent); font-weight: 600; }
 
 /* ---------------------------------------------------------------------------
    tags and chips */
@@ -253,9 +254,9 @@ input:focus, select:focus, .btn:focus-visible, .iconbtn:focus-visible {
 .chip-neg {
     color: var(--neg);
     background: var(--neg-soft);
-    text-decoration: line-through;
-    cursor: pointer;
 }
+.chip-removable { padding-right: 4px; }
+.chip-removable .chip-x { padding: 0 4px; font-size: 16px; }
 
 /* the tfidf words of the model */
 #wordwrap { margin-top: 4px; }
@@ -340,9 +341,24 @@ input:focus, select:focus, .btn:focus-visible, .iconbtn:focus-visible {
 .rel_utag_add:hover:not(:disabled) { color: var(--tag); border-color: var(--tag); }
 .rel_utag_neg:hover:not(:disabled) { color: var(--neg); border-color: var(--neg); }
 
-.tag-editor { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-.tag-editor input { flex: 1 1 180px; width: auto; min-height: 30px; padding: 3px 10px; font-size: 14px; }
-.tag-editor-neg input { border-color: var(--neg); }
+.rel_utag_add { color: var(--tag); }
+.rel_utag_neg { color: var(--muted); }
+.rel_utag_add.on { background: var(--tag-soft); border-color: var(--tag); }
+.rel_utag_neg.on { color: var(--neg); background: var(--neg-soft); border-color: var(--neg); }
+.tag-picker {
+    margin-top: 10px;
+    padding: 10px 12px;
+    background: var(--surface-2);
+    border-radius: 8px;
+}
+.tag-picker-label { font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+.tag-picker-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.chip-pick { color: var(--tag); background: var(--surface); border-color: var(--tag); cursor: pointer; }
+.chip-pick:hover { background: var(--tag-soft); }
+.tag-picker-neg .chip-pick { color: var(--neg); border-color: var(--neg); }
+.tag-picker-neg .chip-pick:hover { background: var(--neg-soft); }
+.tag-picker-new { display: flex; flex-wrap: wrap; gap: 6px; }
+.tag-picker-new input { flex: 1 1 160px; width: auto; min-height: 32px; padding: 3px 10px; font-size: 14px; }
 
 .rel_abs {
     margin-top: 10px;
@@ -439,3 +455,9 @@ textarea.form-control {
     .nav-secondary { display: none; }
     #footer { display: block; }
 }
+
+/* first visit after signing up */
+.onboarding { margin-bottom: 14px; }
+.onboarding h1 { font-size: 18px; }
+.onboarding ol { margin: 8px 0 0; padding-left: 22px; }
+.onboarding li { margin: 6px 0; line-height: 1.5; }

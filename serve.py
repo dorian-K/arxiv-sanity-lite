@@ -711,7 +711,7 @@ def login():
     session.clear()
     session.permanent = True
     session['user'] = username
-    return redirect(url_for('profile'))
+    return redirect(url_for('main'))
 
 
 @app.route('/logout', methods=['POST'])

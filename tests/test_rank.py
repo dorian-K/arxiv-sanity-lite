@@ -66,3 +66,17 @@ def test_downvotes_push_papers_down(features):
 
 def test_no_positives_returns_empty(features):
     assert rank(features, pos_pids=[]) == ([], [], [])
+
+
+def test_svm_with_sampled_negatives(features):
+    # a cap below the corpus size makes the svm train on a sample of the untagged papers;
+    # the ranking still has to work, and be the same on every reload
+    vision = vision_pids(features)
+    pos = vision[:5]
+    pids, scores, _ = rank(features, pos, model='svm', svm_max_neg=30)
+    again, _, _ = rank(features, pos, model='svm', svm_max_neg=30)
+    assert pids == again
+    rank_of = {p: i for i, p in enumerate(pids)}
+    v = [rank_of[p] for p in vision if p not in pos]
+    l = [rank_of[p] for p in pids if p not in vision]
+    assert np.mean([[a < b for b in l] for a in v]) >= 0.9

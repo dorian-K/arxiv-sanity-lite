@@ -170,7 +170,15 @@ def run(args):
                     train_n = set(sub.sample(sorted(train_n), min(args.train_pos, len(train_n))))
                 t0 = time.time()
                 pids, scores, _ = rank(
-                    features, train_p, train_n, feats=v[0], model=v[1], C=v[2], alpha=args.alpha, fusion_w=args.fusion_w
+                    features,
+                    train_p,
+                    train_n,
+                    feats=v[0],
+                    model=v[1],
+                    C=v[2],
+                    alpha=args.alpha,
+                    fusion_w=args.fusion_w,
+                    svm_max_neg=args.svm_max_neg,
                 )
                 times[v] += time.time() - t0
                 score = dict(zip(pids, scores, strict=True))
@@ -253,6 +261,7 @@ if __name__ == '__main__':
     r.add_argument('--max_profiles', type=int, default=0, help='subsample profiles (0 = all)')
     r.add_argument('--alpha', type=float, default=None, help='concat: embedding block scale')
     r.add_argument('--fusion_w', type=float, default=None, help='fusion: weight of the embedding score')
+    r.add_argument('--svm_max_neg', type=int, default=None, help='svm: untagged papers to train on (0 = all)')
     r.add_argument('--out', default='', help='also write results to this csv')
     r.add_argument(
         '--train_pos',

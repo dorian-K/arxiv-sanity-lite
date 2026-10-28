@@ -52,7 +52,7 @@ The pipeline runs in batch through cron jobs, and the web server only reads its 
 2. **`compute.py`** reads all papers and writes a single pickle, `data/features.p`, with the keys `pids`, `x` (sparse tfidf), `vocab` and `idf`. Embeddings add `x_emb` (dense, PCA'd to 256 dims and L2-normalized) and `emb_model`. `aslite/embed.py` produces those embeddings and caches them per paper in `data/embeddings.db`, with one table per model string, so a rerun only embeds new papers.
 3. **`serve.py`** (Flask) and **`send_emails.py`** both rank through **`aslite/rank.py`**. Its `rank(features, pos_pids, neg_pids, feats, model, C)` trains a small linear model on the fly for each request or tag and returns sorted pids, scores and top tfidf words. Nothing is precomputed per user.
    - `feats`: `tfidf | emb | concat | fusion | auto`. Every option except `tfidf` needs `x_emb`, and `auto` falls back to tfidf when it is missing.
-   - `model`: `svm` (the original: every untagged paper counts as a negative, and downvotes get extra weight) or `logreg` (Scholar Inbox recipe: random negatives plus S/V class weights).
+   - `model`: `svm` (the original: every untagged paper counts as a negative, up to a random 20k sample on big corpora, and downvotes get extra weight) or `logreg` (Scholar Inbox recipe: random negatives plus S/V class weights).
    - `DEFAULT_C` and `DEFAULTS` are untuned starting points, meant to be tuned with `eval.py`.
 
 All file I/O and DB access goes through **`aslite/db.py`**. Scripts don't touch the filesystem directly, so add new storage there.

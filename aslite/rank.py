@@ -14,6 +14,8 @@ Feature sets ("feats"):
 Models ("model"):
     svm     the original arxiv-sanity-lite LinearSVC: every untagged paper is a negative,
             classes balanced. Downvoted papers count as negatives with extra weight.
+            On corpora bigger than svm_max_neg untagged papers, a random sample of them
+            stands in for the rest, so training time stops growing with the corpus.
     logreg  the Scholar Inbox recipe (Flicke et al. 2025, arXiv:2504.08385): logistic
             regression on positives, downvotes and a random sample of other papers,
             with class weights set by S (total negative weight) and V (share of the
@@ -51,6 +53,7 @@ DEFAULTS = dict(
     alpha=1.0,  # concat: scale of the embedding block relative to tfidf
     fusion_w=0.5,  # fusion: weight of the embedding model's score
     svm_neg_weight=5.0,  # svm: sample weight of downvoted papers (other negatives have 1)
+    svm_max_neg=20000,  # svm: train on at most this many untagged papers (0 = all of them)
     n_random=5000,  # logreg: number of random negatives
     S=5.0,  # logreg: total weight of negatives relative to positives
     V=0.8,  # logreg: share of negative weight on downvotes vs random papers
@@ -106,8 +109,22 @@ def _fit_score(x, pos, neg, model, C, opts, seed):
         w = np.ones(n, dtype=np.float32)
         if len(neg):
             w[neg] = opts['svm_neg_weight']
+        rows = np.arange(n)
+        cap = opts['svm_max_neg']
+        if cap and n - len(pos) - len(neg) > cap:
+            # big corpus: train on a random sample of the untagged papers instead of all of
+            # them. scaling the weights by n / sample size keeps the loss an unbiased estimate
+            # of the full one, so the same C works at any corpus size
+            labeled = np.zeros(n, dtype=bool)
+            labeled[pos] = True
+            labeled[neg] = True
+            rng = np.random.default_rng(seed)
+            rand = rng.choice(np.flatnonzero(~labeled), size=cap, replace=False)
+            rows = np.sort(np.concatenate([np.flatnonzero(labeled), rand]))
+            w = w[rows] * (n / len(rows))
+            y = y[rows]
         clf = svm.LinearSVC(class_weight='balanced', max_iter=10000, tol=1e-6, C=C, dual=True)
-        clf.fit(x, y, sample_weight=w)
+        clf.fit(x[rows] if len(rows) < n else x, y, sample_weight=w)
         return clf.decision_function(x), clf.coef_[0]
 
     if model == 'logreg':

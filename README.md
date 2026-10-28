@@ -68,7 +68,7 @@ You can also set `EMBED_MODEL` in the environment instead of passing `--embed_mo
 **Pick features and model per request.** The front page gets two new options, also usable as URL parameters and as `send_emails.py --feats/--model`:
 
 - `feats`: `tfidf`, `emb` (embeddings only), `concat` (both in one model), `fusion` (one model each, scores averaged) or `auto` (concat if embeddings exist, else tfidf).
-- `model`: `svm` (the original), `logreg`, the recipe from [Scholar Inbox](https://arxiv.org/abs/2504.08385): logistic regression on your liked papers, your downvotes and 5000 random other papers, with tuned class weights, or `auto` (logreg if embeddings exist, else svm). svm trains on every paper in the corpus, so it gets slow on 100k+ papers; logreg doesn't.
+- `model`: `svm` (the original), `logreg`, the recipe from [Scholar Inbox](https://arxiv.org/abs/2504.08385): logistic regression on your liked papers, your downvotes and 5000 random other papers, with tuned class weights, or `auto` (logreg if embeddings exist, else svm). svm trains on every paper in the corpus, except on corpora with more than 20k untagged papers, where a random 20k of them stand in for the rest (`svm_max_neg`; with as few as 4k the eval scores are within .002 of using all papers), so it stays usable on any corpus size.
 
 Without embeddings both `auto`s give the original tfidf + svm, so nothing changes until you run `compute.py --embed_model`.
 
@@ -108,7 +108,7 @@ uv run python eval.py run --source si --pool rated
 
 - Adding embeddings to tfidf helps most at telling liked papers from near misses (`auc_hard` .79 → .82) and for small tags (.72 → .77). `concat` and `fusion` are within noise of each other; `auto` picks `concat` because one model also explains the ranking ("why these papers?").
 - EmbeddingGemma 2 (`st:google/embeddinggemma-2`, 270M) beats bge-small (33M) in almost every cell, but only by about .002–.006, a small gain for about 8× the embedding cost on a CPU.
-- With tuned C, `logreg` and `svm` are about equal. `auto` picks `logreg` because its cost doesn't grow with the corpus.
+- With tuned C, `logreg` and `svm` are about equal. `auto` picks `logreg` because it trains on 5k papers instead of 20k.
 - The original default C for logreg (1.0) was far too strong a regularizer; the tuned values are in `DEFAULT_C`.
 
 #### Todos

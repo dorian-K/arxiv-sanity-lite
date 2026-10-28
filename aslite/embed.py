@@ -127,7 +127,7 @@ def embed_papers(pids, pdb, model, batch_size=64, log_every=1000):
             for i in range(0, len(missing), batch_size):
                 batch = missing[i:i + batch_size]
                 x = backend.encode([texts[pid] for pid in batch])
-                for pid, v in zip(batch, x):
+                for pid, v in zip(batch, x, strict=True): # a backend returning the wrong count must not misalign the cache
                     cache[pid] = v.astype(np.float16) # half precision is plenty and halves the db
                 cache.commit()
                 done = i + len(batch)

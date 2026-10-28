@@ -24,7 +24,7 @@ email = ["sendgrid>=6.12"]
 thumbs = ["requests>=2.32"]
 
 [dependency-groups]
-dev = ["pytest>=9.0"]
+dev = ["pytest>=9.0", "ruff>=0.14"]
 
 [tool.uv]
 # a collection of scripts run from the repo root, not an installable package
@@ -43,3 +43,16 @@ torchvision = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+# the code keeps karpathy's style (single quotes, long lines); format only what
+# is inconsistent instead of rewriting every line
+line-length = 120
+
+[tool.ruff.format]
+quote-style = "preserve"
+
+[tool.ruff.lint]
+# bug-finding rules only: pyflakes (unused/undefined names), syntax errors,
+# bugbear (likely mistakes) and pylint errors
+select = ["F", "E9", "B", "PLE"]

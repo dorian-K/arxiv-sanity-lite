@@ -169,7 +169,7 @@ def run(args):
                 pids, scores, _ = rank(features, train_p, train_n, feats=v[0], model=v[1], C=v[2],
                                        alpha=args.alpha, fusion_w=args.fusion_w)
                 times[v] += time.time() - t0
-                score = dict(zip(pids, scores))
+                score = dict(zip(pids, scores, strict=True))
                 rank_of = {p: i for i, p in enumerate(pids)}
                 sp = [score[p] for p in test_p]
                 sn = [score[p] for p in test_n]
@@ -193,7 +193,7 @@ def run(args):
     for v in variants:
         r = results[v]
         label = f"{v[0]}:{v[1]}" + (f":{v[2]:g}" if v[2] is not None else '')
-        def fmt(key):
+        def fmt(key, r=r):
             vals = r.get(key, [])
             if not vals:
                 return float('nan'), float('nan')

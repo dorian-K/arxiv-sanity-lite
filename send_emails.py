@@ -11,7 +11,6 @@ to manually register with sendgrid yourself, get an API key and put it in the fi
 
 import os
 import time
-import random
 import argparse
 
 
@@ -121,19 +120,19 @@ def render_recommendations(user, tags, tag_pids, tag_scores):
     max_score = {}
     max_source_tag = {}
     for tag in tag_pids:
-        for pid, score in zip(tag_pids[tag], tag_scores[tag]):
+        for pid, score in zip(tag_pids[tag], tag_scores[tag], strict=True):
             max_score[pid] = max(max_score.get(pid, -99999), score) # lol
             if max_score[pid] == score:
                 max_source_tag[pid] = tag
 
     # now we have a dict of pid -> max score. sort by score
     max_score_list = sorted(max_score.items(), key=lambda x: x[1], reverse=True)
-    pids, scores = zip(*max_score_list)
+    pids, scores = zip(*max_score_list, strict=True)
 
     # now render the html for each individual recommendation
     parts = []
     n = min(len(scores), args.num_recommendations)
-    for score, pid in zip(scores[:n], pids[:n]):
+    for score, pid in zip(scores[:n], pids[:n], strict=True):
         p = pdb[pid]
         authors = ', '.join(a['name'] for a in p['authors'])
         # crop the abstract
@@ -221,7 +220,7 @@ if __name__ == "__main__":
 
     # read entire db simply into RAM
     with get_tags_db() as tags_db:
-        tags = {k:v for k,v in tags_db.items()}
+        all_tags = {k:v for k,v in tags_db.items()}
 
     with get_neg_tags_db() as neg_db:
         all_neg_tags = {k:v for k,v in neg_db.items()}
@@ -242,7 +241,7 @@ if __name__ == "__main__":
 
     # iterate all users, create recommendations, send emails
     num_sent = 0
-    for user, tags in tags.items():
+    for user, tags in all_tags.items():
 
         # verify that we have an email for this user
         email = emails.get(user, None)

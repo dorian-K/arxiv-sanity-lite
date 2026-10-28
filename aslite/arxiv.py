@@ -22,7 +22,7 @@ def get_response(search_query, start_index=0):
         response = url.read()
 
     if url.status != 200:
-        logger.error(f"arxiv did not return status 200 response")
+        logger.error("arxiv did not return status 200 response")
 
     return response
 

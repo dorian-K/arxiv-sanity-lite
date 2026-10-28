@@ -21,7 +21,7 @@ from flask import session
 
 from aslite.db import get_papers_db, get_metas_db, get_tags_db, get_neg_tags_db, get_last_active_db, get_email_db
 from aslite.db import load_features
-from aslite.rank import rank, resolve_feats, has_embeddings, DEFAULT_C, FEATS, MODELS
+from aslite.rank import rank, resolve_feats, has_embeddings, FEATS, MODELS
 
 # -----------------------------------------------------------------------------
 # inits and globals

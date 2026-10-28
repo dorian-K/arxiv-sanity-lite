@@ -30,12 +30,18 @@ var gvars = {rank: 'digest'};
         </p>
         {% endif %}
         {% if not readonly %}
-        <form action="/digest" method="post">
+        <form action="/digest" method="post" data-busy="Making your digest… one model per tag, this takes a few seconds per tag.">
             <button type="submit" class="btn">{{ 'Make a fresh one' if digest_time else 'Make my digest' }}</button>
         </form>
         {% endif %}
         {% endif %}
     </section>
+    {% if sections %}
+    <div id="viewswitch" role="group" aria-label="view">
+        <button type="button" class="btn btn-small" data-view="cards" title="Title, authors, abstract and buttons">Cards</button>
+        <button type="button" class="btn btn-small" data-view="compact" title="One line per paper; ▸ opens one">Titles only</button>
+    </div>
+    {% endif %}
     <div id="digestwrap"></div>
 </div>
 {% endblock %}

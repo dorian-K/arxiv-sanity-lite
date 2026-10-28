@@ -43,6 +43,7 @@ services:
       ALLOW_SIGNUP: ${ALLOW_SIGNUP:-1}
       WEB_WORKERS: ${WEB_WORKERS:-2}
       WEB_THREADS: ${WEB_THREADS:-4}
+      WARM_CACHES: "1"  # each worker keeps features and paper times loaded, so no request waits for them
       FETCH_LIMIT_USER: ${FETCH_LIMIT_USER:-200}  # papers per user per day that /import may fetch from arXiv
       FETCH_LIMIT_TOTAL: ${FETCH_LIMIT_TOTAL:-2000}
       # the web service mails the confirmation links of the double opt-in; links use

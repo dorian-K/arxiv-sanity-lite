@@ -73,3 +73,63 @@ const MathText = ({ text, tag = 'span', className }) => {
     }, [text]);
     return React.createElement(tag, { ref, className });
 };
+
+// -----------------------------------------------------------------------------
+// a loading indicator while the next page is on its way: the old page stays usable, and
+// after a moment a bar and a line about what is happening show up. a form can say what
+// it is waiting for with data-busy="…"
+
+let busyTimer = null;
+
+function showBusy(msg) {
+    clearTimeout(busyTimer);
+    busyTimer = setTimeout(() => {
+        let elt = document.getElementById('busy');
+        if (!elt) {
+            elt = document.createElement('div');
+            elt.id = 'busy';
+            elt.setAttribute('role', 'status');
+            elt.innerHTML = '<div class="busy-bar"></div><div class="busy-msg"></div>';
+            document.body.appendChild(elt);
+        }
+        elt.querySelector('.busy-msg').textContent = msg;
+        elt.hidden = false;
+    }, 300); // fast pages come back before anything flashes
+}
+
+function hideBusy() {
+    clearTimeout(busyTimer);
+    const elt = document.getElementById('busy');
+    if (elt) elt.hidden = true;
+}
+
+function busyMessage(url) {
+    const q = url.searchParams;
+    if (url.pathname === '/' && q.get('q')) return 'Searching…';
+    if (url.pathname === '/digest') return 'Loading your digest…';
+    return 'Loading…';
+}
+
+// back/forward restores the page from the cache as it was left, indicator included
+window.addEventListener('pageshow', hideBusy);
+
+document.addEventListener('click', e => {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    const a = e.target.closest('a[href]');
+    if (!a || a.target || a.hasAttribute('download')) return;
+    const url = new URL(a.href, window.location.href);
+    if (url.origin !== window.location.origin || url.pathname.startsWith('/static/')) return;
+    if (url.hash && url.pathname === window.location.pathname && url.search === window.location.search) return;
+    showBusy(busyMessage(url));
+});
+
+document.addEventListener('submit', e => {
+    const form = e.target;
+    // React forms (tag picker) handle their submit themselves
+    if (e.defaultPrevented || form.target) return;
+    const url = new URL(form.action, window.location.href);
+    if (form.method.toLowerCase() === 'get') {
+        url.search = new URLSearchParams(new FormData(form)).toString();
+    }
+    showBusy(form.dataset.busy || busyMessage(url));
+});

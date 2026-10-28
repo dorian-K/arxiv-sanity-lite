@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 import time
 import threading
 from random import shuffle
+from collections import OrderedDict
 
 import numpy as np
 
@@ -36,6 +37,7 @@ from aslite.rank import rank, holdout_ranks, resolve_feats, resolve_model, has_e
 # inits and globals
 
 RET_NUM = 25  # number of papers to return per page
+FOR_YOU_DAYS = 30  # "For you", the main page of users with tags: the best papers of this many days
 USERNAME_RE = re.compile(r'^[A-Za-z0-9_.-]{1,40}$')
 MIN_PASSWORD = 8
 
@@ -152,21 +154,57 @@ def get_papers():
     return g._pdb
 
 
-_times_cache = {}
+_times = None  # (mtime, pid -> time, pids newest first), swapped in one piece
 _times_lock = threading.Lock()
+
+
+def _load_times():
+    pdb = get_papers_db()
+    try:
+        times = pdb.times()
+    finally:
+        pdb.close()
+    return times, sorted(times, key=times.get, reverse=True)
 
 
 def get_times():
     """
     (pid -> time, pids newest first) for all papers. reading every meta takes seconds on a
-    big corpus, so each worker keeps them in memory until the papers database changes
+    big corpus, so each worker keeps them in memory until the papers database changes.
+    while one thread re-reads them, the others keep answering from the old ones
     """
+    global _times
     mtime = db.db_mtime(PAPERS_DB_FILE)
-    with _times_lock:
-        if _times_cache.get('mtime') != mtime:
-            times = get_papers().times()
-            _times_cache.update(mtime=mtime, times=times, order=sorted(times, key=times.get, reverse=True))
-        return _times_cache['times'], _times_cache['order']
+    cached = _times
+    if cached and cached[0] == mtime:
+        return cached[1], cached[2]
+    if not _times_lock.acquire(blocking=cached is None):
+        return cached[1], cached[2]
+    try:
+        if not (_times and _times[0] == mtime):
+            _times = (mtime, *_load_times())
+        return _times[1], _times[2]
+    finally:
+        _times_lock.release()
+
+
+def _warm_caches():
+    """
+    keeps this worker's features and paper times loaded, also right after the updater
+    wrote new ones, so no request has to wait seconds for them (WARM_CACHES=1, docker)
+    """
+    while True:
+        try:
+            if features_exist():
+                load_features()
+            get_times()
+        except Exception as e:  # e.g. a database mid-replace: try again next round
+            print("cache warmup failed: %s" % (e,))
+        time.sleep(15)
+
+
+if os.environ.get('WARM_CACHES') == '1':
+    threading.Thread(target=_warm_caches, daemon=True, name='warm-caches').start()
 
 
 def _session_version(user):
@@ -280,7 +318,7 @@ def svm_rank(tags: str = '', pid: str = '', C=None, feats='auto', model='auto'):
     # tag can be one tag or a few comma-separated tags or 'all' for all tags we have in db
     # pid can be a specific paper id to set as positive for a kind of nearest neighbor search
     if not (tags or pid) or not features_exist():  # no features before compute.py's first run
-        return [], [], []
+        return [], [], [], 0, 0
 
     features = load_features()
 
@@ -298,7 +336,20 @@ def svm_rank(tags: str = '', pid: str = '', C=None, feats='auto', model='auto'):
             if tag in tags_filter_to:
                 neg |= pids
 
-    return rank(features, pos, neg, feats=feats, model=model, C=C)
+    # papers added since the last compute.py run have no features yet, so they can't count
+    unindexed = sum(p not in features['ptoi'] for p in pos)
+    return (*rank(features, pos, neg, feats=feats, model=model, C=C), unindexed, len(pos))
+
+
+def saved_rank(tags: str = ''):
+    """the papers saved to these tags ('all' = every tag), newest first"""
+    tags_db = get_tags()
+    names = set(tags_db) if tags == 'all' else set(tags.split(','))
+    pos = set().union(*(pids for t, pids in tags_db.items() if t in names))
+    times = get_times()[0]
+    pids = sorted(pos, key=lambda p: times.get(p, 0), reverse=True)
+    tnow = time.time()
+    return pids, [(tnow - times.get(p, tnow)) / 86400 for p in pids]
 
 
 def search_rank(q: str = ''):
@@ -327,6 +378,114 @@ def default_context():
     return context
 
 
+RANKS = ('search', 'tags', 'saved', 'pid', 'time', 'random')
+# training a model over every paper takes seconds on a big corpus: the page comes back at
+# once with a placeholder and fetches these results in the background (?format=json)
+SLOW_RANKS = ('tags', 'pid')
+# results are cached per user and query, so paging, going back and reloading are instant.
+# a vote changes the user's tags and with them the key; the TTL covers "last N days"
+RANK_CACHE_SIZE = 200
+RANK_CACHE_TTL = 600
+RANK_CACHE_RESULTS = 40 * RET_NUM  # pages beyond the 40th are ranked again
+_rank_cache = OrderedDict()
+_rank_cache_lock = threading.Lock()
+
+
+def _rank_cache_get(key):
+    with _rank_cache_lock:
+        hit = _rank_cache.get(key)
+        if hit is None or time.time() - hit[0] > RANK_CACHE_TTL:
+            return None
+        _rank_cache.move_to_end(key)
+        return hit[1]
+
+
+def _rank_cache_put(key, value):
+    with _rank_cache_lock:
+        _rank_cache[key] = (time.time(), value)
+        _rank_cache.move_to_end(key)
+        while len(_rank_cache) > RANK_CACHE_SIZE:
+            _rank_cache.popitem(last=False)
+
+
+def _tags_fingerprint():
+    """changes with any like, downvote or neutral of the user"""
+    return hash(
+        tuple((k, frozenset(v)) for d in (get_tags(), get_neg_tags(), get_seen_tags()) for k, v in sorted(d.items()))
+    )
+
+
+def _ranked(opt_rank, opt_q, opt_tags, opt_pid, opt_time_filter, opt_skip_have, C, opt_feats, opt_model):
+    """the ranked and filtered results of a query: see main()"""
+    words, unindexed, n_pos = [], 0, 0  # words: only for model rankings
+    if opt_rank == 'search':
+        pids, scores = search_rank(q=opt_q)
+    elif opt_rank == 'tags':
+        pids, scores, words, unindexed, n_pos = svm_rank(tags=opt_tags, C=C, feats=opt_feats, model=opt_model)
+    elif opt_rank == 'pid':
+        pids, scores, words, unindexed, n_pos = svm_rank(pid=opt_pid, C=C, feats=opt_feats, model=opt_model)
+    elif opt_rank == 'saved':
+        pids, scores = saved_rank(tags=opt_tags)
+    elif opt_rank == 'time':
+        pids, scores = time_rank()
+    else:
+        pids, scores = random_rank()
+
+    # where each paper landed among all papers, before filters: shown as "top 0.3%"
+    n_ranked = len(pids)
+    keep = range(len(pids))
+
+    # filter by time
+    if opt_time_filter:
+        times = get_times()[0]
+        tnow = time.time()
+        deltat = int(opt_time_filter) * 60 * 60 * 24  # allowed time delta in seconds
+        keep = [i for i in keep if (tnow - times.get(pids[i], 0)) < deltat]
+
+    # optionally hide papers we already have (tagged, downvoted or marked neutral)
+    if opt_skip_have == 'yes' and opt_rank != 'saved':
+        have = set().union(*get_tags().values(), *get_neg_tags().values(), *get_seen_tags().values())
+        keep = [i for i in keep if pids[i] not in have]
+
+    keep = list(keep)
+    pct = [(i + 1) / n_ranked for i in keep] if opt_rank in SLOW_RANKS else None
+    return {
+        'pids': [pids[i] for i in keep],
+        'scores': [float(scores[i]) for i in keep],
+        'pct': pct,
+        'words': words,
+        'unindexed': unindexed,
+        'n_pos': n_pos,
+    }
+
+
+def _notice(opt_rank, opt_tags, res, features_ok):
+    """why a ranking is empty or incomplete because papers are still being processed"""
+    if opt_rank not in SLOW_RANKS:
+        return ''
+    if not features_ok:
+        return (
+            "The recommendation index is still being built (this happens once, after the first start). "
+            "Search and the newest papers work meanwhile; recommendations show up when it is done."
+        )
+    if not res['unindexed']:
+        return ''
+    if opt_rank == 'pid':
+        return (
+            "This paper was added recently and isn't in the recommendation index yet. "
+            "Similar papers show up after the next index update, usually within an hour."
+        )
+    if res['unindexed'] == res['n_pos']:
+        return (
+            "The papers in this tag were added recently and aren't in the recommendation index yet. "
+            "Recommendations show up after the next index update, usually within an hour."
+        )
+    return (
+        f"{res['unindexed']} of the {res['n_pos']} papers here were added recently and only count "
+        "once the recommendation index is updated, usually within an hour."
+    )
+
+
 @app.route('/', methods=['GET'])
 def main():
 
@@ -335,11 +494,14 @@ def main():
     default_tags = ''
     default_time_filter = ''
     default_skip_have = 'no'
+    if not request.args and get_tags():
+        # the main use: a user with tags lands on the best recent papers for them (FOR_YOU_DAYS)
+        default_rank, default_tags, default_time_filter, default_skip_have = 'tags', 'all', str(FOR_YOU_DAYS), 'yes'
 
     # override variables with any provided options via the interface
-    opt_rank = request.args.get('rank', default_rank)  # rank type. search|tags|pid|time|random
+    opt_rank = request.args.get('rank', default_rank)  # rank type, one of RANKS
     opt_q = request.args.get('q', '')  # search request in the text box
-    opt_tags = request.args.get('tags', default_tags)  # tags to rank by if opt_rank == 'tag'
+    opt_tags = request.args.get('tags', default_tags)  # tags to rank by if opt_rank == 'tags' (or list, 'saved')
     opt_pid = request.args.get('pid', '')  # pid to find nearest neighbors to
     opt_time_filter = request.args.get('time_filter', default_time_filter)  # number of days to filter by
     opt_skip_have = request.args.get('skip_have', default_skip_have)  # hide papers we already have?
@@ -347,6 +509,7 @@ def main():
     opt_feats = request.args.get('feats', 'auto')  # auto|tfidf|emb|concat|fusion, see aslite/rank.py
     opt_model = request.args.get('model', 'auto')  # auto|svm|logreg, see aslite/rank.py
     opt_page_number = request.args.get('page_number', '1')  # page number for pagination
+    want_json = request.args.get('format') == 'json'  # the page fetching slow results, see SLOW_RANKS
 
     # if a query is given, override rank to be of type "search"
     # this allows the user to simply hit ENTER in the search field and have the correct thing happen
@@ -361,12 +524,16 @@ def main():
             C = None
     except ValueError:
         C = None
-    if opt_rank not in ('search', 'tags', 'pid', 'time', 'random'):
+    if opt_rank not in RANKS:
         opt_rank = default_rank
     try:
         opt_time_filter = str(min(36500, max(1, int(opt_time_filter)))) if opt_time_filter else ''
     except ValueError:
         opt_time_filter = ''
+    try:
+        page_number = max(1, int(opt_page_number))
+    except ValueError:
+        page_number = 1
     features_ok = features_exist()
     if opt_model not in MODELS:
         opt_model = 'auto'
@@ -375,58 +542,37 @@ def main():
     eff_feats = resolve_feats(load_features(), opt_feats) if features_ok else 'tfidf'
     eff_model = resolve_model(load_features(), opt_model) if features_ok else 'svm'
 
-    # rank papers: by tags, by time, by random
-    words = []  # only populated in the case of svm rank
-    if opt_rank in ('tags', 'pid', 'search') and rate_limited('search' if opt_rank == 'search' else 'rank'):
-        return too_many('search' if opt_rank == 'search' else 'rank')
-    if opt_rank == 'search':
-        pids, scores = search_rank(q=opt_q)
-    elif opt_rank == 'tags':
-        pids, scores, words = svm_rank(tags=opt_tags, C=C, feats=opt_feats, model=opt_model)
-    elif opt_rank == 'pid':
-        pids, scores, words = svm_rank(pid=opt_pid, C=C, feats=opt_feats, model=opt_model)
-    elif opt_rank == 'time':
-        pids, scores = time_rank()
-    elif opt_rank == 'random':
-        pids, scores = random_rank()
-    else:
-        raise ValueError("opt_rank %s is not a thing" % (opt_rank,))
+    # rank and filter, from the cache if this user asked the same recently
+    query = (opt_rank, opt_q, opt_tags, opt_pid, opt_time_filter, opt_skip_have, C, opt_feats, opt_model)
+    cacheable = opt_rank in ('search', 'tags', 'pid') and page_number * RET_NUM <= RANK_CACHE_RESULTS
+    key = (g.user, query, features_ok and db.features_version(), db.db_mtime(PAPERS_DB_FILE), _tags_fingerprint())
+    res = _rank_cache_get(key) if cacheable else None
+    pending = res is None and opt_rank in SLOW_RANKS and features_ok and not want_json
+    if res is None and not pending:
+        if opt_rank in ('tags', 'pid', 'search') and rate_limited('search' if opt_rank == 'search' else 'rank'):
+            return too_many('search' if opt_rank == 'search' else 'rank')
+        res = _ranked(*query)
+        if cacheable:
+            res['pids'], res['scores'] = res['pids'][:RANK_CACHE_RESULTS], res['scores'][:RANK_CACHE_RESULTS]
+            res['pct'] = res['pct'] and res['pct'][:RANK_CACHE_RESULTS]
+            _rank_cache_put(key, res)
 
-    # where each paper landed among all papers, before filters: shown as "top 0.3%"
-    n_ranked = len(pids)
-    position = {p: i for i, p in enumerate(pids)} if opt_rank in ('tags', 'pid') else {}
-
-    # filter by time
-    if opt_time_filter:
-        times = get_times()[0]
-        tnow = time.time()
-        deltat = int(opt_time_filter) * 60 * 60 * 24  # allowed time delta in seconds
-        keep = [i for i, pid in enumerate(pids) if (tnow - times.get(pid, 0)) < deltat]
-        pids, scores = [pids[i] for i in keep], [scores[i] for i in keep]
-
-    # optionally hide papers we already have (tagged or downvoted)
-    if opt_skip_have == 'yes':
-        have = set().union(*get_tags().values(), *get_neg_tags().values(), *get_seen_tags().values())
-        keep = [i for i, pid in enumerate(pids) if pid not in have]
-        pids, scores = [pids[i] for i in keep], [scores[i] for i in keep]
-
-    # crop the number of results to RET_NUM, and paginate
-    try:
-        page_number = max(1, int(opt_page_number))
-    except ValueError:
-        page_number = 1
-    start_index = (page_number - 1) * RET_NUM  # desired starting index
-    end_index = min(start_index + RET_NUM, len(pids))  # desired ending index
-    pids = pids[start_index:end_index]
-    scores = scores[start_index:end_index]
-
-    # render all papers to just the information we need for the UI
-    found = get_papers().get_many(pids)
-    papers = [render_pid(pid, found[pid]) for pid in pids]
-    for i, p in enumerate(papers):
-        p['weight'] = float(scores[i])
-        if p['id'] in position:
-            p['pct'] = (position[p['id']] + 1) / n_ranked
+    # the requested page, rendered to just the information the UI needs
+    papers, has_next, words = [], False, []
+    notice = _notice(opt_rank, opt_tags, res, features_ok) if res is not None else ''
+    if res is not None:
+        start_index = (page_number - 1) * RET_NUM
+        pids = res['pids'][start_index : start_index + RET_NUM]
+        has_next = len(res['pids']) > start_index + RET_NUM
+        found = get_papers().get_many(pids)
+        papers = [render_pid(pid, found[pid]) for pid in pids if pid in found]
+        for i, p in enumerate(papers):
+            p['weight'] = res['scores'][start_index + i]
+            if res['pct']:
+                p['pct'] = res['pct'][start_index + i]
+        words = res['words']
+    if want_json:
+        return {'papers': papers, 'words': words, 'has_next': has_next, 'notice': notice}
 
     # build the current tags for the user, and append the special 'all' tag
     tags = get_tags()
@@ -449,6 +595,10 @@ def main():
             else ""
         )
     )
+    # the page about one tag (or 'all'): tabs for its recommendations and its saved papers
+    tag_names = [t for t in opt_tags.split(',') if t] if opt_rank in ('tags', 'saved') else []
+    context['tag_view'] = bool(tag_names) and all(t == 'all' or t in tags for t in tag_names)
+    context['n_saved'] = len(saved_rank(opt_tags)[0]) if context['tag_view'] else 0
     context['gvars'] = {}
     context['gvars']['rank'] = opt_rank
     context['gvars']['tags'] = opt_tags
@@ -463,6 +613,10 @@ def main():
     context['gvars']['eff_model'] = eff_model
     context['gvars']['has_emb'] = features_ok and has_embeddings(load_features())
     context['gvars']['page_number'] = str(page_number)
+    context['gvars']['has_next'] = has_next
+    context['gvars']['pending'] = pending
+    context['gvars']['notice'] = notice
+    context['for_you_days'] = FOR_YOU_DAYS
     return render_template('index.html', **context)
 
 
@@ -668,11 +822,11 @@ def import_papers():
     text = request.form.get('text', '')
     tag = request.form.get('tag', '').strip()
     context.update(text=text, tag=tag)
-    if tag:
-        err = _check_tag(tag)
-        if err:
-            context['error'] = err
-            return render_template('import.html', **context), 400
+    # a tag is required: untagged papers would only sit in the database, found by search alone
+    err = _check_tag(tag) if tag else "Pick a tag for these papers, or type a new one."
+    if err:
+        context['error'] = err
+        return render_template('import.html', **context), 400
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     if len(lines) > IMPORT_MAX_LINES:
         context['error'] = f"At most {IMPORT_MAX_LINES} lines at a time."
@@ -728,7 +882,7 @@ def import_papers():
         else:
             r[2] = 'not found on arXiv'
             r[1] = None
-        if tag and r[1]:
+        if r[1]:
             db.tag_paper(g.user, pid, tag)
     found = pdb.get_many([r[1] for r in results if r[1]])
     context['results'] = [

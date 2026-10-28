@@ -19,9 +19,14 @@ def test_tag_rank_and_downvote(client, corpus):
     assert client.post(f'/addneg/{vision[4]}/cv').data.startswith(b'ok')
 
     for model in ['svm', 'logreg']:
+        # the page comes back at once with a placeholder, and fetches the ranking as json
         r = client.get(f'/?rank=tags&tags=cv&model={model}')
-        assert r.status_code == 200
-        assert b'2601.' in r.data
+        assert r.status_code == 200 and b'"pending": true' in r.data
+        res = client.get(f'/?rank=tags&tags=cv&model={model}&format=json').get_json()
+        assert res['papers'] and res['papers'][0]['id'].startswith('2601.')
+        # from then on it is cached: the page itself has the papers
+        r = client.get(f'/?rank=tags&tags=cv&model={model}')
+        assert b'"pending": false' in r.data and b'2601.' in r.data
 
     # liking a downvoted paper moves it from neg_tags to tags
     client.post(f'/add/{vision[4]}/cv')
@@ -152,7 +157,7 @@ def test_import_papers(client, corpus, monkeypatch):
 
     # fetches count against the daily limit; papers we already have don't
     monkeypatch.setattr(serve, 'FETCH_LIMIT_USER', 3)
-    r = client.post('/import', data={'text': '2502.00001\n2502.00002\n1706.03762'})
+    r = client.post('/import', data={'text': '2502.00001\n2502.00002\n1706.03762', 'tag': 'reading'})
     assert 'over the daily fetch limit' in r.data.decode()
     assert calls[-1] == ['2502.00001']
 
@@ -163,17 +168,19 @@ def test_rate_limits(client, corpus, monkeypatch):
     monkeypatch.setattr(
         serve, 'RATE_LIMITS', {'rank': (2, 60), 'search': (3, 60), 'login': (2, 300), 'import': (1, 3600)}
     )
-    pid = next(iter(corpus))
-    assert [client.get(f'/?rank=pid&pid={pid}').status_code for _ in range(3)] == [200, 200, 429]
-    assert [client.get('/?q=vision').status_code for _ in range(4)] == [200, 200, 200, 429]
+    pids = list(corpus)
+    # distinct queries: a repeated one comes from the cache and costs nothing
+    assert [client.get(f'/?rank=pid&pid={p}&format=json').status_code for p in pids[:3]] == [200, 200, 429]
+    assert client.get(f'/?rank=pid&pid={pids[0]}&format=json').status_code == 200  # cached
+    assert [client.get(f'/?q=vision{i}').status_code for i in range(4)] == [200, 200, 200, 429]
     assert client.get('/').status_code == 200  # cheap pages are never limited
     login(client)  # signs up; the login limit counts this attempt too
     assert login(client, password='wrong password').status_code == 403
     assert login(client, password='wrong password').status_code == 429
     # logged in, a client is the user rather than the ip: a fresh budget, then the limit again
-    codes = [client.get(f'/?rank=pid&pid={pid}').status_code for _ in range(3)]
+    codes = [client.get(f'/?rank=pid&pid={p}&format=json').status_code for p in pids[3:6]]
     assert codes == [200, 200, 429]
-    r = client.get(f'/?rank=pid&pid={pid}')
+    r = client.get(f'/?rank=pid&pid={pids[6]}&format=json')
     assert r.status_code == 429 and int(r.headers['Retry-After']) >= 1
 
 
@@ -223,5 +230,49 @@ def test_tag_check_and_rank_percentiles(client, corpus):
     assert [m['id'] for m in r['misfits']][:1] == [language[0]]  # and the odd one out is flagged first
     assert client.get('/tag_check?tag=nope').status_code == 404
     # rankings carry each paper's rank among all papers
-    page = client.get('/?rank=tags&tags=cv').data.decode()
-    assert '"pct":' in page and 'tagcheckwrap' in page
+    res = client.get('/?rank=tags&tags=cv&format=json').get_json()
+    assert all(0 < p['pct'] <= 1 for p in res['papers'])
+    assert 'tagcheckwrap' in client.get('/?rank=tags&tags=cv').data.decode()
+
+
+def test_tag_pages_and_landing(client, corpus):
+    from aslite import db
+
+    login(client)
+    assert b'"rank": "time"' in client.get('/').data  # nothing saved yet: the newest papers
+    vision = [p for p in corpus if corpus[p]['tags'][0]['term'] == 'cs.CV']
+    for p in vision[:3]:
+        client.post(f'/add/{p}/cv')
+    # with tags, the main page is the best recent papers for them
+    page = client.get('/').data.decode()
+    assert '"rank": "tags"' in page and '"tags": "all"' in page and '"time_filter": "30"' in page
+    # every tag has a page with its saved papers, newest first
+    page = client.get('/?rank=saved&tags=cv').data.decode()
+    assert 'Saved (3)' in page and all(p in page for p in vision[:3]) and vision[3] not in page
+    times = db.get_papers_db().times()
+    shown = [p for p in page.split('"id": "')[1:]]
+    ids = [x.split('"')[0] for x in shown]
+    assert ids == sorted(vision[:3], key=times.get, reverse=True)
+
+
+def test_unindexed_papers_are_explained(client, corpus):
+    import random
+
+    from aslite import db
+    from conftest import make_paper
+
+    login(client)
+    new = make_paper(999, 'vision', random.Random(5))
+    new.update(_id='2602.99999', _idv='2602.99999v1')
+    db.get_papers_db().upsert([new])  # added after compute.py ran: not in the features yet
+    client.post('/add/2602.99999/fresh')
+    res = client.get('/?rank=tags&tags=fresh&format=json').get_json()
+    assert res['papers'] == [] and 'added recently' in res['notice']
+    res = client.get('/?rank=pid&pid=2602.99999&format=json').get_json()
+    assert 'added recently' in res['notice']
+
+
+def test_import_needs_a_tag(client, corpus):
+    login(client)
+    r = client.post('/import', data={'text': next(iter(corpus))})
+    assert r.status_code == 400 and b'Pick a tag' in r.data

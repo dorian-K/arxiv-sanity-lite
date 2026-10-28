@@ -13,4 +13,7 @@ const WordList = ({ words, words_desc }) => html`
         <div id="wordList" class="rel_words">${words.map((w, ix) => html`<${Word} key=${ix} word=${w} />`)}</div>
     </div>`;
 
-mount(html`<${WordList} words=${words} words_desc=${words_desc} />`, 'wordwrap');
+// shown with the page, or once results computed in the background arrive (see Results)
+const showWords = w => w.length && mount(html`<${WordList} words=${w} words_desc=${words_desc} />`, 'wordwrap');
+if (words.length) showWords(words);
+else window.addEventListener('words', e => showWords(e.detail), { once: true });

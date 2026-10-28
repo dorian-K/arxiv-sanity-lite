@@ -11,6 +11,7 @@ var gvars = {{ gvars | tojson }};
 var move_page = function(int_offset) {
     var queryParams = new URLSearchParams(window.location.search);
     queryParams.set("page_number", Math.max(1, parseInt(gvars.page_number) + int_offset));
+    showBusy('Loading page ' + queryParams.get('page_number') + '…');
     window.location.href = '/?' + queryParams.toString();
 }
 </script>
@@ -28,7 +29,7 @@ var move_page = function(int_offset) {
     <ol>
         <li><b>Find a few papers you like</b>: search below, browse the newest, or paste arXiv links on the <a href="/import">add</a> page.</li>
         <li><b>Hit + Save</b> on each and give them a tag, like <i>diffusion</i> or <i>robot learning</i>. One tag per topic you follow.</li>
-        <li><b>Open "For you"</b>: new papers ranked by your tags. "✗ Not for me" on a bad match makes it better, and every Sunday your <a href="/digest">digest</a> collects the week's best.</li>
+        <li><b>Open "For you"</b>: the best papers of the last {{ for_you_days }} days for your tags (from then on, this page opens there). "✗ Not for me" on a bad match makes it better, and every Sunday your <a href="/digest">digest</a> collects the week's best.</li>
     </ol>
 </section>
 {% endif %}
@@ -50,48 +51,58 @@ var move_page = function(int_offset) {
                     {%- if gvars.rank in ('tags', 'pid') %} · {{ gvars.eff_feats }} + {{ gvars.eff_model }}{% endif -%}
                 </span>
             </summary>
+            <!-- every option says what it does: as a tooltip, and in a line below it for touch screens -->
             <div id="optgrid">
-                <label>rank by
+                <label title="How the list is ordered">rank by
                     <select name="rank" id="rank_select">
-                        <option value="search" {{ gvars.rank == 'search' and 'selected' }}>search</option>
-                        <option value="tags" {{ gvars.rank == 'tags' and 'selected' }}>tags</option>
-                        <option value="pid" {{ gvars.rank == 'pid' and 'selected' }}>similar to paper</option>
-                        <option value="time" {{ gvars.rank == 'time' and 'selected' }}>newest</option>
-                        <option value="random" {{ gvars.rank == 'random' and 'selected' }}>random</option>
+                        <option value="tags" {{ gvars.rank == 'tags' and 'selected' }} title="Best matches for the tags below: a model learns from the papers you saved (and marked 'not for me') and scores every paper">recommended for tags</option>
+                        <option value="saved" {{ gvars.rank == 'saved' and 'selected' }} title="The papers you saved to the tags below, newest first">saved in tags</option>
+                        <option value="pid" {{ gvars.rank == 'pid' and 'selected' }} title="Papers most like the one paper id below">similar to paper</option>
+                        <option value="search" {{ gvars.rank == 'search' and 'selected' }} title="Full-text search of titles, authors and abstracts">search</option>
+                        <option value="time" {{ gvars.rank == 'time' and 'selected' }} title="Everything, newest first">newest</option>
+                        <option value="random" {{ gvars.rank == 'random' and 'selected' }} title="A random sample, to stumble on things">random</option>
                     </select>
+                    <small>recommended / saved use "tags", similar uses "paper id"</small>
                 </label>
-                <label>tags
+                <label title="Which of your tags to use: one name, several separated by commas, or all">tags
                     <input name="tags" type="text" id="tags_field" value="{{ gvars.tags }}" placeholder="e.g. all, or rl,vision">
+                    <small>one, several (a,b) or all</small>
                 </label>
-                <label>paper id
+                <label title="An arXiv id like 2504.08385, for 'similar to paper'">paper id
                     <input name="pid" type="text" id="pid_field" value="{{ gvars.pid }}" placeholder="2504.08385">
+                    <small>for "similar to paper"</small>
                 </label>
-                <label>last N days
+                <label title="Only papers that came out in the last N days; empty = any time">last N days
                     <input name="time_filter" type="number" min="1" id="time_filter_field" value="{{ gvars.time_filter }}" placeholder="any">
+                    <small>empty = any time</small>
                 </label>
                 <!-- which features and model rank papers for tags/pid, see aslite/rank.py -->
-                <label>features
+                <label title="What a paper looks like to the model. tfidf: the words of its title and abstract. emb: a neural text embedding that also catches meaning without shared words. concat: both together (usually best). fusion: two separate models, scores averaged. auto picks the tuned default">features
                     <select name="feats" id="feats_select">
                         {% for f in (['auto', 'tfidf', 'emb', 'concat', 'fusion'] if gvars.has_emb else ['tfidf']) %}
                         <option value="{{ f }}" {{ gvars.feats == f and 'selected' }}>{{ f }}{{ ' (' + gvars.eff_feats + ')' if f == 'auto' else '' }}</option>
                         {% endfor %}
                     </select>
+                    <small>how papers are compared; auto is tuned</small>
                 </label>
-                <label>model
+                <label title="The model that learns from your saved papers. svm: every other paper counts as a 'no' (the original arxiv-sanity). logreg: a random sample of papers counts as 'no', and your 'not for me' papers more. auto picks the tuned default">model
                     <select name="model" id="model_select">
                         {% for m in ['auto', 'svm', 'logreg'] %}
                         <option value="{{ m }}" {{ gvars.model == m and 'selected' }}>{{ m }}{{ ' (' + gvars.eff_model + ')' if m == 'auto' else '' }}</option>
                         {% endfor %}
                     </select>
+                    <small>what learns from your papers; auto is tuned</small>
                 </label>
-                <label title="C: inverse regularization strength, lower is smoother. empty = tuned default">regularization C
+                <label title="How closely the model follows your saved papers. Lower: smoother, broader matches. Higher: sticks closer to exactly what you saved. Empty = tuned default">regularization C
                     <input name="svm_c" type="text" id="svm_c_field" value="{{ gvars.svm_c }}" placeholder="default">
+                    <small>lower = broader matches</small>
                 </label>
-                <label>hide papers I tagged
+                <label title="Leave out papers you already saved, marked 'not for me' or neutral, so only new ones are listed">hide papers I rated
                     <select name="skip_have" id="skip_have_select">
                         <option value="yes" {{ gvars.skip_have == 'yes' and 'selected' }}>yes</option>
                         <option value="no" {{ gvars.skip_have == 'no' and 'selected' }}>no</option>
                     </select>
+                    <small>only papers you haven't rated</small>
                 </label>
             </div>
             <button type="submit" class="btn">Apply</button>
@@ -101,8 +112,8 @@ var move_page = function(int_offset) {
     <!-- some hand-coded common choices for faster and more convenient operation -->
     <nav id="cbox_fast" aria-label="shortcuts">
         {% if tags %}
-        <a href="/?rank=tags&tags=all&time_filter=7&skip_have=yes" class="{{ 'active' if gvars.rank == 'tags' and gvars.tags == 'all' and gvars.time_filter == '7' }}">For you · last week</a>
-        <a href="/?rank=tags&tags=all&time_filter=3&skip_have=yes" class="{{ 'active' if gvars.rank == 'tags' and gvars.tags == 'all' and gvars.time_filter == '3' }}">For you · last 3 days</a>
+        <a href="/?rank=tags&tags=all&time_filter={{ for_you_days }}&skip_have=yes" class="{{ 'active' if gvars.rank == 'tags' and gvars.tags == 'all' }}">For you</a>
+        <a href="/?rank=saved&tags=all" class="{{ 'active' if gvars.rank == 'saved' and gvars.tags == 'all' }}">Saved</a>
         {% endif %}
         <a href="/?rank=time" class="{{ 'active' if gvars.rank == 'time' and not gvars.time_filter }}">Newest</a>
         <a href="/?rank=random&time_filter=7">Random · last week</a>
@@ -111,12 +122,40 @@ var move_page = function(int_offset) {
 
 {% if user and tags %}
 <section id="tagwrap"></section>
+{% endif %}
+
+{% if tag_view %}
+{% set all = gvars.tags == 'all' %}
+{% set where = '' if all else ' to ' + gvars.tags %}
+<!-- the page of one tag (or of all): its recommendations and the papers saved to it -->
+<section id="taghead">
+    <h1>{{ 'For you' if all else gvars.tags }}</h1>
+    <nav class="tabs" aria-label="{{ gvars.tags }}">
+        <a href="/?rank=tags&tags={{ gvars.tags | urlencode }}&skip_have=yes{{ '&time_filter=%d' % for_you_days if all }}" class="{{ 'active' if gvars.rank == 'tags' }}">Recommended</a>
+        <a href="/?rank=saved&tags={{ gvars.tags | urlencode }}" class="{{ 'active' if gvars.rank == 'saved' }}">Saved ({{ n_saved }})</a>
+    </nav>
+    <p class="muted">
+        {% if gvars.rank == 'tags' %}
+        Papers{% if gvars.time_filter %} from the last {{ gvars.time_filter }} days{% endif %}, ranked by how well they match
+        the {{ n_saved }} papers you saved{{ where }}{% if gvars.skip_have == 'yes' %}; the saved ones themselves are under "Saved"{% endif %}.
+        {% if not readonly %}{{ '👍 / 👎 on each paper' if not all else '"+ Save" and "✗ Not for me"' }} teach it what you want.{% endif %}
+        {% else %}
+        All papers you saved{{ where }}, newest first.
+        {% endif %}
+    </p>
+</section>
 <section id="tagcheckwrap"></section>
 {% endif %}
 
-{% if user and words %}
+{% if user and gvars.rank in ('tags', 'pid') %}
 <section id="wordwrap" hidden></section>
 {% endif %}
+
+<!-- cards with everything, or one line per paper (remembered in this browser) -->
+<div id="viewswitch" role="group" aria-label="view">
+    <button type="button" class="btn btn-small" data-view="cards" title="Title, authors, abstract and buttons">Cards</button>
+    <button type="button" class="btn btn-small" data-view="compact" title="One line per paper; ▸ opens one">Titles only</button>
+</div>
 
 <!-- main content showing all the papers as a list -->
 <section id="wrap"></section>
@@ -124,7 +163,7 @@ var move_page = function(int_offset) {
 <nav id="pagination" aria-label="pages">
     <button id="link-prev-page" class="btn" onclick="move_page(-1);" {{ 'disabled' if gvars.page_number == '1' }}>← prev</button>
     <span>page {{ gvars.page_number }}</span>
-    <button id="link-next-page" class="btn" onclick="move_page(1);" {{ 'disabled' if papers|length < 25 }}>next →</button>
+    <button id="link-next-page" class="btn" onclick="move_page(1);" {{ 'disabled' if not gvars.has_next }}>next →</button>
 </nav>
 {% endblock %}
 

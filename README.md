@@ -12,6 +12,8 @@ It is a fork of Andrej Karpathy's [arxiv-sanity-lite](https://github.com/karpath
 
 ![Screenshot](screenshot.jpg)
 
+How it's used: save a few papers to a tag (from search, the newest list, or the "add" page with arXiv links). From then on the front page is **For you**, the best papers of the last 30 days across your tags. Each tag has its own page, with **Recommended** (new matches, with 👍 / 😐 / 👎 to train it) and **Saved** (every paper in the tag). A switch shows the lists as full cards or one line per paper.
+
 #### To run
 
 To run this locally I usually run the following script to update the database with any new papers. I typically schedule this via a periodic cron job:

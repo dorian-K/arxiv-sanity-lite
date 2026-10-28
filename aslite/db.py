@@ -715,7 +715,8 @@ _features_lock = threading.Lock()
 
 def features_version():
     """changes whenever load_features() would return a different features dict"""
-    return _features_cache.get('key')
+    entry = _features_cache.get('entry')
+    return entry[0] if entry else None
 
 
 def load_features(path=None):
@@ -725,17 +726,28 @@ def load_features(path=None):
     version. path can also be an old-style features .p pickle (e.g. for eval.py)
     """
     path = path or FEATURES_DIR
-    with _features_lock:
-        if path.endswith('.p'):
-            key = (path, os.path.getmtime(path))
-        else:
-            key = (path, os.path.realpath(os.path.join(path, 'current')))
-        if _features_cache.get('key') != key:
+    if path.endswith('.p'):
+        key = (path, os.path.getmtime(path))
+    else:
+        key = (path, os.path.realpath(os.path.join(path, 'current')))
+    cached = _features_cache.get('entry')
+    if cached and cached[0] == key:
+        return cached[1]
+    # a new version takes seconds to load: while one thread loads it, the others keep
+    # answering from the old one instead of queueing behind the lock
+    stale = cached[1] if cached and cached[0][0] == path else None
+    if not _features_lock.acquire(blocking=stale is None):
+        return stale
+    try:
+        cached = _features_cache.get('entry')
+        if not (cached and cached[0] == key):
             if path.endswith('.p'):
                 with open(path, 'rb') as f:
                     features = pickle.load(f)
             else:
                 features = _load(key[1])
             features['ptoi'] = {p: i for i, p in enumerate(features['pids'])}
-            _features_cache.update(key=key, features=features)
-        return _features_cache['features']
+            _features_cache['entry'] = cached = (key, features)  # one swap, never half updated
+        return cached[1]
+    finally:
+        _features_lock.release()

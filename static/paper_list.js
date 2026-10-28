@@ -19,9 +19,13 @@ function tagRequest(path) {
 
 // a tag's page: its recommendations, minus the papers already saved (those are its "Saved" tab)
 const FOR_YOU_DAYS = 30; // as in serve.py
-const tagUrl = tag => (tag === 'all'
-    ? '/?rank=tags&tags=all&time_filter=' + FOR_YOU_DAYS + '&skip_have=yes'
-    : '/?rank=tags&tags=' + encodeURIComponent(tag) + '&skip_have=yes');
+const tagUrl = (tag, days = FOR_YOU_DAYS) => '/?rank=tags&tags=' + encodeURIComponent(tag)
+    + (days ? '&time_filter=' + days : '') + '&skip_have=yes';
+
+// a chip in the tag row switches the tag and keeps what is shown: the same tab, the same time window
+const chipUrl = tag => (['saved', 'down'].includes(gvars.rank)
+    ? '/?rank=' + gvars.rank + '&tags=' + encodeURIComponent(tag)
+    : tagUrl(tag, gvars.rank === 'tags' ? gvars.time_filter : FOR_YOU_DAYS));
 
 // a tag the paper is in: the name links to the tag's page, x takes the paper out of it
 const UTag = ({ tag, onRemove }) => html`
@@ -224,7 +228,7 @@ const Paper = ({ paper: p, quickTag }) => {
             ${long ? html`<button class="linkbtn" onClick=${() => setOpen(o => !o)}>${open ? 'show less' : 'show more'}</button>` : null}
             <a href=${'https://arxiv.org/pdf/' + p.id}>pdf</a>
             <a class="rel_more" href=${'/?rank=pid&pid=' + p.id}>similar</a>
-            <a class="rel_inspect" href=${'/inspect?pid=' + p.id}>inspect</a>
+            ${open || !long ? html`<a class="rel_inspect" href=${'/inspect?pid=' + p.id} title="the words this paper is indexed by">words</a>` : null}
         </div>
     </article>`;
 };
@@ -298,33 +302,32 @@ document.addEventListener('click', e => {
 });
 
 const Tag = ({ tag: t }) => {
-    const active = ['tags', 'saved', 'down'].includes(gvars.rank) && gvars.tags.split(',').includes(t.name);
+    const active = ['tags', 'saved', 'down'].includes(gvars.rank) && gvars.tags === t.name;
     return html`
         <span class=${'chip chip-tag chip-count' + (t.name === 'all' ? ' rel_utag_all' : '') + (active ? ' active' : '')}>
-            <a href=${tagUrl(t.name)}>${t.name}${t.n !== undefined ? html` <small>${t.n}</small>` : null}</a>
+            <a href=${chipUrl(t.name)}>${t.name === 'all' ? 'All tags' : t.name}${t.n !== undefined ? html` <small>${t.n}</small>` : null}</a>
         </span>`;
 };
 
-const TagList = ({ tags }) => {
-    const [shown, setShown] = useState(false);
-    const [hasWords, setHasWords] = useState(words.length > 0);
-    useEffect(() => {
-        const on = e => setHasWords(e.detail.length > 0);
-        window.addEventListener('words', on);
-        return () => window.removeEventListener('words', on);
-    }, []);
-    const toggleWords = () => {
-        const w = document.getElementById('wordwrap');
-        w.hidden = !w.hidden;
-        setShown(!w.hidden);
-    };
-    return html`
-        <div id="tagList">
-            <span class="taglabel">${viewing ? '@' + owner + "'s tags" : 'Your tags'}</span>
-            ${tags.map(t => html`<${Tag} key=${t.name} tag=${t} />`)}
-            ${hasWords ? html`<button id="inspect_svm" class="linkbtn" onClick=${toggleWords}>${shown ? 'hide' : 'why these papers?'}</button>` : null}
-        </div>`;
-};
+const TagList = ({ tags }) => html`
+    <div id="tagList">
+        <span class="taglabel">${viewing ? '@' + owner + "'s tags" : 'Your tags'}</span>
+        ${tags.map(t => html`<${Tag} key=${t.name} tag=${t} />`)}
+    </div>`;
+
+// "why these papers?": the model's top words, once a ranking has some (also when they arrive later)
+(() => {
+    const btn = document.getElementById('inspect_svm');
+    const box = document.getElementById('wordwrap');
+    if (!btn || !box) return;
+    const show = w => { btn.hidden = !(w && w.length); };
+    show(typeof words !== 'undefined' ? words : []);
+    window.addEventListener('words', e => show(e.detail));
+    btn.addEventListener('click', () => {
+        box.hidden = !box.hidden;
+        btn.textContent = box.hidden ? 'why these papers?' : 'hide the words';
+    });
+})();
 
 // the digest page: one section per tag, with quick votes for that tag
 const Digest = ({ sections }) => html`
@@ -349,8 +352,9 @@ const TagCheck = ({ tag }) => {
     };
     if (state === null || state === 'loading') {
         return html`<div class="tagcheck">
-            <button class="btn btn-small" onClick=${run} disabled=${state === 'loading'}>
-                ${state === 'loading' ? 'Checking…' : 'Check how well "' + tag + '" hangs together'}</button></div>`;
+            <button class="linkbtn" onClick=${run} disabled=${state === 'loading'}
+                    title="ranks each saved paper with a model trained on the others, to find the ones that don't fit">
+                ${state === 'loading' ? 'Checking…' : 'does this tag hang together?'}</button></div>`;
     }
     if (state.error) return html`<div class="tagcheck"><span class="form-error">${state.error}</span></div>`;
     if (!state.median) {

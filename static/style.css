@@ -167,9 +167,7 @@ input:focus, select:focus, .btn:focus-visible, .iconbtn:focus-visible {
     color: var(--muted);
 }
 
-#controls { margin-top: 16px; }
-
-#searchrow { display: flex; gap: 8px; }
+#searchrow { display: flex; gap: 8px; margin-top: 16px; }
 #qfield {
     flex: 1;
     min-height: 44px;
@@ -179,22 +177,22 @@ input:focus, select:focus, .btn:focus-visible, .iconbtn:focus-visible {
     background-size: 20px;
 }
 
-#options {
-    margin-top: 10px;
+/* the tools row of a ranking: why, tag check, advanced, delete */
+.tools { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin-top: 8px; font-size: 14px; }
+.tools .linkbtn { font-size: 14px; }
+.tools .deltag { color: var(--neg); margin-left: auto; }
+.tools .tagcheck { margin: 0; }
+.tools .tagcheck.card { flex-basis: 100%; order: 10; margin-top: 4px; }
+#options summary { color: var(--link); cursor: pointer; user-select: none; }
+#options[open] {
+    flex-basis: 100%;
+    order: 11;
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius);
 }
-#options summary {
-    padding: 8px 14px;
-    font-size: 15px;
-    color: var(--muted);
-    cursor: pointer;
-    user-select: none;
-}
-#options[open] summary { border-bottom: 1px solid var(--border); }
+#options[open] summary { padding: 8px 14px; border-bottom: 1px solid var(--border); }
 .optsummary { color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-#options .btn { margin: 0 14px 14px; }
 #optgrid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
@@ -221,7 +219,7 @@ input:focus, select:focus, .btn:focus-visible, .iconbtn:focus-visible {
 #tagwrap { margin-top: 16px; }
 #tagList { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .taglabel { font-size: 13px; color: var(--muted); margin-right: 4px; }
-#inspect_svm { font-size: 14px; margin-left: 6px; }
+#inspect_svm[hidden] { display: none; }
 
 .chip {
     display: inline-flex;
@@ -650,5 +648,15 @@ details.danger form { margin-top: 10px; }
 .digest-sizes .btn { justify-self: start; }
 .quickvote { align-items: center; }
 .quickvote-tag { font-size: 13px; color: var(--muted); }
-.deltag { margin: 6px 0 0; font-size: 13px; }
-.deltag .linkbtn { color: var(--neg); }
+.tabrow { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 8px; border-bottom: 1px solid var(--border); }
+.tabrow .tabs { border-bottom: 0; }
+.window select { padding: 4px 8px; font-size: 14px; margin-bottom: 4px; }
+#tagcheckwrap { display: contents; }
+#taghead h1 .deltag { margin-left: 10px; font-size: 13px; font-weight: normal; color: var(--neg); vertical-align: middle; }
+#optgrid .btn { align-self: end; justify-self: start; margin: 0; }
+.tabs { overflow-x: auto; scrollbar-width: none; }
+.tabs a { white-space: nowrap; }
+@media (max-width: 600px) {
+    .tabs a { padding: 6px 8px; font-size: 14px; }
+    .tabrow { align-items: center; }
+}

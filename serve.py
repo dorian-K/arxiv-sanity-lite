@@ -677,9 +677,9 @@ def main():
 
     # the user's tags, and 'all' for all of them together (the "For you" page)
     tags = get_tags()
-    rtags = [{'name': t, 'n': len(pids)} for t, pids in tags.items()]
+    rtags = [{'name': t, 'n': len(pids)} for t, pids in sorted(tags.items())]
     if rtags:
-        rtags.append({'name': 'all'})
+        rtags.insert(0, {'name': 'all'})
 
     # build the page context information and render
     context = default_context()
@@ -701,6 +701,15 @@ def main():
     context['tag_view'] = bool(tag_names) and all(t == 'all' or t in tags for t in tag_names)
     context['n_saved'] = len(saved_rank(opt_tags)[0]) if context['tag_view'] else 0
     context['n_down'] = len(saved_rank(opt_tags, neg=True)[0]) if context['tag_view'] else 0
+    # what the other lists are, as their page's title
+    days = f" of the last {opt_time_filter} days" if opt_time_filter else ''
+    similar_to = get_papers().get_many([opt_pid]).get(opt_pid) if opt_rank == 'pid' else None
+    context['heading'] = {
+        'time': 'Newest papers' + (f" (last {opt_time_filter} days)" if opt_time_filter else ''),
+        'random': 'Random papers' + days,
+        'search': f'Search: {opt_q}',
+        'pid': f"Similar to: {similar_to['title']}" if similar_to else 'Similar papers',
+    }.get(opt_rank, '')
     context['gvars'] = {}
     context['gvars']['rank'] = opt_rank
     context['gvars']['tags'] = opt_tags

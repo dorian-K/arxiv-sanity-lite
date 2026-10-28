@@ -247,7 +247,7 @@ def test_tag_pages_and_landing(client, corpus):
     # with tags, the main page is the best recent papers for them
     page = client.get('/').data.decode()
     assert '"rank": "tags"' in page and '"tags": "all"' in page and '"time_filter": "30"' in page
-    assert all(f'For you · {d}' in page for d in ('7d', '30d', '1y'))
+    assert all(f'<option value="{d}"' in page for d in ('7', '30', '365', ''))  # the time window
     # the page fetches its results as /?format=json, page 2 is /?page_number=2: both still "For you"
     # (they once fell back to the newest papers, which looked like random recommendations)
     import serve
@@ -307,7 +307,7 @@ def test_for_you_can_let_each_tag_pick_in_turns(client, corpus):
     # the C used by default is shown
     from aslite.rank import DEFAULT_C
 
-    page = client.get('/?rank=time&model=logreg&feats=tfidf').data.decode()
+    page = client.get('/?rank=tags&tags=cv&model=logreg&feats=tfidf').data.decode()
     assert f'placeholder="default: {DEFAULT_C[("logreg", "tfidf")]:g}"' in page
 
 

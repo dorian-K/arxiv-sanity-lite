@@ -26,9 +26,8 @@ var sharing = {{ sharing | default(false) | tojson }};
 <header id="header">
     <a href="/" id="home-link">Arxiv <span>Resanity</span></a>
     <nav>
+        <a href="/?rank=time" class="nav-secondary" title="every paper, newest first">newest</a>
         {% if user %}<a href="/digest">digest</a>{% endif %}{% if user and not readonly %}<a href="/import" title="add papers by arXiv link">add</a>{% endif %}
-        <a href="/about" class="nav-secondary">about</a>
-        <a href="/stats" class="nav-secondary">stats</a>
         <a href="/profile" class="{{ 'nav-user' if user else 'nav-login' }}" {% if readonly %}title="read-only view"{% endif %}>{{ ('👁 ' + user) if readonly else (user if user else 'log in') }}</a>
     </nav>
 </header>
@@ -46,8 +45,8 @@ var sharing = {{ sharing | default(false) | tojson }};
 </main>
 
 <footer id="footer">
-    <span class="footer-mobile"><a href="/about">about</a> · <a href="/stats">stats</a> · </span>
-    <a href="/privacy">privacy</a> · <a href="/imprint">imprint</a>
+    <a href="/about">about</a> · <a href="/?rank=time">newest</a> · <a href="/?rank=random&time_filter=7">random</a> ·
+    <a href="/stats">stats</a> · <a href="/privacy">privacy</a> · <a href="/imprint">imprint</a>
 </footer>
 
 <!-- React without a build step: components are written with htm tagged templates

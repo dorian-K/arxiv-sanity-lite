@@ -12,7 +12,7 @@ It is a fork of Andrej Karpathy's [arxiv-sanity-lite](https://github.com/karpath
 
 ![Screenshot](screenshot.jpg)
 
-How it's used: save a few papers to a tag (from search, the newest list, or the "add" page with arXiv links). From then on the front page is **For you**, the best papers of the last 30 days across your tags. Each tag has its own page, with **Recommended** (new matches, with 👍 / 😐 / 👎 to train it) and **Saved** (every paper in the tag). A switch shows the lists as full cards or one line per paper.
+How it's used: save a few papers to a tag (from search, the newest list, or the "add" page with arXiv links). From then on the front page shows your tags as a row of chips: pick one (or "All tags"), then **Recommended** (the best new matches, over 7 days to any time, with 👍 / 😐 / 👎 to train the tag), **Saved** (every paper in it) or **Not for this tag** (your downvotes). Model settings sit under "Advanced". Lists show as full cards or one line per paper, and with sharing on any page's link works for others, read-only.
 
 #### To run
 

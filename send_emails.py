@@ -77,6 +77,7 @@ def render(user, sections, papers, days):
     n = sum(len(s['papers']) for s in sections)
     subject = f"{n} new papers for you, {time.strftime('%b %d')}"
     digest_url = f'{PUBLIC_URL}/digest'
+    settings_url = f'{PUBLIC_URL}/profile#digest-sizes'
     unsub = unsubscribe_url(user)
     e = html.escape
 
@@ -105,7 +106,7 @@ def render(user, sections, papers, days):
                 f' · <a href="https://arxiv.org/pdf/{pid}">pdf</a></div>'
                 '</div>'
             )
-    text += ['', f"Unsubscribe: {unsub}"]
+    text += ['', f"Papers per tag can be changed in your settings: {settings_url}", f"Unsubscribe: {unsub}"]
     body = f"""<!DOCTYPE html>
 <html><body style="margin:0;padding:24px 16px;background:#f6f5f2;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif">
 <div style="max-width:640px;margin:0 auto;background:#fff;border-radius:10px;padding:24px">
@@ -113,7 +114,9 @@ def render(user, sections, papers, days):
 <p><a href="{digest_url}" style="display:inline-block;padding:10px 16px;background:#b3261e;color:#fff;border-radius:8px;text-decoration:none;font-weight:600">Rate them 👍 👎</a></p>
 <p style="font-size:13px;color:#666">Each rating teaches your tag what you want, so next week's list gets better.</p>
 {''.join(parts)}
-<p style="font-size:12px;color:#888;margin-top:32px">You get this because you added your email at {e(PUBLIC_URL)}.
+<p style="font-size:12px;color:#888;margin-top:32px">How many papers each tag gets can be changed
+in your <a href="{settings_url}" style="color:#888">settings</a>, down to none.<br>
+You get this because you added your email at {e(PUBLIC_URL)}.
 <a href="{unsub}" style="color:#888">Unsubscribe</a></p>
 </div></body></html>"""
     return subject, '\n'.join(text), body

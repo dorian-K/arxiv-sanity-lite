@@ -11,7 +11,7 @@ from aslite import db
 from aslite.rank import rank
 
 
-PER_TAG = 8  # papers per tag, unless the user set another number for the tag (0 leaves it out)
+PER_TAG = 3  # papers per tag, unless the user set another number for the tag (0 leaves it out)
 MAX_PER_TAG = 50
 
 

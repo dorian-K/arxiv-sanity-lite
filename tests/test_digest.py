@@ -56,6 +56,7 @@ def test_emails_and_unsubscribe(features, corpus, monkeypatch, tmp_path):
     assert 'composed digest for alice' in r.stdout
     body = out.read_text()
     assert 'https://sanity.example.org/digest' in body and '/unsubscribe?token=' in body
+    assert 'https://sanity.example.org/profile#digest-sizes' in body  # where to change the papers per tag
     assert db.get_digest('alice')['sections'][0]['tag'] == 'cv'  # stored for the page
 
     # the unsubscribe link works without logging in, one-click POST included
@@ -224,11 +225,11 @@ def test_papers_per_tag_in_the_digest(client, corpus):
     for p in lang[:4]:
         client.post(f'/add/{p}/nlp')
     assert b'Papers per tag' in client.get('/profile').data
-    r = client.post('/digest_sizes', data={'tag': ['cv', 'nlp', 'nope'], 'n': ['3', '0', '5']})
-    assert r.status_code == 302 and db.get_digest_sizes('alice') == {'cv': 3, 'nlp': 0}  # unknown tags ignored
+    r = client.post('/digest_sizes', data={'tag': ['cv', 'nlp', 'nope'], 'n': ['5', '0', '5']})
+    assert r.status_code == 302 and db.get_digest_sizes('alice') == {'cv': 5, 'nlp': 0}  # unknown tags ignored
     client.post('/digest')
     d = db.get_digest('alice')
-    assert [(s['tag'], len(s['papers'])) for s in d['sections']] == [('cv', 3)]  # 0 leaves nlp out
+    assert [(s['tag'], len(s['papers'])) for s in d['sections']] == [('cv', 5)]  # 0 leaves nlp out
     # back to the default number stores nothing; bounds are enforced
     client.post('/digest_sizes', data={'tag': ['cv', 'nlp'], 'n': [str(digest.PER_TAG), '999']})
     assert db.get_digest_sizes('alice') == {'nlp': digest.MAX_PER_TAG}

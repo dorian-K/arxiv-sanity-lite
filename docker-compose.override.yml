@@ -9,11 +9,11 @@
 # 127.0.0.1:${PORT} binding for a proxy on the host stays. Another name: RESANITY_NETWORK in .env.
 
 services:
-  web:
+  arxiv-resanity-web:
     networks: [resanity]
-  updater:
+  arxiv-resanity-updater:
     networks: [resanity]
-  mail:
+  arxiv-resanity-mail:
     networks: [resanity]
 
 networks:

@@ -23,7 +23,7 @@ last_compute=0
 # the weekly digest emails, when DIGEST_ENABLED=1: send_emails.py --if-due sends at the
 # DIGEST_SCHEDULE slot (default sunday 08:00 Europe/Berlin) and otherwise exits right away.
 # its first run only starts the clock, so turning the digest on never mails everyone on the
-# spot (send a test with `docker compose exec updater python send_emails.py -u <you>`)
+# spot (send a test with `docker compose exec arxiv-resanity-updater python send_emails.py -u <you>`)
 digest() {
     [ "${DIGEST_ENABLED:-0}" = 1 ] || return 0
     python send_emails.py --if-due --time-delta "${DIGEST_DAYS:-7}" || echo "send_emails.py failed"

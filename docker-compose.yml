@@ -3,9 +3,11 @@
 #   cp .env.example .env   # and edit
 #   docker compose up -d --build
 #
-# web      gunicorn on 127.0.0.1:${PORT}, for the proxy to forward to
-# updater  fetches new papers and recomputes features once a day, sends the weekly digest
-# mail     (profile "mail", COMPOSE_PROFILES=mail) outgoing-only postfix + dkim for the digest
+# Services are named like their containers, so they can't clash with other projects on the
+# shared network (see docker-compose.override.yml):
+# arxiv-resanity-web      gunicorn on 127.0.0.1:${PORT}, for the proxy to forward to
+# arxiv-resanity-updater  fetches new papers and recomputes features once a day, sends the weekly digest
+# arxiv-resanity-mail     (profile "mail", COMPOSE_PROFILES=mail) outgoing-only postfix + dkim for the digest
 # Both share the data directory, a bind mount so the corpus can be prepared on the host
 # (import_snapshot.py, gpu_embed.sh) and backed up like any other files.
 
@@ -22,7 +24,7 @@ x-common: &common
     TZ: ${TZ:-UTC}
 
 services:
-  web:
+  arxiv-resanity-web:
     <<: *common
     build:
       context: .
@@ -47,7 +49,7 @@ services:
       # PUBLIC_URL, and requests for other hosts are refused once it is set
       PUBLIC_URL: ${PUBLIC_URL:-}
       MAIL_FROM: ${MAIL_FROM:-}
-      SMTP_HOST: ${SMTP_HOST:-mail}
+      SMTP_HOST: ${SMTP_HOST:-arxiv-resanity-mail}
       SMTP_PORT: ${SMTP_PORT:-25}
       SMTP_TLS: ${SMTP_TLS:-none}
       SMTP_USER: ${SMTP_USER:-}
@@ -63,7 +65,7 @@ services:
       timeout: 10s
       start_period: 30s
 
-  updater:
+  arxiv-resanity-updater:
     <<: *common
     build:
       context: .
@@ -92,13 +94,13 @@ services:
       DIGEST_DAYS: ${DIGEST_DAYS:-7}
       PUBLIC_URL: ${PUBLIC_URL:-}
       MAIL_FROM: ${MAIL_FROM:-}
-      SMTP_HOST: ${SMTP_HOST:-mail}
+      SMTP_HOST: ${SMTP_HOST:-arxiv-resanity-mail}
       SMTP_PORT: ${SMTP_PORT:-25}
       SMTP_TLS: ${SMTP_TLS:-none}
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
 
-  mail:
+  arxiv-resanity-mail:
     profiles: [mail]
     logging:
       driver: json-file
@@ -115,7 +117,7 @@ services:
     volumes:
       - mail-dkim:/dkim  # the dkim key; its public half is in your dns, so keep it
       - mail-spool:/var/spool/postfix  # the queue, so retries survive restarts
-    # no ports: only the other services can reach it, as mail:25
+    # no ports: only the other services can reach it, as arxiv-resanity-mail:25
 
 volumes:
   model-cache:

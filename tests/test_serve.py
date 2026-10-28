@@ -327,3 +327,39 @@ def test_downvotes_are_visible_and_only_hide_for_their_tag(client, corpus):
     ]
     assert bad not in ids('cv') and bad in ids('images')
     assert not set(vision[:4]) & set(ids('images'))  # saved papers stay hidden everywhere
+
+
+def test_shared_links(client, corpus):
+    from aslite import db
+
+    vision = [p for p in corpus if corpus[p]['tags'][0]['term'] == 'cs.CV']
+    login(client, user='bob')
+    for p in vision[:4]:
+        client.post(f'/add/{p}/cv')
+    client.post(f'/addneg/{vision[6]}/cv')
+    client.post('/logout')
+    # not shared: a link shows nothing of bob's
+    page = client.get('/?u=bob&rank=saved&tags=cv').data.decode()
+    assert "doesn't share" in page and vision[0] not in page
+    db.set_public('bob', True)
+    # shared: anyone with the link sees bob's tag, read-only, no login needed
+    page = client.get('/?u=bob&rank=saved&tags=cv').data.decode()
+    assert 'viewing <b>@bob</b>' in page and f'"id": "{vision[0]}"' in page and 'var viewing = true' in page
+    assert client.get('/?u=bob&rank=tags&tags=cv&format=json').get_json()['papers']
+    assert client.get('/tag_check?tag=cv&u=bob').status_code == 200
+    assert b'@bob&#39;s digest' in client.get('/digest?u=bob').data
+    # a logged-in visitor can't vote on it, but can copy it into their own tags
+    login(client)  # alice
+    assert '"tags": "all"' in client.get('/?u=bob').data.decode()  # bob's "For you"
+    r = client.post('/copy_tag', data={'owner': 'bob', 'tag': 'cv', 'as': 'bobs-cv'})
+    assert r.status_code == 302 and 'bobs-cv' in r.headers['Location']
+    assert db.get_tags('alice')['bobs-cv'] == set(vision[:4])
+    assert db.get_tags('alice', neg=True)['bobs-cv'] == {vision[6]}
+    assert db.get_tags('bob')['cv'] == set(vision[:4])  # bob's own tag is untouched
+    # writes never go to the owner, whatever the url says
+    client.post(f'/add/{vision[5]}/cv?u=bob')
+    assert vision[5] not in db.get_tags('bob')['cv']
+    # sharing off again: links and copying stop at once
+    db.set_public('bob', False)
+    assert vision[0] not in client.get('/?u=bob&rank=saved&tags=cv').data.decode()
+    assert client.post('/copy_tag', data={'owner': 'bob', 'tag': 'cv'}).status_code == 404

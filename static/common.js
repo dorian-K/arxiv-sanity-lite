@@ -121,6 +121,48 @@ document.addEventListener('click', e => {
     a.rel = 'noopener noreferrer'; // the new page gets no handle on this one, and no referrer
 }, true); // capture: before the busy indicator below looks at a.target
 
+// -----------------------------------------------------------------------------
+// shared links: ?u=<name> shows that user's tags, if they share them. on one's own pages with
+// sharing on, the address carries ?u= too, so any url can be copied and sent; on someone
+// else's, links within the site keep the ?u=
+
+const SHARED_PATHS = ['/', '/digest'];
+
+function withOwner(url) {
+    if (owner && SHARED_PATHS.includes(url.pathname) && !url.searchParams.has('u')) url.searchParams.set('u', owner);
+    return url;
+}
+
+if (((viewing && owner) || sharing) && SHARED_PATHS.includes(window.location.pathname)) {
+    const here = withOwner(new URL(window.location.href));
+    if (here.href !== window.location.href) window.history.replaceState(null, '', here.href);
+}
+
+if (viewing && owner) {
+    document.addEventListener('click', e => {
+        const a = e.target.closest('a[href]');
+        if (!a) return;
+        const url = new URL(a.href, window.location.href);
+        if (url.origin === window.location.origin) a.href = withOwner(url).href;
+    }, true);
+}
+
+document.addEventListener('click', e => {
+    const btn = e.target.closest('#share');
+    if (!btn) return;
+    if (!viewing && !sharing) {
+        if (confirm('Sharing is off, so a link to your pages shows nothing to others. Turn it on in your profile?')) {
+            window.location.href = '/profile#sharing';
+        }
+        return;
+    }
+    const done = () => { btn.textContent = '✓ Link copied'; setTimeout(() => { btn.textContent = '🔗 Share'; }, 2000); };
+    const url = withOwner(new URL(window.location.href));
+    url.searchParams.delete('format');
+    if (navigator.clipboard) navigator.clipboard.writeText(url.href).then(done, () => window.prompt('Copy this link:', url.href));
+    else window.prompt('Copy this link:', url.href);
+});
+
 // back/forward restores the page from the cache as it was left, indicator included
 window.addEventListener('pageshow', hideBusy);
 

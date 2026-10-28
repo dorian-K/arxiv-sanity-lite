@@ -11,7 +11,7 @@ import os
 import re
 import json
 import hashlib
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote
 import time
 import threading
 from random import shuffle
@@ -82,6 +82,7 @@ RATE_LIMITS = {
     'import': (60, 3600),
     'digest': (20, 3600),  # recomputing a digest trains one model per tag
     'check': (30, 3600),  # a tag check trains 5 models
+    'copy': (30, 3600),  # copying someone's shared tag into one's own
     'confirm': (5, 86400),  # confirmation mails, so the email form can't be used to mail people
 }
 RATE_LIMITS_ON = os.environ.get('RATE_LIMITS', '1') != '0'
@@ -125,27 +126,31 @@ def too_many(kind):
 # globals that manage the (lazy) loading of various state for a request
 
 
+# these read the tags of the page's owner: the user, or whoever ?u= names on a shared page
+# (see before_request). writes always go to g.user's own tags
+
+
 def get_tags():
-    if g.user is None:
+    if g.owner is None:
         return {}
     if not hasattr(g, '_tags'):
-        g._tags = db.get_tags(g.user)
+        g._tags = db.get_tags(g.owner)
     return g._tags
 
 
 def get_seen_tags():
-    if g.user is None:
+    if g.owner is None:
         return {}
     if not hasattr(g, '_seen_tags'):
-        g._seen_tags = db.get_tags(g.user, neg=db.SEEN)
+        g._seen_tags = db.get_tags(g.owner, neg=db.SEEN)
     return g._seen_tags
 
 
 def get_neg_tags():
-    if g.user is None:
+    if g.owner is None:
         return {}
     if not hasattr(g, '_neg_tags'):
-        g._neg_tags = db.get_tags(g.user, neg=True)
+        g._neg_tags = db.get_tags(g.owner, neg=True)
     return g._neg_tags
 
 
@@ -221,6 +226,9 @@ def _start_session(user, readonly=False):
         session['readonly'] = True
 
 
+SHAREABLE = ('main', 'digest_page', 'tag_check')  # pages a ?u= link can show for another user
+
+
 @app.before_request
 def before_request():
     # everything that changes state is a POST. SameSite=Lax already keeps the session
@@ -248,6 +256,18 @@ def before_request():
         # record activity on this user so we can reserve periodic
         # recommendations heavy compute only for active users
         db.touch_user(g.user)
+
+    # whose tags the page shows: one's own, or on a shared link (?u=<name>) the tags of a user
+    # who shares them (off by default). someone else's page is read-only: votes and edits
+    # still only ever go to g.user's own tags, and "copy to my tags" takes a tag over
+    g.owner, g.viewing, g.not_shared = g.user, False, ''
+    u = request.args.get('u', '')
+    if u and u != g.user and request.method == 'GET' and request.endpoint in SHAREABLE:
+        o = db.get_user(u) if USERNAME_RE.match(u) else None
+        if o and o['public']:
+            g.owner, g.viewing = u, True
+        else:
+            g.owner, g.viewing, g.not_shared = None, True, u
 
 
 @app.after_request
@@ -376,6 +396,12 @@ def default_context():
     context = {}
     context['user'] = g.user if g.user is not None else ''
     context['readonly'] = bool(g.user and g.readonly)
+    context['owner'] = g.owner or ''
+    context['viewing'] = g.viewing
+    context['not_shared'] = g.not_shared
+    # whether the user's own pages can be shared by their address (sharing on, see /sharing)
+    me = db.get_user(g.user) if g.user and not g.readonly and not g.viewing else None
+    context['sharing'] = bool(me and me['public'])
     return context
 
 
@@ -542,9 +568,9 @@ def main():
     default_tags = ''
     default_time_filter = ''
     default_skip_have = 'no'
-    # (format and page_number don't count: the page fetches its results as /?format=json, and
-    # page 2 of the default is /?page_number=2; both have to stay "For you")
-    if not (set(request.args) - {'format', 'page_number'}) and get_tags():
+    # (format, page_number and u don't count: the page fetches its results as /?format=json,
+    # page 2 of the default is /?page_number=2, and ?u= is a shared link; all stay "For you")
+    if not (set(request.args) - {'format', 'page_number', 'u'}) and get_tags():
         # the main use: a user with tags lands on the best recent papers for them (FOR_YOU_DAYS)
         default_rank, default_tags, default_time_filter, default_skip_have = 'tags', 'all', str(FOR_YOU_DAYS), 'yes'
 
@@ -598,7 +624,7 @@ def main():
     # rank and filter, from the cache if this user asked the same recently
     query = (opt_rank, opt_q, opt_tags, opt_pid, opt_time_filter, opt_skip_have, C, opt_feats, opt_model, opt_mix)
     cacheable = opt_rank in ('search', 'tags', 'pid') and page_number * RET_NUM <= RANK_CACHE_RESULTS
-    key = (g.user, query, features_ok and db.features_version(), db.db_mtime(PAPERS_DB_FILE), _tags_fingerprint())
+    key = (g.owner, query, features_ok and db.features_version(), db.db_mtime(PAPERS_DB_FILE), _tags_fingerprint())
     res = _rank_cache_get(key) if cacheable else None
     pending = res is None and opt_rank in SLOW_RANKS and features_ok and not want_json
     if res is None and not pending:
@@ -894,6 +920,31 @@ def delete_tag(tag=None):
     return "ok"
 
 
+@app.route('/copy_tag', methods=['POST'])
+def copy_tag():
+    """takes over a tag someone shares: its papers and downvotes, into one of the user's own tags"""
+    if g.user is None:
+        return redirect(url_for('profile'))
+    owner, tag = request.form.get('owner', ''), request.form.get('tag', '')
+    new = request.form.get('as', '').strip() or tag
+    o = db.get_user(owner) if owner != g.user else None
+    likes = db.get_tags(owner).get(tag) if o and o['public'] else None
+    if not likes:
+        return "error, this tag isn't shared (anymore)", 404
+    err = _check_tag(new)
+    if err:
+        return err, 400
+    if rate_limited('copy'):
+        return too_many('copy')
+    mine = db.get_tags(g.user).get(new, set())
+    for pid in likes:
+        db.tag_paper(g.user, pid, new)
+    for pid in db.get_tags(owner, neg=True).get(tag, set()) - likes - mine:
+        db.tag_paper(g.user, pid, new, neg=True)  # downvotes too, unless the user likes the paper there
+    print("user %s copied tag %s of %s as %s" % (g.user, tag, owner, new))
+    return redirect('/?rank=tags&tags=%s&skip_have=yes' % quote(new, safe=''))
+
+
 @app.route('/import', methods=['GET', 'POST'])
 def import_papers():
     """add papers by arXiv url or id, one per line, fetching the ones we don't have"""
@@ -993,13 +1044,13 @@ def tag_check():
     """how well a tag hangs together: each liked paper's rank when held out (see holdout_ranks)"""
     tag = request.args.get('tag', '')
     tags = get_tags()
-    if g.user is None or tag not in tags:
+    if g.owner is None or tag not in tags:
         return {'error': 'no such tag'}, 404
     pos, neg = tags[tag], get_neg_tags().get(tag, set())
     if not features_exist():
         return {'error': 'no features yet'}, 400
     features = load_features()
-    key = (g.user, tag, hash(frozenset(pos)), hash(frozenset(neg)), db.features_version())
+    key = (g.owner, tag, hash(frozenset(pos)), hash(frozenset(neg)), db.features_version())
     if key not in _check_cache:
         if rate_limited('check'):
             return {'error': 'too many tag checks, try again later'}, 429
@@ -1033,7 +1084,7 @@ def digest_page():
     context = default_context()
     context.update(sections=[], digest_time='', digest_days=DIGEST_DAYS, error='')
     context['tags'] = [{'name': t} for t in get_tags()]  # suggestions in the tag editor
-    if g.user is None:
+    if g.owner is None:
         return render_template('digest.html', **context)
     if request.method == 'POST':
         # make a fresh one, e.g. before the first email or after a lot of rating
@@ -1046,7 +1097,7 @@ def digest_page():
         db.save_digest(g.user, sections, DIGEST_DAYS)
         return redirect(url_for('digest_page'))
 
-    d = db.get_digest(g.user)
+    d = db.get_digest(g.owner)
     if d:
         found = get_papers().get_many(p for s in d['sections'] for p, _ in s['papers'])
         sections = []

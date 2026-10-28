@@ -2,7 +2,8 @@
 
 // the user's tag names, for autocompletion in the tag editor
 // logged in with the password (not a read-only view of a shared account)
-const canEdit = Boolean(user) && !readonly;
+// (and not someone else's shared page, see viewing in base.html)
+const canEdit = Boolean(user) && !readonly && !viewing;
 const userTagNames = (typeof tags !== 'undefined' ? tags : []).map(t => t.name).filter(n => n !== 'all');
 
 // calls one of the tag endpoints; resolves on "ok...", otherwise shows the server's message
@@ -313,7 +314,7 @@ const TagList = ({ tags }) => {
     };
     return html`
         <div id="tagList">
-            <span class="taglabel">Your tags</span>
+            <span class="taglabel">${viewing ? '@' + owner + "'s tags" : 'Your tags'}</span>
             ${tags.map(t => html`<${Tag} key=${t.name} tag=${t} />`)}
             ${hasWords ? html`<button id="inspect_svm" class="linkbtn" onClick=${toggleWords}>${shown ? 'hide' : 'why these papers?'}</button>` : null}
         </div>`;
@@ -332,7 +333,7 @@ const TagCheck = ({ tag }) => {
     const [state, setState] = useState(null); // null | 'loading' | result | {error}
     const run = () => {
         setState('loading');
-        fetch('/tag_check?tag=' + encodeURIComponent(tag)).then(r => r.json()).then(res => {
+        fetch('/tag_check?tag=' + encodeURIComponent(tag) + (viewing ? '&u=' + encodeURIComponent(owner) : '')).then(r => r.json()).then(res => {
             setState(res);
             if (res.ranks) {
                 Object.assign(heldout, { tag, ranks: res.ranks, misfit: res.misfit_threshold });

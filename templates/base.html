@@ -12,6 +12,10 @@
 <script>
 var user = {{ user | tojson }};
 var readonly = {{ readonly | default(false) | tojson }};
+// whose tags this page shows: someone else's on a shared link (?u=), without edit controls then
+var owner = {{ owner | default('') | tojson }};
+var viewing = {{ viewing | default(false) | tojson }};
+var sharing = {{ sharing | default(false) | tojson }};
 </script>
 {% block variables %}
 {% endblock %}
@@ -30,6 +34,13 @@ var readonly = {{ readonly | default(false) | tojson }};
 </header>
 
 <main>
+{% if not_shared %}
+<div id="log-fun-warn">@{{ not_shared }} doesn't share their tags (or there is no such user).</div>
+{% elif viewing %}
+<div id="log-fun-warn">👁 You're viewing <b>@{{ owner }}</b>'s tags, read-only.
+    {% if user and not readonly %}To vote or change something, copy a tag to your own account from its page.
+    <a href="/?u={{ user }}">Back to your own tags</a>{% else %}<a href="/profile">Log in</a> to copy a tag to your own account.{% endif %}</div>
+{% endif %}
 {% block content %}
 {% endblock %}
 </main>

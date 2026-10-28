@@ -19,7 +19,8 @@ var move_page = function(int_offset) {
 
 {% block content %}
 
-{% if not user %}
+{% if viewing %}
+{% elif not user %}
 <div id="log-fun-warn"><a href="/profile">Log in or sign up</a> to save papers and get recommendations.</div>
 {% elif readonly %}
 <div id="log-fun-warn">👁 Viewing <b>{{ user }}</b>'s tags read-only. <a href="/profile">Log in</a> to make changes.</div>
@@ -36,6 +37,7 @@ var move_page = function(int_offset) {
 
 <section id="controls">
     <form action="/" method="get" id="cbox">
+        {% if viewing and owner %}<input type="hidden" name="u" value="{{ owner }}">{% endif %}
         <div id="searchrow">
             <input name="q" type="search" id="qfield" value="{{ gvars.search_query }}" placeholder="Search papers…" aria-label="search">
             <button type="submit" class="btn btn-primary">Search</button>
@@ -127,7 +129,7 @@ var move_page = function(int_offset) {
     </nav>
 </section>
 
-{% if user and tags %}
+{% if tags %}
 <section id="tagwrap"></section>
 {% endif %}
 
@@ -136,7 +138,7 @@ var move_page = function(int_offset) {
 {% set where = '' if all else ' to ' + gvars.tags %}
 <!-- the page of one tag (or of all): its recommendations and the papers saved to it -->
 <section id="taghead">
-    <h1>{{ 'For you' if all else gvars.tags }}</h1>
+    <h1>{% if viewing %}<span class="muted">@{{ owner }} /</span> {% endif %}{{ 'For you' if all else gvars.tags }}</h1>
     <nav class="tabs" aria-label="{{ gvars.tags }}">
         <a href="/?rank=tags&tags={{ gvars.tags | urlencode }}&skip_have=yes{{ '&time_filter=%d' % for_you_days if all }}{{ '&mix=turns' if gvars.mix == 'turns' }}" class="{{ 'active' if gvars.rank == 'tags' }}">Recommended</a>
         <a href="/?rank=saved&tags={{ gvars.tags | urlencode }}" class="{{ 'active' if gvars.rank == 'saved' }}">Saved ({{ n_saved }})</a>
@@ -162,15 +164,33 @@ var move_page = function(int_offset) {
         {% endif %}
     </p>
 </section>
+{% if viewing and not all and gvars.tags in tags | map(attribute='name') | list %}
+<!-- someone else's tag: take it over to vote on it and get its recommendations yourself -->
+<section class="copytag">
+    {% if user and not readonly %}
+    <form action="/copy_tag" method="post">
+        <input type="hidden" name="owner" value="{{ owner }}">
+        <input type="hidden" name="tag" value="{{ gvars.tags }}">
+        <label>Copy to my tags as
+            <input class="form-control" name="as" value="{{ gvars.tags }}" maxlength="100" required></label>
+        <button type="submit" class="btn btn-primary btn-small">Copy</button>
+        <span class="muted">its saved papers and downvotes, into your own tag of that name (merged if you have one)</span>
+    </form>
+    {% else %}
+    <p class="muted"><a href="/profile">Log in</a> to copy this tag to your account and rate its papers yourself.</p>
+    {% endif %}
+</section>
+{% endif %}
 <section id="tagcheckwrap"></section>
 {% endif %}
 
-{% if user and gvars.rank in ('tags', 'pid') %}
+{% if tags and gvars.rank in ('tags', 'pid') %}
 <section id="wordwrap" hidden></section>
 {% endif %}
 
 <!-- cards with everything, or one line per paper (remembered in this browser) -->
 <div id="viewswitch" role="group" aria-label="view">
+    {% if user or viewing %}<button type="button" class="btn btn-small" id="share" title="copy a link to this page that others can open">🔗 Share</button>{% endif %}
     <button type="button" class="btn btn-small" data-view="cards" title="Title, authors, abstract and buttons">Cards</button>
     <button type="button" class="btn btn-small" data-view="compact" title="One line per paper; ▸ opens one">Titles only</button>
 </div>

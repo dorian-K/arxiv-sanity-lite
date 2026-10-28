@@ -639,6 +639,10 @@ details.danger form { margin-top: 10px; }
 }
 .rel_for:hover { text-decoration: none; }
 
+.copytag { margin-top: 12px; }
+.copytag form { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 14px; }
+.copytag label { display: flex; align-items: center; gap: 8px; }
+.copytag input { width: 180px; }
 .form-ok { color: var(--pos-word); font-weight: 600; }
 .digest-sizes { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; align-items: end; }
 .digest-sizes label { display: flex; flex-direction: column; gap: 4px; font-size: 14px; }

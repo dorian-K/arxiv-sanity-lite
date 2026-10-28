@@ -11,8 +11,8 @@ var gvars = {rank: 'digest'};
 {% block content %}
 <div class="page">
     <section class="card">
-        <h1>Your digest</h1>
-        {% if not user %}
+        <h1>{{ '@' + owner + "'s digest" if viewing else 'Your digest' }}</h1>
+        {% if not owner %}
         <p class="muted">Please <a href="/profile">log in</a> to see your digest.</p>
         {% else %}
         {% if error %}<p class="form-error">{{ error }}</p>{% endif %}
@@ -29,7 +29,7 @@ var gvars = {rank: 'digest'};
             (add your email on your <a href="/profile">profile</a>), or right now:
         </p>
         {% endif %}
-        {% if not readonly %}
+        {% if not readonly and not viewing %}
         <form action="/digest" method="post" data-busy="Making your digest… one model per tag, this takes a few seconds per tag.">
             <button type="submit" class="btn">{{ 'Make a fresh one' if digest_time else 'Make my digest' }}</button>
         </form>
@@ -38,6 +38,7 @@ var gvars = {rank: 'digest'};
     </section>
     {% if sections %}
     <div id="viewswitch" role="group" aria-label="view">
+        <button type="button" class="btn btn-small" id="share" title="copy a link to this page that others can open">🔗 Share</button>
         <button type="button" class="btn btn-small" data-view="cards" title="Title, authors, abstract and buttons">Cards</button>
         <button type="button" class="btn btn-small" data-view="compact" title="One line per paper; ▸ opens one">Titles only</button>
     </div>

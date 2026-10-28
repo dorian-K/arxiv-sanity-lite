@@ -31,17 +31,20 @@
             <button type="submit" class="btn">Log out</button>
         </form>
     </section>
-    <section class="card">
+    <section class="card" id="sharing">
         <h1>Sharing</h1>
         <form action="/sharing" method="post">
             <label class="check">
                 <input type="checkbox" name="public" value="1" {{ 'checked' if public }} onchange="this.form.submit()">
-                <span>Let anyone view my tags read-only, by logging in as <b>{{ user }}</b> with an empty password</span>
+                <span>Let anyone with a link view my tags read-only</span>
             </label>
             <noscript><button type="submit" class="btn btn-small">Save</button></noscript>
         </form>
-        <p class="muted">They see your tags, recommendations and digest, never your email, and can't change anything.
+        <p class="muted">Then every page address you see has <code>?u={{ user }}</code> in it, and "🔗 Share" copies it:
+            others see your tags, recommendations and digest there (never your email), can't change anything,
+            and can copy a tag to their own account.
             {{ 'Turning this off ends their access right away.' if public else 'Off by default.' }}</p>
+        {% if public %}<p>Your page: <a href="/?u={{ user }}">/?u={{ user }}</a></p>{% endif %}
     </section>
     <section class="card">
         <h1>Weekly digest</h1>

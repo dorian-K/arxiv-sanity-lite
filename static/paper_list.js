@@ -59,6 +59,21 @@ const TagPicker = ({ mode, tags, onPick, onCancel }) => {
 // rankings whose scores mean something to show next to the title
 const SHOW_SCORE = ['tags', 'pid', 'search'];
 
+// a rank fraction as people read it: 0.0031 -> "top 0.3%"
+const fmtPct = x => 'top ' + (x < 0.001 ? '0.1' : x < 0.1 ? (100 * x).toFixed(1) : Math.round(100 * x)) + '%';
+
+// held-out ranks of the current tag's papers, filled in by a tag check (see TagCheck)
+const heldout = { tag: null, ranks: {}, misfit: 0.1 };
+const useHeldout = () => {
+    const [, bump] = useState(0);
+    useEffect(() => {
+        const f = () => bump(n => n + 1);
+        window.addEventListener('heldout', f);
+        return () => window.removeEventListener('heldout', f);
+    }, []);
+    return heldout;
+};
+
 // one-click votes for a given tag (the digest page): like, neutral (seen, no opinion: hidden
 // from later digests, not used for training) or downvote. one state per paper and tag,
 // clicking the active one undoes it
@@ -102,6 +117,8 @@ const Paper = ({ paper: p, quickTag }) => {
     const toggle = mode => setPicker(m => (m === mode ? null : mode));
     // offer the tags this paper isn't in yet; new tags typed here join the list for the next paper
     const pickable = (picker === 'add' ? userTagNames.filter(t => !utags.includes(t)) : userTagNames.filter(t => !ntags.includes(t)));
+    const ho = useHeldout();
+    const fit = ho.tag && utags.includes(ho.tag) ? ho.ranks[p.id] : undefined;
     const long = p.summary.length > 360;
     const showScore = SHOW_SCORE.includes(gvars.rank);
 
@@ -109,9 +126,16 @@ const Paper = ({ paper: p, quickTag }) => {
     <article class="rel_paper">
         ${p.thumb_url ? html`<div class="rel_img"><img src=${p.thumb_url} alt="" loading="lazy" /></div>` : null}
         <div class="rel_head">
-            ${showScore ? html`<span class="rel_score" title="ranking score">${p.weight.toFixed(2)}</span>` : null}
+            ${p.pct !== undefined
+                ? html`<span class="rel_score" title=${'rank among all papers (model score ' + p.weight.toFixed(2) + ')'}>${fmtPct(p.pct)}</span>`
+                : showScore ? html`<span class="rel_score" title="search score">${p.weight.toFixed(2)}</span>` : null}
             <h2 class="rel_title"><a href=${'https://arxiv.org/abs/' + p.id}><${MathText} text=${p.title} /></a></h2>
         </div>
+        ${fit !== undefined ? html`
+        <div class=${'rel_fit' + (fit > ho.misfit ? ' misfit' : '')}
+             title="where this paper lands when the tag's other papers rank it (it isn't used to train that model)">
+            ${fit > ho.misfit ? "doesn't fit " + ho.tag + ' well: ' : 'fits ' + ho.tag + ': '}${fmtPct(fit)} when held out
+        </div>` : null}
         <div class="rel_authors">${p.authors}</div>
         <div class="rel_meta">
             <span class="rel_time">${p.time}</span>
@@ -193,9 +217,56 @@ const Digest = ({ sections }) => html`
         <div class="rel_papers">${s.papers.map(p => html`<${Paper} key=${p.id} paper=${p} quickTag=${s.tag} />`)}</div>
     </section>`)}`;
 
+// "check this tag": how well the tag's papers predict each other, and which don't fit
+const TagCheck = ({ tag }) => {
+    const [state, setState] = useState(null); // null | 'loading' | result | {error}
+    const run = () => {
+        setState('loading');
+        fetch('/tag_check?tag=' + encodeURIComponent(tag)).then(r => r.json()).then(res => {
+            setState(res);
+            if (res.ranks) {
+                Object.assign(heldout, { tag, ranks: res.ranks, misfit: res.misfit_threshold });
+                window.dispatchEvent(new Event('heldout'));
+            }
+        }).catch(() => setState({ error: 'the check failed, try again' }));
+    };
+    if (state === null || state === 'loading') {
+        return html`<div class="tagcheck">
+            <button class="btn btn-small" onClick=${run} disabled=${state === 'loading'}>
+                ${state === 'loading' ? 'Checking…' : 'Check how well "' + tag + '" hangs together'}</button></div>`;
+    }
+    if (state.error) return html`<div class="tagcheck"><span class="form-error">${state.error}</span></div>`;
+    if (!state.median) {
+        return html`<div class="tagcheck muted">Save at least ${state.min_papers} papers to "${tag}" to check it.</div>`;
+    }
+    const m = state.misfits;
+    return html`
+        <div class="tagcheck card">
+            <p>
+                Each of your ${state.n} papers in <b>${tag}</b> was ranked by a model trained on the others.
+                A typical one lands in the <b>${fmtPct(state.median)}</b> of all papers, 90% of them within
+                the ${fmtPct(state.p90)}. ${m.length === 0 ? 'They all fit together well.' : ''}
+            </p>
+            ${m.length ? html`
+            <p>${m.length === 1 ? "This paper doesn't" : 'These ' + m.length + " papers don't"} fit with the rest
+                (outside the ${fmtPct(state.misfit_threshold)}):</p>
+            <ul class="misfits">${m.map(x => html`<li key=${x.id}>
+                <a href=${'/?rank=pid&pid=' + x.id}><${MathText} text=${x.title} /></a>
+                <span class="muted"> · ${fmtPct(x.rank)}</span></li>`)}</ul>
+            <p class="muted">
+                ${m.length >= 3
+                    ? "If they're about another topic, give them a tag of their own: a side topic in a shared tag gets crowded out of the top of the list, and on its own it gets its own list."
+                    : m.length === 1 ? 'Maybe it belongs in another tag, or it is a one-off.' : 'Maybe they belong in another tag, or are one-offs.'}
+                ${' '}Remove a paper from a tag with the × on its tag.
+            </p>` : null}
+        </div>`;
+};
+
 if (typeof digest !== 'undefined') {
     mount(html`<${Digest} sections=${digest} />`, 'digestwrap');
 } else {
     mount(html`<${PaperList} papers=${papers} />`, 'wrap');
     mount(html`<${TagList} tags=${tags} />`, 'tagwrap');
+    const single = gvars.rank === 'tags' && !gvars.tags.includes(',') && userTagNames.includes(gvars.tags);
+    if (single) mount(html`<${TagCheck} tag=${gvars.tags} />`, 'tagcheckwrap');
 }

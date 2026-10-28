@@ -471,3 +471,12 @@ label.check input { margin-top: 3px; width: 18px; height: 18px; flex: none; }
     #header nav { gap: 10px; }
     .nav-user { max-width: 8ch; }
 }
+
+/* tag check */
+#tagcheckwrap:empty { display: none; }
+.tagcheck { margin: 10px 0 14px; }
+.tagcheck.card p { margin: 0 0 8px; line-height: 1.5; }
+.misfits { margin: 0 0 8px; padding-left: 20px; }
+.misfits li { margin: 4px 0; }
+.rel_fit { margin-top: 4px; font-size: 13px; color: var(--tag); }
+.rel_fit.misfit { color: var(--neg); font-weight: 600; }

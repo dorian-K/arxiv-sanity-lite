@@ -27,7 +27,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from aslite import db, digest
 from aslite.db import get_papers_db, get_secret_key, load_features, features_exist, PAPERS_DB_FILE
 from aslite.arxiv import find_arxiv_id, fetch_papers_by_id, OLD_ARXIV_ID_RE
-from aslite.rank import rank, resolve_feats, resolve_model, has_embeddings, FEATS, MODELS
+from aslite.rank import rank, holdout_ranks, resolve_feats, resolve_model, has_embeddings, FEATS, MODELS
 
 # -----------------------------------------------------------------------------
 # inits and globals
@@ -69,6 +69,7 @@ RATE_LIMITS = {
     'login': (30, 300),  # password hashing is deliberately slow
     'import': (60, 3600),
     'digest': (20, 3600),  # recomputing a digest trains one model per tag
+    'check': (30, 3600),  # a tag check trains 5 models
 }
 RATE_LIMITS_ON = os.environ.get('RATE_LIMITS', '1') != '0'
 _buckets = {}
@@ -340,6 +341,10 @@ def main():
     else:
         raise ValueError("opt_rank %s is not a thing" % (opt_rank,))
 
+    # where each paper landed among all papers, before filters: shown as "top 0.3%"
+    n_ranked = len(pids)
+    position = {p: i for i, p in enumerate(pids)} if opt_rank in ('tags', 'pid') else {}
+
     # filter by time
     if opt_time_filter:
         times = get_times()[0]
@@ -369,6 +374,8 @@ def main():
     papers = [render_pid(pid, found[pid]) for pid in pids]
     for i, p in enumerate(papers):
         p['weight'] = float(scores[i])
+        if p['id'] in position:
+            p['pct'] = (position[p['id']] + 1) / n_ranked
 
     # build the current tags for the user, and append the special 'all' tag
     tags = get_tags()
@@ -671,6 +678,49 @@ def import_papers():
     context['n_new'] = len(fetched)
     context['features'] = load_features()['ptoi'] if features_exist() else {}
     return render_template('import.html', **context)
+
+
+# results of /tag_check per (user, tag, its papers, features version); a tag's check only
+# changes when the tag or the features do
+_check_cache = {}
+CHECK_FOLDS = 5
+MISFIT = 0.10  # a held-out like outside the top 10% doesn't fit its tag (see README for the numbers)
+
+
+@app.route('/tag_check')
+def tag_check():
+    """how well a tag hangs together: each liked paper's rank when held out (see holdout_ranks)"""
+    tag = request.args.get('tag', '')
+    tags = get_tags()
+    if g.user is None or tag not in tags:
+        return {'error': 'no such tag'}, 404
+    pos, neg = tags[tag], get_neg_tags().get(tag, set())
+    if not features_exist():
+        return {'error': 'no features yet'}, 400
+    features = load_features()
+    key = (g.user, tag, hash(frozenset(pos)), hash(frozenset(neg)), db.features_version())
+    if key not in _check_cache:
+        if rate_limited('check'):
+            return {'error': 'too many tag checks, try again later'}, 429
+        ranks = holdout_ranks(features, pos, neg, folds=CHECK_FOLDS)
+        if len(_check_cache) > 1000:
+            _check_cache.clear()
+        _check_cache[key] = ranks
+    ranks = _check_cache[key]
+    if not ranks:
+        return {'tag': tag, 'n': len(pos), 'min_papers': CHECK_FOLDS, 'ranks': {}}
+    v = sorted(ranks.values())
+    misfits = sorted((p for p in ranks if ranks[p] > MISFIT), key=ranks.get, reverse=True)
+    found = get_papers().get_many(misfits)
+    return {
+        'tag': tag,
+        'n': len(ranks),
+        'median': v[len(v) // 2],
+        'p90': v[min(len(v) - 1, int(0.9 * len(v)))],
+        'misfit_threshold': MISFIT,
+        'misfits': [{'id': p, 'title': found[p]['title'], 'rank': ranks[p]} for p in misfits if p in found],
+        'ranks': ranks,
+    }
 
 
 DIGEST_DAYS = 7

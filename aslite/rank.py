@@ -26,6 +26,7 @@ Models ("model"):
 """
 
 import zlib
+import random
 
 import numpy as np
 import scipy.sparse as sp
@@ -211,3 +212,25 @@ def rank(features, pos_pids, neg_pids=(), feats='auto', model='auto', C=None, **
 
     sortix = np.argsort(-s)
     return [pids[ix] for ix in sortix], [float(s[ix]) for ix in sortix], words
+
+
+def holdout_ranks(features, pos_pids, neg_pids=(), folds=5, **kwargs):
+    """
+    how well each liked paper fits its tag: {pid: rank fraction}, where 0.004 means the
+    paper lands in the top 0.4% of all papers when ranked by a model trained on the
+    tag's *other* papers (k-fold, so `folds` fits instead of one per paper). papers the
+    rest of the tag doesn't predict are mis-tagged or a side topic that a tag of its own
+    would serve better. needs at least `folds` papers
+    """
+    pos = sorted({p for p in pos_pids if p in features['ptoi']})
+    if len(pos) < max(folds, 2):
+        return {}
+    order = random.Random(zlib.crc32(','.join(pos).encode())).sample(pos, len(pos))
+    n, out = len(features['pids']), {}
+    for k in range(folds):
+        test = set(order[k::folds])
+        pids, scores, _ = rank(features, [p for p in pos if p not in test], neg_pids, **kwargs)
+        ix = {p: i for i, p in enumerate(pids)}
+        for p in test:
+            out[p] = (ix[p] + 1) / n
+    return out

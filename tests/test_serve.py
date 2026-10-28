@@ -173,3 +173,19 @@ def test_read_only_view_of_shared_accounts(client, corpus):
     # and a wrong password is still wrong, sharing or not
     db.set_public('alice', True)
     assert login(client, password='wrong password').status_code == 403
+
+
+def test_tag_check_and_rank_percentiles(client, corpus):
+    vision = [p for p in corpus if corpus[p]['tags'][0]['term'] == 'cs.CV']
+    language = [p for p in corpus if corpus[p]['tags'][0]['term'] == 'cs.CL']
+    login(client)
+    for p in vision[:8] + language[:1]:  # one paper in the wrong tag
+        client.post(f'/add/{p}/cv')
+    r = client.get('/tag_check?tag=cv').get_json()
+    assert r['n'] == 9 and set(r['ranks']) == set(vision[:8] + language[:1])
+    assert r['median'] < 0.2  # the vision papers predict each other (1/6 of this corpus is vision; random would be 0.5)
+    assert [m['id'] for m in r['misfits']][:1] == [language[0]]  # and the odd one out is flagged first
+    assert client.get('/tag_check?tag=nope').status_code == 404
+    # rankings carry each paper's rank among all papers
+    page = client.get('/?rank=tags&tags=cv').data.decode()
+    assert '"pct":' in page and 'tagcheckwrap' in page

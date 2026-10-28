@@ -629,6 +629,11 @@ _features_cache = {}
 _features_lock = threading.Lock()
 
 
+def features_version():
+    """changes whenever load_features() would return a different features dict"""
+    return _features_cache.get('key')
+
+
 def load_features(path=None):
     """
     the features dict: pids, x (sparse tfidf), vocab, idf, and x_emb / emb_model with

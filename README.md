@@ -123,6 +123,17 @@ In docker, the updater sends the digest every Sunday at 08:00 German time (`DIGE
 
 New servers have no reputation, so the first digests may land in spam until recipients mark them as not spam. To send through an existing SMTP server instead (your provider's, a university relay, a sending service), drop the profile and set `SMTP_HOST`/`SMTP_PORT`/`SMTP_TLS`/`SMTP_USER`/`SMTP_PASSWORD`. Or keep the container and set `RELAYHOST` to route its mail through such a server, still DKIM-signed.
 
+#### Tag check
+
+A tag's page has a "Check how well this tag hangs together" button. Each liked paper is ranked by a model trained on the tag's other papers (5 folds, so 5 fits), and the page reports where a typical one lands. It lists the papers that land outside the top 10%: those are either saved to the wrong tag or a side topic. Afterwards, saved papers in the list show their held-out rank ("fits diffusion: top 0.2% when held out"), and every ranked paper shows its rank among all papers ("top 0.3%") instead of the raw model score.
+
+Calibration on the Scholar Inbox ratings:
+- One person's likes: 8.8% land outside the top 10% when held out.
+- The main topic of a two-topic tag: 7.2% do.
+- A side topic a quarter the size: 32.5% do.
+
+Splitting such a tag is worth it. In a shared tag, 21% of the side topic's held-out papers made the top 1%; with a model of its own, 34% did. That's why the check suggests a separate tag once three or more papers don't fit.
+
 #### Add papers by link
 
 Logged-in users get an **add** page (`/import`). Paste arXiv links or ids there, one per line and up to 100 at a time. It understands abs/pdf links, Hugging Face and alphaXiv paper pages, DOIs and bare ids, and can tag the papers in the same step. Papers of any year or category work. The ones that aren't in the database yet are fetched from the arXiv API in one call per 100 ids:

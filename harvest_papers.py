@@ -20,13 +20,12 @@ import argparse
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
-from email.utils import parsedate_to_datetime
 
+from aslite.arxiv import make_paper, CATEGORIES
 from aslite.db import get_papers_db, get_metas_db, DATA_DIR
 
 OAI = 'https://oaipmh.arxiv.org/oai'
 NS = {'oai': 'http://www.openarchives.org/OAI/2.0/', 'raw': 'http://arxiv.org/OAI/arXivRaw/'}
-CATEGORIES = {'cs.CV', 'cs.LG', 'cs.CL', 'cs.AI', 'cs.NE', 'cs.RO'}  # same as arxiv_daemon.py
 STATE_FILE = os.path.join(DATA_DIR, 'harvest_state.json')
 PAUSE = 5  # seconds between requests; arXiv asks for at least 3, be nicer than that
 USER_AGENT = 'arxiv-sanity-lite harvest_papers.py (one-off bulk import, polite: 1 request / 5s)'
@@ -71,34 +70,11 @@ def split_authors(s):
 
 
 def to_paper(meta):
-    """arXivRaw record -> the dict shape arxiv_daemon.py stores (feedparser-like)"""
+    """arXivRaw record -> (paper, first submission timestamp), see aslite.arxiv.make_paper"""
     g = lambda tag: (meta.findtext('raw:' + tag, default='', namespaces=NS) or '').strip()
-    pid = g('id')
-    versions = meta.findall('raw:version', NS)
-    if '/' in pid or not versions:
-        return None  # old-style ids, see aslite.arxiv.parse_arxiv_url
-    first = parsedate_to_datetime(versions[0].findtext('raw:date', namespaces=NS))
-    last = parsedate_to_datetime(versions[-1].findtext('raw:date', namespaces=NS))
-    v = int(versions[-1].get('version').lstrip('v'))
-    cats = g('categories').split()
-    updated = last.utctimetuple()
-    return {
-        '_id': pid,
-        '_idv': f'{pid}v{v}',
-        '_version': v,
-        '_time': time.mktime(updated),  # same convention as aslite.arxiv.parse_response
-        '_time_str': time.strftime('%b %d %Y', updated),
-        'id': f'http://arxiv.org/abs/{pid}v{v}',
-        'title': ' '.join(g('title').split()),
-        'summary': g('abstract'),
-        'authors': split_authors(g('authors')),
-        'tags': [{'term': c, 'scheme': 'http://arxiv.org/schemas/atom', 'label': None} for c in cats],
-        'arxiv_primary_category': {'term': cats[0] if cats else ''},
-        'arxiv_comment': g('comments'),
-        'published': first.strftime('%Y-%m-%dT%H:%M:%SZ'),
-        'updated': last.strftime('%Y-%m-%dT%H:%M:%SZ'),
-        '_first': first.timestamp(),
-    }
+    dates = [v.findtext('raw:date', namespaces=NS) for v in meta.findall('raw:version', NS)]
+    names = [a['name'] for a in split_authors(g('authors'))]
+    return make_paper(g('id'), dates, g('title'), g('abstract'), names, g('categories'), g('comments'))
 
 
 if __name__ == '__main__':
@@ -142,9 +118,9 @@ if __name__ == '__main__':
             state['seen'] += 1
             if meta is None:
                 continue  # deleted record
-            p = to_paper(meta)
-            if p and p.pop('_first') >= since and CATEGORIES & {t['term'] for t in p['tags']}:
-                papers.append(p)
+            r = to_paper(meta)
+            if r and r[1] >= since and CATEGORIES & {t['term'] for t in r[0]['tags']}:
+                papers.append(r[0])
 
         # both tables live in one sqlite file, so commit one before writing the other
         new = [p for p in papers if p['_id'] not in pdb or pdb[p['_id']]['_time'] < p['_time']]

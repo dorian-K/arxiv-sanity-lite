@@ -24,6 +24,9 @@ embed-gpu = ["sentence-transformers>=6.0", "torch>=2.6", "torchvision", "pillow"
 email = ["sendgrid>=6.12"]
 # thumb_daemon.py (also needs ImageMagick's `convert` on PATH)
 thumbs = ["requests>=2.32"]
+bulk = [
+    "pyarrow>=20",
+]
 
 [dependency-groups]
 dev = ["pytest>=9.0", "ruff>=0.14"]

@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Whenever the user gives guidance or corrects a mistake, add it to this section so it doesn't happen again, and commit that too.
 - Git author is `Dorian Koch <do.ko1605.dk@gmail.com>`, set in the repo's local git config.
 - Flag evaluation caveats yourself, as soon as you see them, and fix them before drawing conclusions. Don't sit on a concern you noticed. (Example: the arxiv_daemon background papers are newer than every Scholar Inbox rating, so eval scores against them are inflated. Use `eval.py run --pool rated`.)
-- Never hammer arXiv; the user does not want to be banned. Pause ≥3s between API calls (harvest_papers.py uses 5s), honor 503 Retry-After, back off on errors, and don't re-download what is already in papers.db.
+- Never hammer arXiv; the user does not want to be banned. Pause ≥3s between API calls (harvest_papers.py uses 5s), honor 503 Retry-After, back off on errors, and don't re-download what is already in papers.db. For bulk data, use the Hugging Face snapshot (import_snapshot.py) instead of arXiv's APIs.
 - Work and commit directly on `master`; don't create feature branches, even if a pasted prompt asks for one.
 
 ## Commands
@@ -31,7 +31,8 @@ uv run pytest tests/test_rank.py -k logreg # single test
 uv run python arxiv_daemon.py --num 2000   # pull new papers from the arxiv API into data/papers.db
 uv run python compute.py                   # rebuild data/features.p (tfidf); add --embed_model to also embed
 uv run python fetch_papers.py <arxiv ids>  # add specific papers by id, then rerun compute.py
-ARXIV_SANITY_DATA=data/5y uv run python harvest_papers.py --years 5   # bulk import via OAI-PMH, resumable
+ARXIV_SANITY_DATA=data/5y uv run python import_snapshot.py --years 5 --check data/papers.db   # bulk import from the HF snapshot (extra bulk), verified; no arXiv load
+ARXIV_SANITY_DATA=data/5y uv run python harvest_papers.py --years 5   # fallback: same via OAI-PMH, ~5h of polite requests
 ./gpu_embed.sh user@host st:google/embeddinggemma-2 data/5y   # embeddings on a GPU box over ssh
 uv run flask --app serve run               # web UI (make fun); `make up` = daemon + compute
 uv run python send_emails.py --dry-run 1 -u <user>   # check recommendation emails without sending

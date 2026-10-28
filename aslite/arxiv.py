@@ -7,6 +7,7 @@ import logging
 import urllib.request
 import feedparser
 from collections import OrderedDict
+from email.utils import parsedate_to_datetime
 
 logger = logging.getLogger(__name__)
 
@@ -93,3 +94,40 @@ def filter_latest_version(idvs):
 
     filt = [f"{pid}v{v}" for pid, v in pid_to_v.items()]
     return filt
+
+
+# daemon categories; the bulk importers (harvest_papers.py, import_snapshot.py) filter on these too
+CATEGORIES = {'cs.CV', 'cs.LG', 'cs.CL', 'cs.AI', 'cs.NE', 'cs.RO'}
+
+
+def make_paper(pid, version_dates, title, abstract, authors, categories, comments=''):
+    """
+    builds a paper dict in the shape arxiv_daemon.py stores (feedparser-like) from bulk
+    metadata. version_dates are the RFC 2822 dates of v1..vN, authors a list of names.
+    returns (paper, first submission timestamp), or None for old-style ids (hep-th/0408218),
+    which parse_arxiv_url would store under a mangled id
+    """
+    if '/' in pid or not version_dates:
+        return None
+    first = parsedate_to_datetime(version_dates[0])
+    last = parsedate_to_datetime(version_dates[-1])
+    v = len(version_dates)
+    cats = categories.split()
+    updated = last.utctimetuple()
+    paper = {
+        '_id': pid,
+        '_idv': f'{pid}v{v}',
+        '_version': v,
+        '_time': time.mktime(updated),  # same convention as parse_response
+        '_time_str': time.strftime('%b %d %Y', updated),
+        'id': f'http://arxiv.org/abs/{pid}v{v}',
+        'title': ' '.join(title.split()),
+        'summary': abstract.strip(),
+        'authors': [{'name': n} for n in authors],
+        'tags': [{'term': c, 'scheme': 'http://arxiv.org/schemas/atom', 'label': None} for c in cats],
+        'arxiv_primary_category': {'term': cats[0] if cats else ''},
+        'arxiv_comment': comments or '',
+        'published': first.strftime('%Y-%m-%dT%H:%M:%SZ'),
+        'updated': last.strftime('%Y-%m-%dT%H:%M:%SZ'),
+    }
+    return paper, first.timestamp()

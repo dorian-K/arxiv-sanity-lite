@@ -10,12 +10,13 @@ from collections import OrderedDict
 
 logger = logging.getLogger(__name__)
 
+
 def get_response(search_query, start_index=0):
-    """ pings arxiv.org API to fetch a batch of 100 papers """
+    """pings arxiv.org API to fetch a batch of 100 papers"""
     # fetch raw response
     base_url = 'http://export.arxiv.org/api/query?'
     add_url = 'search_query=%s&sortBy=lastUpdatedDate&start=%d&max_results=100' % (search_query, start_index)
-    #add_url = 'search_query=%s&sortBy=submittedDate&start=%d&max_results=100' % (search_query, start_index)
+    # add_url = 'search_query=%s&sortBy=submittedDate&start=%d&max_results=100' % (search_query, start_index)
     search_query = base_url + add_url
     logger.debug(f"Searching arxiv for {search_query}")
     with urllib.request.urlopen(search_query) as url:
@@ -26,22 +27,25 @@ def get_response(search_query, start_index=0):
 
     return response
 
+
 def get_response_ids(id_list):
-    """ pings arxiv.org API to fetch specific papers by id (up to ~100 per call) """
+    """pings arxiv.org API to fetch specific papers by id (up to ~100 per call)"""
     base_url = 'http://export.arxiv.org/api/query?'
     add_url = 'id_list=%s&max_results=%d' % (','.join(id_list), len(id_list))
     with urllib.request.urlopen(base_url + add_url, timeout=60) as url:
         response = url.read()
     return response
 
+
 def encode_feedparser_dict(d):
-    """ helper function to strip feedparser objects using a deep copy """
+    """helper function to strip feedparser objects using a deep copy"""
     if isinstance(d, feedparser.FeedParserDict) or isinstance(d, dict):
         return {k: encode_feedparser_dict(d[k]) for k in d.keys()}
     elif isinstance(d, list):
         return [encode_feedparser_dict(k) for k in d]
     else:
         return d
+
 
 def parse_arxiv_url(url):
     """
@@ -50,10 +54,11 @@ def parse_arxiv_url(url):
     """
     ix = url.rfind('/')
     assert ix >= 0, 'bad url: ' + url
-    idv = url[ix+1:] # extract just the id (and the version)
+    idv = url[ix + 1 :]  # extract just the id (and the version)
     parts = idv.split('v')
     assert len(parts) == 2, 'error splitting id and version in idv string: ' + idv
     return idv, parts[0], int(parts[1])
+
 
 def parse_response(response):
 
@@ -63,7 +68,7 @@ def parse_response(response):
         j = encode_feedparser_dict(e)
         # extract / parse id information
         idv, rawid, version = parse_arxiv_url(j['id'])
-        j['_idv']= idv
+        j['_idv'] = idv
         j['_id'] = rawid
         j['_version'] = version
         j['_time'] = time.mktime(j['updated_parsed'])
@@ -74,6 +79,7 @@ def parse_response(response):
         out.append(j)
 
     return out
+
 
 def filter_latest_version(idvs):
     """

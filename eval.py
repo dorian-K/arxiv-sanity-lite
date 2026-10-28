@@ -48,13 +48,14 @@ SI_IDS = os.path.join(DATA_DIR, 'si_ids.txt')
 
 # -----------------------------------------------------------------------------
 
+
 def prepare_si(args):
-    """ samples Scholar Inbox users and writes their profiles + the ids to fetch """
+    """samples Scholar Inbox users and writes their profiles + the ids to fetch"""
     pos, neg = defaultdict(set), defaultdict(set)
     with open(args.ratings) as f:
         for row in csv.DictReader(f):
             if '/' in row['arxiv_id']:
-                continue # old-style ids (hep-th/0408218): aslite.arxiv stores them under a mangled id
+                continue  # old-style ids (hep-th/0408218): aslite.arxiv stores them under a mangled id
             (pos if row['rating'] == '1' else neg)[row['user_id']].add(row['arxiv_id'])
     users = [u for u in pos if len(pos[u]) >= args.min_pos and len(neg[u]) >= args.min_neg]
     print(f"{len(users)} users have >= {args.min_pos} likes and >= {args.min_neg} downvotes")
@@ -76,7 +77,9 @@ def prepare_si(args):
         f.write('\n'.join(sorted(ids)) + '\n')
     print(f"wrote {len(profiles)} profiles to {SI_PROFILES} and {len(ids)} ids to {SI_IDS}")
 
+
 # -----------------------------------------------------------------------------
+
 
 def load_profiles(source):
     if source == 'si':
@@ -92,7 +95,7 @@ def load_profiles(source):
 
 
 def auc(a, b):
-    """ P(x > y) for x in a, y in b, ties count half """
+    """P(x > y) for x in a, y in b, ties count half"""
     a, b = np.asarray(a), np.sort(np.asarray(b))
     if len(a) == 0 or len(b) == 0:
         return float('nan')
@@ -140,7 +143,7 @@ def run(args):
 
     variants = []
     for v in args.variants.split(','):
-        parts = v.split(':') # feats:model[:C]
+        parts = v.split(':')  # feats:model[:C]
         variants.append((parts[0], parts[1], float(parts[2]) if len(parts) > 2 else None))
 
     n_papers = len(features['pids'])
@@ -156,8 +159,8 @@ def run(args):
         for v in variants:
             m = defaultdict(list)
             for fold in range(args.folds):
-                test_p = set(pos_l[fold::args.folds])
-                test_n = set(neg_l[fold::args.folds])
+                test_p = set(pos_l[fold :: args.folds])
+                test_n = set(neg_l[fold :: args.folds])
                 train_p, train_n = pos - test_p, neg - test_n
                 if args.train_pos:
                     # simulate a small tag: train on only a few of the liked papers. seeded per
@@ -166,8 +169,9 @@ def run(args):
                     train_p = set(sub.sample(sorted(train_p), min(args.train_pos, len(train_p))))
                     train_n = set(sub.sample(sorted(train_n), min(args.train_pos, len(train_n))))
                 t0 = time.time()
-                pids, scores, _ = rank(features, train_p, train_n, feats=v[0], model=v[1], C=v[2],
-                                       alpha=args.alpha, fusion_w=args.fusion_w)
+                pids, scores, _ = rank(
+                    features, train_p, train_n, feats=v[0], model=v[1], C=v[2], alpha=args.alpha, fusion_w=args.fusion_w
+                )
                 times[v] += time.time() - t0
                 score = dict(zip(pids, scores, strict=True))
                 rank_of = {p: i for i, p in enumerate(pids)}
@@ -193,22 +197,35 @@ def run(args):
     for v in variants:
         r = results[v]
         label = f"{v[0]}:{v[1]}" + (f":{v[2]:g}" if v[2] is not None else '')
+
         def fmt(key, r=r):
             vals = r.get(key, [])
             if not vals:
                 return float('nan'), float('nan')
             return float(np.mean(vals)), float(np.std(vals) / np.sqrt(len(vals)))
+
         ar, ah, tp = fmt('auc_rand'), fmt('auc_hard'), fmt('top1pct')
         print(f"{label:<24} {ar[0]:>9.4f} {ah[0]:>9.4f} {tp[0]:>8.3f} {times[v] / n_fits:>8.2f}")
-        rows.append({'variant': label, 'auc_rand': ar[0], 'auc_rand_se': ar[1], 'auc_hard': ah[0],
-                     'auc_hard_se': ah[1], 'top1pct': tp[0], 'top1pct_se': tp[1],
-                     'sec_per_fit': times[v] / n_fits, 'profiles': len(profiles)})
+        rows.append(
+            {
+                'variant': label,
+                'auc_rand': ar[0],
+                'auc_rand_se': ar[1],
+                'auc_hard': ah[0],
+                'auc_hard_se': ah[1],
+                'top1pct': tp[0],
+                'top1pct_se': tp[1],
+                'sec_per_fit': times[v] / n_fits,
+                'profiles': len(profiles),
+            }
+        )
     if args.out:
         with open(args.out, 'w', newline='') as f:
             w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
             w.writeheader()
             w.writerows(rows)
         print(f"\nwrote {args.out}")
+
 
 # -----------------------------------------------------------------------------
 
@@ -226,22 +243,37 @@ if __name__ == '__main__':
 
     r = sub.add_parser('run', help='run the comparison')
     r.add_argument('--source', choices=['tags', 'si'], default='tags')
-    r.add_argument('--variants', default='tfidf:svm,emb:svm,concat:svm,fusion:svm,tfidf:logreg,emb:logreg,fusion:logreg',
-                   help='comma-separated feats:model[:C]')
+    r.add_argument(
+        '--variants',
+        default='tfidf:svm,emb:svm,concat:svm,fusion:svm,tfidf:logreg,emb:logreg,fusion:logreg',
+        help='comma-separated feats:model[:C]',
+    )
     r.add_argument('--folds', type=int, default=3)
     r.add_argument('--min_pos', type=int, default=5)
     r.add_argument('--max_profiles', type=int, default=0, help='subsample profiles (0 = all)')
     r.add_argument('--alpha', type=float, default=None, help='concat: embedding block scale')
     r.add_argument('--fusion_w', type=float, default=None, help='fusion: weight of the embedding score')
     r.add_argument('--out', default='', help='also write results to this csv')
-    r.add_argument('--train_pos', type=int, default=0,
-                   help='train on at most this many liked (and downvoted) papers per fold, to check '
-                        'that defaults tuned on large profiles also work for tags with few papers')
-    r.add_argument('--pool', choices=['all', 'rated'], default='all',
-                   help="papers to rank: everything, or only papers some profile rated "
-                        "(use 'rated' with --source si, see restrict_to)")
-    r.add_argument('--features', default='', help='features pickle to use instead of data/features.p, '
-                   'e.g. a copy made with another --embed_model, to compare embedding models')
+    r.add_argument(
+        '--train_pos',
+        type=int,
+        default=0,
+        help='train on at most this many liked (and downvoted) papers per fold, to check '
+        'that defaults tuned on large profiles also work for tags with few papers',
+    )
+    r.add_argument(
+        '--pool',
+        choices=['all', 'rated'],
+        default='all',
+        help="papers to rank: everything, or only papers some profile rated "
+        "(use 'rated' with --source si, see restrict_to)",
+    )
+    r.add_argument(
+        '--features',
+        default='',
+        help='features pickle to use instead of data/features.p, '
+        'e.g. a copy made with another --embed_model, to compare embedding models',
+    )
 
     args = parser.parse_args()
     {'prepare-si': prepare_si, 'run': run}[args.cmd](args)

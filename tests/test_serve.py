@@ -6,7 +6,8 @@ import pytest
 @pytest.fixture
 def client(features):
     import serve
-    importlib.reload(serve) # module-level state must not leak between temp dirs
+
+    importlib.reload(serve)  # module-level state must not leak between temp dirs
     serve.app.config['TESTING'] = True
     with serve.app.test_client() as c:
         yield c
@@ -39,6 +40,7 @@ def test_tag_rank_and_downvote(client, corpus):
     # liking a downvoted paper moves it from neg_tags to tags
     client.get(f'/add/{vision[4]}/cv')
     from aslite.db import get_tags_db, get_neg_tags_db
+
     with get_tags_db() as tdb, get_neg_tags_db() as ndb:
         assert vision[4] in tdb['alice']['cv']
         assert vision[4] not in ndb['alice'].get('cv', set())

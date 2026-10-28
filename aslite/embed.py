@@ -43,34 +43,35 @@ ST_MODEL_CONFIGS = {
 
 
 def paper_text(p, text_format='{title}\n\n{summary}'):
-    """ the text we embed for a paper: title and abstract, whitespace-normalized """
+    """the text we embed for a paper: title and abstract, whitespace-normalized"""
     title = ' '.join(p['title'].split())
     summary = ' '.join(p['summary'].split())
     return text_format.format(title=title, summary=summary)
 
 
 class SentenceTransformerBackend:
-
     def __init__(self, name):
-        import torch # lazy: torch is heavy
+        import torch  # lazy: torch is heavy
         from sentence_transformers import SentenceTransformer
+
         cfg = ST_MODEL_CONFIGS.get(name, {})
         self.text_format = cfg.get('text_format', '{title}\n\n{summary}')
         # some models default to bfloat16, which is many times slower on most CPUs
         dtype = torch.float32 if not torch.cuda.is_available() else 'auto'
-        self.model = SentenceTransformer(name, trust_remote_code=False, model_kwargs={'dtype': dtype},
-                                         config_kwargs=cfg.get('config_kwargs'))
+        self.model = SentenceTransformer(
+            name, trust_remote_code=False, model_kwargs={'dtype': dtype}, config_kwargs=cfg.get('config_kwargs')
+        )
         if 'max_seq_length' in cfg:
             self.model.max_seq_length = cfg['max_seq_length']
 
     def encode(self, texts):
-        x = self.model.encode(texts, batch_size=32, normalize_embeddings=True,
-                              show_progress_bar=False, convert_to_numpy=True)
+        x = self.model.encode(
+            texts, batch_size=32, normalize_embeddings=True, show_progress_bar=False, convert_to_numpy=True
+        )
         return x.astype(np.float32)
 
 
 class APIBackend:
-
     def __init__(self, name):
         self.name = name
         self.base = os.environ.get('EMBED_API_BASE', 'https://api.openai.com/v1').rstrip('/')
@@ -92,7 +93,7 @@ class APIBackend:
                 if attempt == 4:
                     raise
                 print(f"embedding API error ({e}), retrying...")
-                time.sleep(2 ** attempt)
+                time.sleep(2**attempt)
         rows = sorted(data['data'], key=lambda d: d['index'])
         x = np.array([r['embedding'] for r in rows], dtype=np.float32)
         x /= np.linalg.norm(x, axis=1, keepdims=True) + 1e-12
@@ -125,10 +126,12 @@ def embed_papers(pids, pdb, model, batch_size=64, log_every=1000):
             missing.sort(key=lambda pid: len(texts[pid]))
             t0 = time.time()
             for i in range(0, len(missing), batch_size):
-                batch = missing[i:i + batch_size]
+                batch = missing[i : i + batch_size]
                 x = backend.encode([texts[pid] for pid in batch])
-                for pid, v in zip(batch, x, strict=True): # a backend returning the wrong count must not misalign the cache
-                    cache[pid] = v.astype(np.float16) # half precision is plenty and halves the db
+                for pid, v in zip(
+                    batch, x, strict=True
+                ):  # a backend returning the wrong count must not misalign the cache
+                    cache[pid] = v.astype(np.float16)  # half precision is plenty and halves the db
                 cache.commit()
                 done = i + len(batch)
                 if done % log_every < batch_size or done == len(missing):

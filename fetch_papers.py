@@ -30,7 +30,7 @@ if __name__ == '__main__':
     if args.file:
         with open(args.file) as f:
             ids += [line.strip() for line in f if line.strip()]
-    ids = [re.sub(r'v\d+$', '', i) for i in ids] # drop version suffixes
+    ids = [re.sub(r'v\d+$', '', i) for i in ids]  # drop version suffixes
 
     pdb = get_papers_db(flag='c', autocommit=False)
     mdb = get_metas_db(flag='c', autocommit=False)
@@ -39,13 +39,13 @@ if __name__ == '__main__':
 
     nnew = 0
     for k in range(0, len(todo), args.batch):
-        batch = todo[k:k + args.batch]
+        batch = todo[k : k + args.batch]
         for attempt in range(10):
             try:
                 papers = parse_response(get_response_ids(batch))
                 break
             except Exception as e:
-                wait = min(120, 5 * 2 ** attempt) + random.uniform(0, 5) # back off, arxiv rate limits
+                wait = min(120, 5 * 2**attempt) + random.uniform(0, 5)  # back off, arxiv rate limits
                 logging.warning("arxiv api error (%s), retrying in %.0fs...", e, wait)
                 time.sleep(wait)
         else:
@@ -59,8 +59,10 @@ if __name__ == '__main__':
             mdb[p['_id']] = {'_time': p['_time']}
         mdb.commit()
         nnew += len(papers)
-        logging.info("fetched %d/%d (got %d papers back for %d ids)", k + len(batch), len(todo), len(papers), len(batch))
-        time.sleep(3) # arxiv asks for 3s between api calls
+        logging.info(
+            "fetched %d/%d (got %d papers back for %d ids)", k + len(batch), len(todo), len(papers), len(batch)
+        )
+        time.sleep(3)  # arxiv asks for 3s between api calls
 
     pdb.close()
     mdb.close()

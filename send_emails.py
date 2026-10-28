@@ -78,31 +78,30 @@ To stop these emails remove your email in your <a href="https://arxiv-sanity-lit
 
 # -----------------------------------------------------------------------------
 
+
 def calculate_recommendation(
     tags,
     neg_tags,
-    time_delta = 3, # how recent papers are we recommending? in days
-    ):
+    time_delta=3,  # how recent papers are we recommending? in days
+):
 
     # loop over all the tags
     all_pids, all_scores = {}, {}
     have = set().union(*tags.values(), *neg_tags.values())
     for tag, pids in tags.items():
-
         if len(pids) == 0:
             continue
 
         # rank all papers for this tag, with its downvotes as explicit negatives
-        pids, scores, _ = rank(features, pids, neg_tags.get(tag, set()),
-                               feats=args.feats, model=args.model)
+        pids, scores, _ = rank(features, pids, neg_tags.get(tag, set()), feats=args.feats, model=args.model)
 
         # filter by time to only recent papers
-        deltat = time_delta*60*60*24 # allowed time delta in seconds
-        keep = [i for i,pid in enumerate(pids) if (tnow - metas[pid]['_time']) < deltat]
+        deltat = time_delta * 60 * 60 * 24  # allowed time delta in seconds
+        keep = [i for i, pid in enumerate(pids) if (tnow - metas[pid]['_time']) < deltat]
         pids, scores = [pids[i] for i in keep], [scores[i] for i in keep]
 
         # finally exclude the papers we already have tagged or downvoted
-        keep = [i for i,pid in enumerate(pids) if pid not in have]
+        keep = [i for i, pid in enumerate(pids) if pid not in have]
         pids, scores = [pids[i] for i in keep], [scores[i] for i in keep]
 
         # store results
@@ -111,7 +110,9 @@ def calculate_recommendation(
 
     return all_pids, all_scores
 
+
 # -----------------------------------------------------------------------------
+
 
 def render_recommendations(user, tags, tag_pids, tag_scores):
     # render the paper recommendations into the html template
@@ -121,7 +122,7 @@ def render_recommendations(user, tags, tag_pids, tag_scores):
     max_source_tag = {}
     for tag in tag_pids:
         for pid, score in zip(tag_pids[tag], tag_scores[tag], strict=True):
-            max_score[pid] = max(max_score.get(pid, -99999), score) # lol
+            max_score[pid] = max(max_score.get(pid, -99999), score)  # lol
             if max_score[pid] == score:
                 max_source_tag[pid] = tag
 
@@ -137,13 +138,13 @@ def render_recommendations(user, tags, tag_pids, tag_scores):
         authors = ', '.join(a['name'] for a in p['authors'])
         # crop the abstract
         summary = p['summary']
-        summary = summary[:min(500, len(summary))]
+        summary = summary[: min(500, len(summary))]
         if len(summary) == 500:
             summary += '...'
         # create the url that will feature this paper on top and also show the most similar papers
         url = 'https://arxiv-sanity-lite.com/?rank=pid&pid=' + pid
         parts.append(
-"""
+            """
 <tr>
 <td valign="top"><div class="s">%.2f</div></td>
 <td>
@@ -152,7 +153,8 @@ def render_recommendations(user, tags, tag_pids, tag_scores):
 <div class="u">%s</div>
 </td>
 </tr>
-""" % (score, url, p['title'], max_source_tag[pid], authors, summary)
+"""
+            % (score, url, p['title'], max_source_tag[pid], authors, summary)
         )
 
     # render the final html
@@ -177,8 +179,10 @@ def render_recommendations(user, tags, tag_pids, tag_scores):
 
     return out
 
+
 # -----------------------------------------------------------------------------
 # send the actual html via sendgrid
+
 
 def send_email(to, html):
 
@@ -200,38 +204,57 @@ def send_email(to, html):
         print(response.status_code)
         pass
 
+
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-
     parser = argparse.ArgumentParser(description='Sends emails with recommendations')
-    parser.add_argument('-n', '--num-recommendations', type=int, default=20, help='number of recommendations to send per person')
+    parser.add_argument(
+        '-n', '--num-recommendations', type=int, default=20, help='number of recommendations to send per person'
+    )
     parser.add_argument('-t', '--time-delta', type=int, default=3, help='how recent papers to recommended, in days')
     parser.add_argument('-d', '--dry-run', type=int, default=0, help='if set to 1 do not actually send the emails')
-    parser.add_argument('-u', '--user', type=str, default='', help='restrict recommendations only to a single given user (used for debugging)')
-    parser.add_argument('--feats', type=str, default='auto', help='features to rank with: auto|tfidf|emb|concat|fusion (see aslite/rank.py)')
+    parser.add_argument(
+        '-u',
+        '--user',
+        type=str,
+        default='',
+        help='restrict recommendations only to a single given user (used for debugging)',
+    )
+    parser.add_argument(
+        '--feats',
+        type=str,
+        default='auto',
+        help='features to rank with: auto|tfidf|emb|concat|fusion (see aslite/rank.py)',
+    )
     parser.add_argument('--model', type=str, default='svm', help='ranking model: svm|logreg (see aslite/rank.py)')
-    parser.add_argument('-m', '--min-papers', type=int, default=1, help='user must have at least this many papers for us to send recommendations')
+    parser.add_argument(
+        '-m',
+        '--min-papers',
+        type=int,
+        default=1,
+        help='user must have at least this many papers for us to send recommendations',
+    )
     args = parser.parse_args()
     print(args)
 
     tnow = time.time()
-    tnow_str = time.strftime('%b %d', time.localtime(tnow)) # e.g. "Nov 27"
+    tnow_str = time.strftime('%b %d', time.localtime(tnow))  # e.g. "Nov 27"
 
     # read entire db simply into RAM
     with get_tags_db() as tags_db:
-        all_tags = {k:v for k,v in tags_db.items()}
+        all_tags = {k: v for k, v in tags_db.items()}
 
     with get_neg_tags_db() as neg_db:
-        all_neg_tags = {k:v for k,v in neg_db.items()}
+        all_neg_tags = {k: v for k, v in neg_db.items()}
 
     # read entire db simply into RAM
     with get_metas_db() as mdb:
-        metas = {k:v for k,v in mdb.items()}
+        metas = {k: v for k, v in mdb.items()}
 
     # read entire db simply into RAM
     with get_email_db() as edb:
-        emails = {k:v for k,v in edb.items()}
+        emails = {k: v for k, v in edb.items()}
 
     # read tfidf features into RAM
     features = load_features()
@@ -242,11 +265,10 @@ if __name__ == "__main__":
     # iterate all users, create recommendations, send emails
     num_sent = 0
     for user, tags in all_tags.items():
-
         # verify that we have an email for this user
         email = emails.get(user, None)
         if not email:
-            print("skipping user %s, no email" % (user, ))
+            print("skipping user %s, no email" % (user,))
             continue
         if args.user and user != args.user:
             print("skipping user %s, not %s" % (user, args.user))
@@ -264,7 +286,7 @@ if __name__ == "__main__":
         # calculate the recommendations
         pids, scores = calculate_recommendation(tags, all_neg_tags.get(user, {}), time_delta=args.time_delta)
         if all(len(lst) == 0 for tag, lst in pids.items()):
-            print("skipping user %s, no recommendations were produced" % (user, ))
+            print("skipping user %s, no recommendations were produced" % (user,))
             continue
 
         # render the html
@@ -272,7 +294,7 @@ if __name__ == "__main__":
         html = render_recommendations(user, tags, pids, scores)
         # temporarily for debugging write recommendations to disk for manual inspection
         if os.path.isdir('recco'):
-            with open('recco/%s.html' % (user, ), 'w') as f:
+            with open('recco/%s.html' % (user,), 'w') as f:
                 f.write(html)
 
         # actually send the email
@@ -284,5 +306,4 @@ if __name__ == "__main__":
         # time.sleep(1 + random.uniform(0, 2))
 
     print("done.")
-    print("sent %d emails" % (num_sent, ))
-
+    print("sent %d emails" % (num_sent,))

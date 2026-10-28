@@ -49,6 +49,7 @@ def corpus(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / 'data').mkdir()
     from aslite.db import get_papers_db, get_metas_db
+
     rng = random.Random(0)
     papers = {}
     with get_papers_db(flag='c') as pdb, get_metas_db(flag='c') as mdb:
@@ -62,8 +63,12 @@ def corpus(tmp_path, monkeypatch):
 
 @pytest.fixture
 def features(corpus):
-    """ runs compute.py on the corpus, like the cron job would, and returns data/features.p """
-    subprocess.run([sys.executable, os.path.join(REPO, 'compute.py'), '--min_df', '1', '--max_df', '1.0'],
-                   check=True, capture_output=True)
+    """runs compute.py on the corpus, like the cron job would, and returns data/features.p"""
+    subprocess.run(
+        [sys.executable, os.path.join(REPO, 'compute.py'), '--min_df', '1', '--max_df', '1.0'],
+        check=True,
+        capture_output=True,
+    )
     from aslite.db import load_features
+
     return load_features()

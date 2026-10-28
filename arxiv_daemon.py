@@ -14,13 +14,20 @@ from aslite.arxiv import get_response, parse_response
 from aslite.db import get_papers_db, get_metas_db
 
 if __name__ == '__main__':
-
-    logging.basicConfig(level=logging.INFO, format='%(name)s %(levelname)s %(asctime)s %(message)s', datefmt='%m/%d/%Y %I:%M:%S %p')
+    logging.basicConfig(
+        level=logging.INFO, format='%(name)s %(levelname)s %(asctime)s %(message)s', datefmt='%m/%d/%Y %I:%M:%S %p'
+    )
 
     parser = argparse.ArgumentParser(description='Arxiv Daemon')
     parser.add_argument('-n', '--num', type=int, default=100, help='up to how many papers to fetch')
     parser.add_argument('-s', '--start', type=int, default=0, help='start at what index')
-    parser.add_argument('-b', '--break-after', type=int, default=3, help='how many 0 new papers in a row would cause us to stop early? or 0 to disable.')
+    parser.add_argument(
+        '-b',
+        '--break-after',
+        type=int,
+        default=3,
+        help='how many 0 new papers in a row would cause us to stop early? or 0 to disable.',
+    )
     args = parser.parse_args()
     print(args)
     """
@@ -54,7 +61,7 @@ if __name__ == '__main__':
                 papers = parse_response(resp)
                 time.sleep(0.5)
                 if len(papers) == 100:
-                    break # otherwise we have to try again
+                    break  # otherwise we have to try again
             except Exception as e:
                 logging.warning(e)
                 logging.warning("will try again in a bit...")
@@ -85,14 +92,15 @@ if __name__ == '__main__':
 
         # some diagnostic information on how things are coming along
         logging.info(papers[0]['_time_str'])
-        logging.info("k=%d, out of %d: had %d, replaced %d, new %d. now have: %d" %
-             (k, len(papers), nhad, nreplace, nnew, prevn))
+        logging.info(
+            "k=%d, out of %d: had %d, replaced %d, new %d. now have: %d" % (k, len(papers), nhad, nreplace, nnew, prevn)
+        )
 
         # early termination criteria
         if nnew == 0:
             zero_updates_in_a_row += 1
             if args.break_after > 0 and zero_updates_in_a_row >= args.break_after:
-                logging.info("breaking out early, no new papers %d times in a row" % (args.break_after, ))
+                logging.info("breaking out early, no new papers %d times in a row" % (args.break_after,))
                 break
             elif k == 0:
                 logging.info("our very first call for the latest there were no new papers, exitting")

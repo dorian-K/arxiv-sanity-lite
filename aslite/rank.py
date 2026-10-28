@@ -45,12 +45,12 @@ DEFAULT_C = {
 }
 
 DEFAULTS = dict(
-    alpha=1.0,         # concat: scale of the embedding block relative to tfidf
-    fusion_w=0.5,      # fusion: weight of the embedding model's score
-    svm_neg_weight=5.0,# svm: sample weight of downvoted papers (other negatives have 1)
-    n_random=5000,     # logreg: number of random negatives
-    S=5.0,             # logreg: total weight of negatives relative to positives
-    V=0.8,             # logreg: share of negative weight on downvotes vs random papers
+    alpha=1.0,  # concat: scale of the embedding block relative to tfidf
+    fusion_w=0.5,  # fusion: weight of the embedding model's score
+    svm_neg_weight=5.0,  # svm: sample weight of downvoted papers (other negatives have 1)
+    n_random=5000,  # logreg: number of random negatives
+    S=5.0,  # logreg: total weight of negatives relative to positives
+    V=0.8,  # logreg: share of negative weight on downvotes vs random papers
 )
 
 _concat_cache = {}
@@ -78,7 +78,7 @@ def _matrix(features, feats, alpha):
     if feats == 'concat':
         key = (id(features), alpha)
         if key not in _concat_cache:
-            _concat_cache.clear() # only keep the current features file around
+            _concat_cache.clear()  # only keep the current features file around
             emb = sp.csr_matrix(features['x_emb'] * alpha)
             _concat_cache[key] = sp.hstack([features['x'], emb], format='csr')
         return _concat_cache[key]
@@ -86,7 +86,7 @@ def _matrix(features, feats, alpha):
 
 
 def _fit_score(x, pos, neg, model, C, opts, seed):
-    """ fits one linear model on rows of x, returns (scores for all rows, coef vector) """
+    """fits one linear model on rows of x, returns (scores for all rows, coef vector)"""
     n = x.shape[0]
 
     if model == 'svm':
@@ -110,7 +110,7 @@ def _fit_score(x, pos, neg, model, C, opts, seed):
         nP, nN, nR = len(pos), len(neg), len(rand)
         S, V = opts['S'], opts['V']
         if nN == 0:
-            V = 0.0 # nothing to put the downvote share on
+            V = 0.0  # nothing to put the downvote share on
         denom = V * nN + (1 - V) * nR
         wP, wN, wR = 1.0 / nP, S * V / denom, S * (1 - V) / denom
 
@@ -134,8 +134,7 @@ def _zscore(s):
 def _top_words(features, coef_tfidf):
     ivocab = {v: k for k, v in features['vocab'].items()}
     sortix = np.argsort(-coef_tfidf)
-    return [{'word': ivocab[ix], 'weight': float(coef_tfidf[ix])}
-            for ix in list(sortix[:40]) + list(sortix[-20:])]
+    return [{'word': ivocab[ix], 'weight': float(coef_tfidf[ix])} for ix in list(sortix[:40]) + list(sortix[-20:])]
 
 
 def rank(features, pos_pids, neg_pids=(), feats='auto', model='svm', C=None, **kwargs):
@@ -170,7 +169,7 @@ def rank(features, pos_pids, neg_pids=(), feats='auto', model='svm', C=None, **k
     else:
         x = _matrix(features, feats, opts['alpha'])
         s, coef = _fit_score(x, pos, neg, model, C_for(feats), opts, seed)
-        s = 100 * s if model == 'svm' else s # keep the original svm score scale
+        s = 100 * s if model == 'svm' else s  # keep the original svm score scale
         n_vocab = features['x'].shape[1]
         words = _top_words(features, coef[:n_vocab]) if feats in ('tfidf', 'concat') else []
 

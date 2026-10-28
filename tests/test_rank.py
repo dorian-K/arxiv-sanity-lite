@@ -5,7 +5,7 @@ from aslite.rank import rank, resolve_feats, FEATS, MODELS
 
 
 def with_fake_embeddings(features):
-    """ adds an x_emb block that separates the two topics, as a real embedding would """
+    """adds an x_emb block that separates the two topics, as a real embedding would"""
     f = dict(features)
     rng = np.random.default_rng(0)
     is_vision = np.array([int(p.split('.')[1]) % 6 == 0 for p in f['pids']])

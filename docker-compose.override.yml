@@ -2,7 +2,7 @@
 # default one. docker compose reads this file automatically next to docker-compose.yml, so
 # create the network once before `up`:
 #
-#   docker network create arxiv-resanity
+#   docker network create --ipv6=false arxiv-resanity
 #
 # An nginx in docker joins the same network (`docker network connect arxiv-resanity <nginx>`)
 # and proxies to http://arxiv-resanity-web:8000, the web container's name. The

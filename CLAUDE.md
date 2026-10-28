@@ -41,7 +41,7 @@ ARXIV_SANITY_DATA=data/5y uv run python import_snapshot.py --years 5 --check dat
 ARXIV_SANITY_DATA=data/5y uv run python harvest_papers.py --years 5   # fallback: same via OAI-PMH, ~5h of polite requests
 ./gpu_embed.sh user@host st:google/embeddinggemma-2 data/5y   # embeddings on a GPU box over ssh; GPU=MIG-<uuid> pins a device
 uv run flask --app serve run               # web UI (make fun); `make up` = daemon + compute
-docker network create arxiv-resanity        # once: docker-compose.override.yml puts all services on it
+docker network create --ipv6=false arxiv-resanity   # once: docker-compose.override.yml puts all services on it
 docker compose up -d --build               # public deployment: gunicorn web + daily updater, behind an https proxy (.env.example)
 uv run flask --app serve set-password <user>   # create/reset an account (needed when ALLOW_SIGNUP=0)
 uv run python send_emails.py --dry-run 1 -u <user> --save d.html   # compose (and store) a digest without sending

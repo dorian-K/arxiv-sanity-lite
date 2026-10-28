@@ -42,7 +42,8 @@ postconf -e \
     "myorigin = $MAIL_DOMAIN" \
     "mydestination =" \
     "inet_interfaces = all" \
-    "inet_protocols = ${INET_PROTOCOLS:-ipv4}" \
+    "inet_protocols = ipv4" \
+    "smtp_address_preference = ipv4" \
     "mynetworks = 127.0.0.0/8 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16" \
     "smtpd_relay_restrictions = permit_mynetworks, reject" \
     "smtpd_recipient_restrictions = permit_mynetworks, reject" \
@@ -56,6 +57,8 @@ postconf -e \
     "maillog_file = /dev/stdout" \
     "message_size_limit = 10240000"
 # tempfail above: if opendkim is down, mail waits in the queue instead of going out unsigned.
+# ipv4 only, on purpose: the SPF record and reverse DNS above cover the IPv4 address, so
+# mail sent over IPv6 would fail those checks at Gmail & co.
 # no chroot: the chroot would need copies of resolv.conf and friends inside the spool
 postconf -F '*/*/chroot = n'
 

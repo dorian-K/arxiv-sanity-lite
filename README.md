@@ -51,7 +51,7 @@ TLS is left to a reverse proxy in front.
 cp .env.example .env        # DATA_PATH, port, signups, embedding model, HF token
 # docker-compose.override.yml (read automatically) puts all services on one network created
 # outside compose; an nginx in docker can join it and proxy to http://arxiv-resanity-web:8000
-docker network create arxiv-resanity
+docker network create --ipv6=false arxiv-resanity
 docker compose up -d --build
 docker compose logs -f updater
 ```

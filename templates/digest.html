@@ -29,9 +29,11 @@ var gvars = {rank: 'digest'};
             (add your email on your <a href="/profile">profile</a>), or right now:
         </p>
         {% endif %}
+        {% if not readonly %}
         <form action="/digest" method="post">
             <button type="submit" class="btn">{{ 'Make a fresh one' if digest_time else 'Make my digest' }}</button>
         </form>
+        {% endif %}
         {% endif %}
     </section>
     <div id="digestwrap"></div>

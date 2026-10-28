@@ -462,3 +462,7 @@ textarea.form-control {
 .onboarding h1 { font-size: 18px; }
 .onboarding ol { margin: 8px 0 0; padding-left: 22px; }
 .onboarding li { margin: 6px 0; line-height: 1.5; }
+
+label.check { display: flex; gap: 10px; align-items: flex-start; line-height: 1.4; cursor: pointer; }
+label.check input { margin-top: 3px; width: 18px; height: 18px; flex: none; }
+.muted.small { font-size: 13px; margin: 10px 0 0; }

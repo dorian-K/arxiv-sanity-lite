@@ -160,10 +160,20 @@ def before_request():
         abort(403)
 
     g.user = session.get('user', None)
+    g.readonly = bool(session.get('readonly'))
 
-    # record activity on this user so we can reserve periodic
-    # recommendations heavy compute only for active users
-    if g.user:
+    if g.user and g.readonly:
+        # a read-only view of someone's tags (login without password, if they allow it):
+        # ends as soon as they stop sharing, and can't change anything
+        u = db.get_user(g.user)
+        if not u or not u['public']:
+            session.clear()
+            g.user, g.readonly = None, False
+        elif request.method == 'POST' and request.endpoint not in ('login', 'logout'):
+            return "error, this is a read-only view: log in with the password to make changes", 403
+    elif g.user:
+        # record activity on this user so we can reserve periodic
+        # recommendations heavy compute only for active users
         db.touch_user(g.user)
 
 
@@ -270,6 +280,7 @@ def default_context():
     # any global context across all pages, e.g. related to the current user
     context = {}
     context['user'] = g.user if g.user is not None else ''
+    context['readonly'] = bool(g.user and g.readonly)
     return context
 
 
@@ -444,9 +455,19 @@ def profile(error=''):
     context = default_context()
     context['error'] = error
     context['allow_signup'] = ALLOW_SIGNUP
-    user = db.get_user(g.user) if g.user else None
+    user = db.get_user(g.user) if g.user and not g.readonly else None  # the email stays private
     context['email'] = user['email'] if user else ''
+    context['public'] = bool(user and user['public'])
     return render_template('profile.html', **context)
+
+
+@app.route('/sharing', methods=['POST'])
+def sharing():
+    """the user's choice whether others may view their tags read-only, without the password"""
+    if g.user is None:
+        return redirect(url_for('profile'))
+    db.set_public(g.user, request.form.get('public') == '1')
+    return redirect(url_for('profile'))
 
 
 @app.route('/stats')
@@ -726,6 +747,14 @@ def login():
         return profile(error="Usernames are 1-40 letters, digits, '.', '_' or '-'."), 400
 
     user = db.get_user(username)
+    if password == '':
+        # no password: a read-only view, if this user shares their tags (off by default)
+        if user and user['public']:
+            session.clear()
+            session.permanent = True
+            session.update(user=username, readonly=True)
+            return redirect(url_for('main'))
+        return profile(error="Enter the password. (Without one you can only view accounts that are shared.)"), 403
     if user is None or user['pw_hash'] is None:
         # a new account, or one made before passwords existed: the first password set
         # claims it. with signups closed, only `flask set-password` can create accounts

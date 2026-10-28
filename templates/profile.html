@@ -6,12 +6,42 @@
 {% block content %}
 <div id="profilewrap" class="page">
 
-    {% if user %}
+    {% if readonly %}
+    <section class="card">
+        <h1>Viewing {{ user }}, read-only</h1>
+        <p class="muted">{{ user }} shares their tags, so you can browse their recommendations and digest.
+            To change anything, log in with the password.</p>
+        {% if error %}<p class="form-error">{{ error }}</p>{% endif %}
+        <form id="profile-login-form" action="/login" method="POST">
+            <input type="hidden" name="username" value="{{ user }}">
+            <div class="form-group">
+              <label for="password">Password for {{ user }}</label>
+              <input class="form-control" type="password" id="password" name="password" autocomplete="current-password" required>
+            </div>
+            <button type="submit" class="btn btn-primary">Log in</button>
+        </form>
+        <form action="{{ url_for('logout') }}" method="post" style="margin-top: 10px">
+            <button type="submit" class="btn">Stop viewing</button>
+        </form>
+    </section>
+    {% elif user %}
     <section class="card">
         <h1>Logged in as {{ user }}</h1>
         <form action="{{ url_for('logout') }}" method="post">
             <button type="submit" class="btn">Log out</button>
         </form>
+    </section>
+    <section class="card">
+        <h1>Sharing</h1>
+        <form action="/sharing" method="post">
+            <label class="check">
+                <input type="checkbox" name="public" value="1" {{ 'checked' if public }} onchange="this.form.submit()">
+                <span>Let anyone view my tags read-only, by logging in as <b>{{ user }}</b> with an empty password</span>
+            </label>
+            <noscript><button type="submit" class="btn btn-small">Save</button></noscript>
+        </form>
+        <p class="muted">They see your tags, recommendations and digest, never your email, and can't change anything.
+            {{ 'Turning this off ends their access right away.' if public else 'Off by default.' }}</p>
     </section>
     <section class="card">
         <h1>Weekly digest</h1>
@@ -46,9 +76,10 @@
             </div>
             <div class="form-group">
               <label for="password">Password</label>
-              <input class="form-control" type="password" id="password" name="password" autocomplete="current-password" required>
+              <input class="form-control" type="password" id="password" name="password" autocomplete="current-password">
             </div>
             <button type="submit" class="btn btn-primary">Log in / sign up</button>
+            <p class="muted small">Leave the password empty to view a shared account read-only.</p>
         </form>
     </section>
     {% endif %}

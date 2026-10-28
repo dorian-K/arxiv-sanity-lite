@@ -20,6 +20,8 @@ var move_page = function(int_offset) {
 
 {% if not user %}
 <div id="log-fun-warn"><a href="/profile">Log in or sign up</a> to save papers and get recommendations.</div>
+{% elif readonly %}
+<div id="log-fun-warn">👁 Viewing <b>{{ user }}</b>'s tags read-only. <a href="/profile">Log in</a> to make changes.</div>
 {% elif not tags %}
 <section class="card onboarding">
     <h1>Welcome! Three steps to your recommendations</h1>

@@ -255,7 +255,8 @@ CREATE TABLE IF NOT EXISTS users (
     name TEXT PRIMARY KEY,
     pw_hash TEXT,                  -- NULL for accounts from before passwords existed
     email TEXT NOT NULL DEFAULT '',
-    last_active INTEGER NOT NULL DEFAULT 0
+    last_active INTEGER NOT NULL DEFAULT 0,
+    public INTEGER NOT NULL DEFAULT 0  -- 1: anyone may view this user's tags read-only, without the password
 ) WITHOUT ROWID;
 -- one row per (user, tag, paper): liked (neg = 0), downvoted (neg = 1) or seen without an
 -- opinion (neg = 2, the digest's neutral button: not shown again, not used for training)
@@ -283,8 +284,20 @@ CREATE TABLE IF NOT EXISTS digests (
 """
 
 
+_users_columns_done = set()
+
+
 def users_db():
-    return connect(USERS_DB_FILE, USERS_SCHEMA)
+    con = connect(USERS_DB_FILE, USERS_SCHEMA)
+    key = os.path.abspath(USERS_DB_FILE)
+    if key not in _users_columns_done:
+        # columns added after the table first shipped; CREATE TABLE IF NOT EXISTS won't add them
+        cols = {r[1] for r in con.execute('PRAGMA table_info(users)')}
+        if 'public' not in cols:
+            with con:
+                con.execute('ALTER TABLE users ADD COLUMN public INTEGER NOT NULL DEFAULT 0')
+        _users_columns_done.add(key)
+    return con
 
 
 def _run(sql, args=()):
@@ -306,9 +319,15 @@ def _query(sql, args=()):
 
 
 def get_user(name):
-    """{'name', 'pw_hash', 'email', 'last_active'} or None"""
-    r = _query('SELECT name, pw_hash, email, last_active FROM users WHERE name = ?', (name,))
-    return dict(zip(('name', 'pw_hash', 'email', 'last_active'), r[0], strict=True)) if r else None
+    """{'name', 'pw_hash', 'email', 'last_active', 'public'} or None"""
+    keys = ('name', 'pw_hash', 'email', 'last_active', 'public')
+    r = _query(f'SELECT {", ".join(keys)} FROM users WHERE name = ?', (name,))
+    return dict(zip(keys, r[0], strict=True)) if r else None
+
+
+def set_public(name, public):
+    """whether others may view this user's tags read-only, without the password"""
+    _run('UPDATE users SET public = ? WHERE name = ?', (int(bool(public)), name))
 
 
 def set_password(name, pw_hash):

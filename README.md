@@ -56,6 +56,8 @@ Accounts have passwords. With `ALLOW_SIGNUP=1`, anyone can create one. A usernam
 docker compose exec web flask --app serve set-password alice
 ```
 
+Read-only sharing: users can turn on "let anyone view my tags read-only" on their profile (off by default). Anyone can then log in as them with an empty password and browse their tags, recommendations and digest. A viewer can't change anything, and never sees the email address. Turning it off ends those sessions on their next request.
+
 Example nginx config for the proxy. The `X-Forwarded-*` headers are required, because the app takes the scheme, host and client IP from them (`TRUST_PROXY=1`), and session cookies are https-only (`SECURE_COOKIES=1`):
 
 ```nginx

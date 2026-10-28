@@ -11,6 +11,7 @@
 
 <script>
 var user = {{ user | tojson }};
+var readonly = {{ readonly | default(false) | tojson }};
 </script>
 {% block variables %}
 {% endblock %}
@@ -21,10 +22,10 @@ var user = {{ user | tojson }};
 <header id="header">
     <a href="/" id="home-link">arxiv<span>-sanity</span></a>
     <nav>
-        {% if user %}<a href="/digest">digest</a><a href="/import" title="add papers by arXiv link">add</a>{% endif %}
+        {% if user %}<a href="/digest">digest</a>{% endif %}{% if user and not readonly %}<a href="/import" title="add papers by arXiv link">add</a>{% endif %}
         <a href="/about" class="nav-secondary">about</a>
         <a href="/stats" class="nav-secondary">stats</a>
-        <a href="/profile" class="{{ 'nav-user' if user else 'nav-login' }}">{{ user if user else 'log in' }}</a>
+        <a href="/profile" class="{{ 'nav-user' if user else 'nav-login' }}" {% if readonly %}title="read-only view"{% endif %}>{{ ('👁 ' + user) if readonly else (user if user else 'log in') }}</a>
     </nav>
 </header>
 

@@ -139,3 +139,37 @@ def test_rate_limits(client, corpus, monkeypatch):
     assert codes == [200, 200, 429]
     r = client.get(f'/?rank=pid&pid={pid}')
     assert r.status_code == 429 and int(r.headers['Retry-After']) >= 1
+
+
+def test_read_only_view_of_shared_accounts(client, corpus):
+    from aslite import db
+
+    pid = next(iter(corpus))
+    login(client)
+    client.post(f'/add/{pid}/cv')
+    client.post('/register_email', data={'email': 'alice@example.org'})
+    client.post('/logout')
+
+    # off by default: an empty password gets nowhere
+    assert login(client, password='').status_code == 403
+    login(client)
+    client.post('/sharing', data={'public': '1'})
+    assert db.get_user('alice')['public'] == 1
+    client.post('/logout')
+
+    r = login(client, password='')
+    assert r.status_code == 302
+    assert b'read-only' in client.get('/?rank=tags&tags=cv').data
+    assert client.get('/?rank=tags&tags=cv').status_code == 200
+    assert b'alice@example.org' not in client.get('/profile').data  # the email stays private
+    for url in [f'/add/{pid}/x', f'/sub/{pid}/cv', f'/addneg/{pid}/cv', '/del/cv', '/import', '/digest', '/sharing']:
+        assert client.post(url, data={'text': '2501.00001', 'public': '0', 'email': ''}).status_code == 403, url
+    assert db.get_tags('alice') == {'cv': {pid}} and db.get_user('alice')['public'] == 1
+
+    # the owner turns sharing off: the read-only session ends on its next request
+    db.set_public('alice', False)
+    assert b'read-only' not in client.get('/').data
+    assert client.post(f'/add/{pid}/x').data.startswith(b'error, not logged in')
+    # and a wrong password is still wrong, sharing or not
+    db.set_public('alice', True)
+    assert login(client, password='wrong password').status_code == 403

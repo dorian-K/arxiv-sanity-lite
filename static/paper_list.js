@@ -1,6 +1,8 @@
 'use strict';
 
 // the user's tag names, for autocompletion in the tag editor
+// logged in with the password (not a read-only view of a shared account)
+const canEdit = Boolean(user) && !readonly;
 const userTagNames = (typeof tags !== 'undefined' ? tags : []).map(t => t.name).filter(n => n !== 'all');
 
 // calls one of the tag endpoints; resolves on "ok...", otherwise shows the server's message
@@ -115,7 +117,7 @@ const Paper = ({ paper: p, quickTag }) => {
             <span class="rel_time">${p.time}</span>
             <span class="rel_tags">${p.tags}</span>
         </div>
-        ${user && quickTag ? html`
+        ${canEdit && quickTag ? html`
         <${QuickVote} pid=${p.id} tag=${quickTag}
             state=${utags.includes(quickTag) ? 'like' : ntags.includes(quickTag) ? 'down' : stags.includes(quickTag) ? 'seen' : null}
             onChange=${v => {
@@ -124,7 +126,7 @@ const Paper = ({ paper: p, quickTag }) => {
                 setNtags(n => (v === 'down' ? withTag(n, quickTag) : without(n, quickTag)));
                 setStags(x => (v === 'seen' ? withTag(x, quickTag) : without(x, quickTag)));
             }} />` : null}
-        ${user && !quickTag ? html`
+        ${canEdit && !quickTag ? html`
         <div class="rel_utags">
             <button class=${'btn btn-small rel_utag_add' + (picker === 'add' ? ' on' : '')} onClick=${() => toggle('add')}>+ Save</button>
             <button class=${'btn btn-small rel_utag_neg' + (picker === 'neg' ? ' on' : '')} onClick=${() => toggle('neg')}
@@ -164,7 +166,7 @@ const Tag = ({ tag: t }) => {
     return html`
         <span class=${'chip chip-tag chip-count' + (t.name === 'all' ? ' rel_utag_all' : '') + (active ? ' active' : '')}>
             <a href=${'/?rank=tags&tags=' + encodeURIComponent(t.name)}>${t.name}${t.n !== undefined ? html` <small>${t.n}</small>` : null}</a>
-            ${t.name !== 'all' ? html`<button class="chip-x" title=${'delete tag ' + t.name} aria-label=${'delete tag ' + t.name} onClick=${del}>×</button>` : null}
+            ${t.name !== 'all' && canEdit ? html`<button class="chip-x" title=${'delete tag ' + t.name} aria-label=${'delete tag ' + t.name} onClick=${del}>×</button>` : null}
         </span>`;
 };
 

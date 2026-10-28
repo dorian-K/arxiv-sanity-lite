@@ -7,7 +7,7 @@
 <div id="importwrap" class="page">
     <section class="card">
         <h1>Add papers</h1>
-        {% if not user %}
+        {% if not user or readonly %}
         <p class="muted">Please <a href="/profile">log in</a> to add papers.</p>
         {% else %}
         <p class="muted">

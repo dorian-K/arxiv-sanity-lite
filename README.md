@@ -103,14 +103,14 @@ Memory: the features are memory-mapped, so all workers share one copy in the pag
 
 Once a week, every user with an email address on their profile gets the best new papers for each of their tags. The ranking is the same as the tag pages, restricted to the last 7 days and leaving out papers they already rated. The email links to `/digest`, which shows the same papers with one-click 👍 ("more like this") and 👎 ("not for me") buttons. Votes go straight into the tag, so the next digest improves. Every email has an unsubscribe link, including the one-click kind Gmail looks for.
 
-In docker, the updater sends the digest every `DIGEST_INTERVAL` (a week). Set `PUBLIC_URL` (your site, for the links) and `MAIL_FROM` in `.env`. To try it without sending anything: `uv run python send_emails.py --dry-run 1 -u <user> --save digest.html`. Without email, users can still open `/digest` and make one on the spot.
+In docker, the updater sends the digest every `DIGEST_INTERVAL` seconds. It's off (0) by default; set it to 604800 for weekly once sending works (step 5 below). The first digest then goes out one interval after you turn it on, never on the spot. Set `PUBLIC_URL` (your site, for the links) and `MAIL_FROM` in `.env`. To try it without sending anything: `uv run python send_emails.py --dry-run 1 -u <user> --save digest.html`. Without email, users can still open `/digest` and make one on the spot.
 
 **Sending from your own VPS.** The `mail` service (`COMPOSE_PROFILES=mail`) is an outgoing-only Postfix that signs mail with DKIM and delivers straight to recipients' mail servers. It publishes no port, so only the updater can hand it mail. You need:
 1. A VPS whose provider allows outgoing port 25. Check with `timeout 5 bash -c '</dev/tcp/gmail-smtp-in.l.google.com/25' && echo open`. Some providers unblock it on request.
 2. Reverse DNS of the VPS's IP set to `MAIL_HOSTNAME` (in the provider's panel), with an A record for that name pointing back to the IP.
 3. `MAIL_DOMAIN` (the domain in `MAIL_FROM`) and `MAIL_HOSTNAME` in `.env`, then `docker compose up -d`.
 4. The DNS records the mail container prints on its first start (`docker compose logs mail`): DKIM, SPF and DMARC. The DKIM key lives in the `mail-dkim` volume, so the record stays valid across rebuilds.
-5. A test: point `MAIL_FROM` at your domain, send yourself a digest (`docker compose exec updater python send_emails.py -u <you>`), and check the score at mail-tester.com or the "Authentication-Results" header (expect `spf=pass dkim=pass`).
+5. A test: send yourself a digest (`docker compose exec updater python send_emails.py -u <you>`), and check the score at mail-tester.com or the "Authentication-Results" header (expect `spf=pass dkim=pass`). Only then set `DIGEST_INTERVAL=604800`. Mail that goes out before the DNS records exist lands in spam and costs the new server reputation.
 
 New servers have no reputation, so the first digests may land in spam until recipients mark them as not spam. To send through an existing SMTP server instead (your provider's, a university relay, a sending service), drop the profile and set `SMTP_HOST`/`SMTP_PORT`/`SMTP_TLS`/`SMTP_USER`/`SMTP_PASSWORD`. Or keep the container and set `RELAYHOST` to route its mail through such a server, still DKIM-signed.
 

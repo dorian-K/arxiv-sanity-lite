@@ -21,10 +21,17 @@ last_daily=0
 last_compute=0
 
 # the weekly digest emails (send_emails.py), when DIGEST_INTERVAL > 0. the time of the last
-# one is kept in data/, so restarting the container doesn't send another
+# one is kept in data/, so restarting the container doesn't send another. when there is
+# none yet, the clock starts now: turning the digest on never mails everyone on the spot
+# (send a test with `docker compose exec updater python send_emails.py -u <you>` instead)
 digest() {
     [ "${DIGEST_INTERVAL:-0}" -gt 0 ] || return 0
-    last=$(cat data/last_digest 2>/dev/null || echo 0)
+    if [ ! -f data/last_digest ]; then
+        date +%s > data/last_digest
+        echo "digest enabled: the first one goes out in ${DIGEST_INTERVAL}s"
+        return 0
+    fi
+    last=$(cat data/last_digest)
     if [ $(($(date +%s) - last)) -ge "$DIGEST_INTERVAL" ]; then
         echo "== $(date -u) sending digests"
         date +%s > data/last_digest

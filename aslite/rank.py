@@ -31,15 +31,17 @@ FEATS = ('auto', 'tfidf', 'emb', 'concat', 'fusion')
 MODELS = ('svm', 'logreg')
 
 # default regularization per (model, feature set); C is "inverse regularization"
-# so lower = smoother. the tfidf svm value is the original arxiv-sanity-lite one.
-# the others are untuned starting points: run eval.py to pick better ones.
+# so lower = smoother. the tfidf svm value is the original arxiv-sanity-lite one; the
+# others were swept with eval.py on 60 Scholar Inbox users (--pool rated, bge-small),
+# also checked with only 5 training likes (--train_pos 5). logreg's weights normalize
+# the loss mass, which is why its best C is so much larger than svm's.
 DEFAULT_C = {
     ('svm', 'tfidf'): 0.01,
-    ('svm', 'emb'): 0.1,
+    ('svm', 'emb'): 0.03,
     ('svm', 'concat'): 0.01,
-    ('logreg', 'tfidf'): 1.0,
-    ('logreg', 'emb'): 1.0,
-    ('logreg', 'concat'): 1.0,
+    ('logreg', 'tfidf'): 100.0,
+    ('logreg', 'emb'): 100.0,
+    ('logreg', 'concat'): 100.0,
 }
 
 DEFAULTS = dict(

@@ -29,6 +29,7 @@ cross-validation over each profile's liked and downvoted papers:
 
 import os
 import csv
+import zlib
 import json
 import time
 import random
@@ -158,6 +159,12 @@ def run(args):
                 test_p = set(pos_l[fold::args.folds])
                 test_n = set(neg_l[fold::args.folds])
                 train_p, train_n = pos - test_p, neg - test_n
+                if args.train_pos:
+                    # simulate a small tag: train on only a few of the liked papers. seeded per
+                    # profile and fold so every variant sees the same subsample
+                    sub = random.Random(zlib.crc32(f"{name}:{fold}".encode()))
+                    train_p = set(sub.sample(sorted(train_p), min(args.train_pos, len(train_p))))
+                    train_n = set(sub.sample(sorted(train_n), min(args.train_pos, len(train_n))))
                 t0 = time.time()
                 pids, scores, _ = rank(features, train_p, train_n, feats=v[0], model=v[1], C=v[2],
                                        alpha=args.alpha, fusion_w=args.fusion_w)
@@ -227,6 +234,9 @@ if __name__ == '__main__':
     r.add_argument('--alpha', type=float, default=None, help='concat: embedding block scale')
     r.add_argument('--fusion_w', type=float, default=None, help='fusion: weight of the embedding score')
     r.add_argument('--out', default='', help='also write results to this csv')
+    r.add_argument('--train_pos', type=int, default=0,
+                   help='train on at most this many liked (and downvoted) papers per fold, to check '
+                        'that defaults tuned on large profiles also work for tags with few papers')
     r.add_argument('--pool', choices=['all', 'rated'], default='all',
                    help="papers to rank: everything, or only papers some profile rated "
                         "(use 'rated' with --source si, see restrict_to)")

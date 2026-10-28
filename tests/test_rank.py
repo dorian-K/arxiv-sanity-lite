@@ -8,7 +8,7 @@ def with_fake_embeddings(features):
     """ adds an x_emb block that separates the two topics, as a real embedding would """
     f = dict(features)
     rng = np.random.default_rng(0)
-    is_vision = np.array([int(p.split('.')[1]) % 2 == 0 for p in f['pids']])
+    is_vision = np.array([int(p.split('.')[1]) % 6 == 0 for p in f['pids']])
     emb = rng.normal(size=(len(f['pids']), 16)).astype(np.float32)
     emb[:, 0] += np.where(is_vision, 3.0, -3.0)
     f['x_emb'] = emb / np.linalg.norm(emb, axis=1, keepdims=True)
@@ -16,7 +16,7 @@ def with_fake_embeddings(features):
 
 
 def vision_pids(features):
-    return [p for p in features['pids'] if int(p.split('.')[1]) % 2 == 0]
+    return [p for p in features['pids'] if int(p.split('.')[1]) % 6 == 0]
 
 
 def test_auto_falls_back_to_tfidf_without_embeddings(features):
@@ -34,9 +34,13 @@ def test_liked_topic_ranks_first(features, feats, model):
 
     assert len(pids) == len(f['pids'])
     assert scores == sorted(scores, reverse=True)
-    # the top half should be (almost) all vision papers
-    top = pids[:len(pids) // 2]
-    assert sum(p in vision for p in top) >= 0.9 * len(top)
+    # unlabeled vision papers should rank above the language papers
+    pos = set(vision[:5])
+    rank_of = {p: i for i, p in enumerate(pids)}
+    v = [rank_of[p] for p in vision if p not in pos]
+    l = [rank_of[p] for p in pids if p not in vision]
+    auc = np.mean([[a < b for b in l] for a in v])
+    assert auc >= 0.9, auc
     if feats == 'emb':
         assert words == []
     else:

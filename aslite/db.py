@@ -46,8 +46,11 @@ _schema_done = set()
 _schema_lock = threading.Lock()
 
 
-def connect(path, schema):
-    """a connection with the schema in place (created once per process and file)"""
+def connect(path, schema, page_size=None):
+    """
+    a connection with the schema in place (created once per process and file). page_size
+    only applies to a new file: it has to be set before WAL mode writes the first page
+    """
     os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
     con = sqlite3.connect(path, timeout=60, check_same_thread=False)
     con.execute('PRAGMA busy_timeout = 60000')
@@ -55,6 +58,8 @@ def connect(path, schema):
     key = os.path.abspath(path)
     if key not in _schema_done:
         with _schema_lock:
+            if page_size:
+                con.execute(f'PRAGMA page_size = {int(page_size)}')
             con.execute('PRAGMA journal_mode = WAL')  # stored in the file, so only needed once
             con.executescript(schema)
             _schema_done.add(key)
@@ -463,14 +468,39 @@ def get_secret_key():
 # -----------------------------------------------------------------------------
 # embedding cache
 
+# a rowid table on 8 KB pages: a 768-dim float16 vector is 1.5 KB, which a WITHOUT ROWID table
+# (the first version) pushes onto its own overflow page, 4.7 KB per row on disk; this way
+# it's 1.7 KB (measured on 50k EmbeddingGemma vectors), and reading them all is faster too
+EMBEDDINGS_PAGE_SIZE = 8192
 EMBEDDINGS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS embeddings (
     model TEXT NOT NULL,
     pid TEXT NOT NULL,
     vec BLOB NOT NULL,  -- float16
     PRIMARY KEY (model, pid)
-) WITHOUT ROWID;
+);
 """
+
+
+def _compact_embeddings(con):
+    """one-time rebuild of a cache made with the first, WITHOUT ROWID layout (~2.8x smaller)"""
+    sql = con.execute("SELECT sql FROM sqlite_master WHERE name = 'embeddings'").fetchone()
+    if not sql or 'WITHOUT ROWID' not in sql[0].upper():
+        return
+    print("rebuilding the embedding cache in its smaller layout (once, may take a minute)...")
+    with con:
+        con.execute(
+            "CREATE TABLE embeddings_new (model TEXT NOT NULL, pid TEXT NOT NULL, vec BLOB NOT NULL, "
+            "PRIMARY KEY (model, pid))"
+        )
+        con.execute("INSERT INTO embeddings_new SELECT model, pid, vec FROM embeddings")
+        con.execute("DROP TABLE embeddings")
+        con.execute("ALTER TABLE embeddings_new RENAME TO embeddings")
+    # the page size can only change outside WAL mode, through a VACUUM
+    con.execute('PRAGMA journal_mode = DELETE')
+    con.execute(f'PRAGMA page_size = {EMBEDDINGS_PAGE_SIZE}')
+    con.execute('VACUUM')
+    con.execute('PRAGMA journal_mode = WAL')
 
 
 class EmbeddingCache:
@@ -478,7 +508,8 @@ class EmbeddingCache:
 
     def __init__(self, model, path=None):
         self.model = model
-        self.con = connect(path or EMBEDDINGS_DB_FILE, EMBEDDINGS_SCHEMA)
+        self.con = connect(path or EMBEDDINGS_DB_FILE, EMBEDDINGS_SCHEMA, page_size=EMBEDDINGS_PAGE_SIZE)
+        _compact_embeddings(self.con)
 
     def __enter__(self):
         return self

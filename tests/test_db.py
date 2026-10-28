@@ -67,3 +67,26 @@ def test_backup_users(corpus):
     assert con.execute('SELECT user, tag FROM tags').fetchall() == [('alice', 'cv')]
     assert [r[0] for r in con.execute('SELECT pid FROM fetches')] == ['new']  # old log rows pruned
     db.backup_users()  # replaces the one copy
+
+
+def test_old_embedding_layout_is_compacted(corpus):
+    import sqlite3
+
+    import numpy as np
+
+    # a cache in the first layout (WITHOUT ROWID, 4 KB pages)
+    con = sqlite3.connect(db.EMBEDDINGS_DB_FILE)
+    con.execute('CREATE TABLE embeddings (model TEXT, pid TEXT, vec BLOB, PRIMARY KEY (model, pid)) WITHOUT ROWID')
+    vecs = np.random.default_rng(0).normal(size=(50, 768)).astype(np.float16)
+    with con:
+        con.executemany(
+            'INSERT INTO embeddings VALUES (?, ?, ?)', [('m', f'p{i}', v.tobytes()) for i, v in enumerate(vecs)]
+        )
+    con.close()
+    with db.EmbeddingCache('m') as cache:
+        assert len(cache.pids()) == 50
+        assert np.allclose(cache.matrix(['p3']), vecs[3].astype(np.float32))
+    con = sqlite3.connect(db.EMBEDDINGS_DB_FILE)
+    assert 'WITHOUT ROWID' not in con.execute("SELECT sql FROM sqlite_master WHERE name='embeddings'").fetchone()[0]
+    assert con.execute('PRAGMA page_size').fetchone()[0] == 8192
+    assert con.execute('PRAGMA journal_mode').fetchone()[0] == 'wal'

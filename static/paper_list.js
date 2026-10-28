@@ -48,7 +48,7 @@ const TagPicker = ({ mode, tags, onPick, onCancel }) => {
     const save = mode === 'add';
     return html`
         <div class=${'tag-picker tag-picker-' + mode}>
-            <div class="tag-picker-label">${save ? 'Save to' : 'Not what this tag is about:'}</div>
+            <div class="tag-picker-label">${save ? 'Save to' : 'Not for which tag? (only that tag learns from it)'}</div>
             ${tags.length ? html`
             <div class="tag-picker-tags">
                 ${tags.map(t => html`<button key=${t} class="chip chip-pick" onClick=${() => onPick(t)}>${t}</button>`)}
@@ -119,7 +119,8 @@ const QuickVote = ({ pid, tag, state, onChange, compact }) => {
     const click = v => tagRequest((state === v.key ? v.sub : v.add) + enc)
         .then(() => onChange(state === v.key ? null : v.key)).catch(() => {});
     return html`
-        <div class=${compact ? 'quickvote quickvote-compact' : 'quickvote'}>
+        <div class=${compact ? 'quickvote quickvote-compact' : 'quickvote'} title=${'for your tag ' + tag}>
+            ${compact ? null : html`<span class="quickvote-tag">${tag}:</span>`}
             ${VOTES.map(v => html`
             <button key=${v.key} class=${'btn btn-small vote-' + v.key + (state === v.key ? ' on' : '')}
                     aria-pressed=${state === v.key} title=${compact ? v.label.slice(3) : undefined}
@@ -152,7 +153,8 @@ const Paper = ({ paper: p, quickTag }) => {
     const undoNeg = tag => tagRequest('/subneg/' + enc(tag)).then(() => setNtags(n => without(n, tag))).catch(() => {});
     const toggle = mode => setPicker(m => (m === mode ? null : mode));
     // offer the tags this paper isn't in yet; new tags typed here join the list for the next paper
-    const pickable = (picker === 'add' ? userTagNames.filter(t => !utags.includes(t)) : userTagNames.filter(t => !ntags.includes(t)));
+    // (on a tag's own page, that tag has its 👍 / 👎 buttons: the pickers are for the others)
+    const pickable = userTagNames.filter(t => t !== quickTag && !(picker === 'add' ? utags : ntags).includes(t));
     const ho = useHeldout();
     const fit = ho.tag && utags.includes(ho.tag) ? ho.ranks[p.id] : undefined;
     const long = p.summary.length > 360;
@@ -203,13 +205,14 @@ const Paper = ({ paper: p, quickTag }) => {
         </div>
         ${canEdit && quickTag ? html`
         <${QuickVote} pid=${p.id} tag=${quickTag} state=${state} onChange=${onVote} />` : null}
-        ${canEdit && !quickTag ? html`
+        ${canEdit ? html`
         <div class="rel_utags">
-            <button class=${'btn btn-small rel_utag_add' + (picker === 'add' ? ' on' : '')} onClick=${() => toggle('add')}>+ Save</button>
+            <button class=${'btn btn-small rel_utag_add' + (picker === 'add' ? ' on' : '')} onClick=${() => toggle('add')}
+                    title="save it to one of your tags, or a new one">${quickTag ? '+ Save to another tag' : '+ Save to…'}</button>
             <button class=${'btn btn-small rel_utag_neg' + (picker === 'neg' ? ' on' : '')} onClick=${() => toggle('neg')}
-                    title="not what one of your tags is about: improves its recommendations">✗ Not for this tag</button>
-            ${utags.map(t => html`<${UTag} key=${'u' + t} tag=${t} onRemove=${() => unsave(t)} />`)}
-            ${ntags.map(t => html`<${NTag} key=${'n' + t} tag=${t} onUndo=${() => undoNeg(t)} />`)}
+                    title="not what one of your tags is about: that tag learns from it, the others don't">✗ Not for…</button>
+            ${utags.filter(t => t !== quickTag).map(t => html`<${UTag} key=${'u' + t} tag=${t} onRemove=${() => unsave(t)} />`)}
+            ${ntags.filter(t => t !== quickTag).map(t => html`<${NTag} key=${'n' + t} tag=${t} onUndo=${() => undoNeg(t)} />`)}
         </div>` : null}
         ${picker ? html`<${TagPicker} mode=${picker} tags=${pickable}
             onPick=${t => { if (!userTagNames.includes(t)) userTagNames.push(t); (picker === 'add' ? save : notFor)(t); }}

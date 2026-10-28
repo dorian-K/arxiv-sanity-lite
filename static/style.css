@@ -648,3 +648,5 @@ details.danger form { margin-top: 10px; }
 .digest-sizes label { display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
 .digest-sizes label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .digest-sizes .btn { justify-self: start; }
+.quickvote { align-items: center; }
+.quickvote-tag { font-size: 13px; color: var(--muted); }

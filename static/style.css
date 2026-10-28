@@ -650,3 +650,5 @@ details.danger form { margin-top: 10px; }
 .digest-sizes .btn { justify-self: start; }
 .quickvote { align-items: center; }
 .quickvote-tag { font-size: 13px; color: var(--muted); }
+.deltag { margin: 6px 0 0; font-size: 13px; }
+.deltag .linkbtn { color: var(--neg); }

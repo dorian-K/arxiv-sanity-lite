@@ -115,11 +115,20 @@ def rate_limited(kind, client=None):
         return False
 
 
+def error_page(title, message, code):
+    """an error as a page of the site, for requests a person made (not the page's own fetches)"""
+    return render_template('error.html', title=title, message=message, **default_context()), code
+
+
 def too_many(kind):
     n, per = RATE_LIMITS[kind]
     window = f"{per // 60} minutes" if per >= 120 else f"{per} seconds"
     msg = f"Too many requests ({n} per {window} for this kind of request), please wait a bit."
-    return msg, 429, {'Retry-After': str(max(1, per // n))}
+    headers = {'Retry-After': str(max(1, per // n))}
+    if request.args.get('format') == 'json' or request.endpoint == 'tag_check':
+        return msg, 429, headers  # shown by the page that asked
+    page, code = error_page('Slow down a little', msg, 429)
+    return page, code, headers
 
 
 # -----------------------------------------------------------------------------
@@ -727,17 +736,25 @@ def inspect():
     pid = request.args.get('pid', '')
     pdb = get_papers()
     if pid not in pdb:
-        return "error, malformed pid"  # todo: better error handling
+        return error_page(
+            'Unknown paper',
+            "There's no paper with this id here. Paste its arXiv link on the add page to fetch it.",
+            404,
+        )
 
     # load the tfidf vectors, the vocab, and the idf table
     if not features_exist():
-        return "no features yet, run compute.py"
+        return error_page('Not ready yet', 'The index of paper words is still being built. Try again later.', 503)
     features = load_features()
     x = features['x']
     idf = features['idf']
     ivocab = {v: k for k, v in features['vocab'].items()}
     if pid not in features['ptoi']:
-        return "this paper has no features yet, they are computed with the next update"
+        return error_page(
+            'Not ready yet',
+            "This paper was added recently; its words are indexed with the next update, usually within an hour.",
+            503,
+        )
     pix = features['ptoi'][pid]
     wixs = np.flatnonzero(np.asarray(x[pix].todense()))
     words = []
@@ -942,10 +959,10 @@ def copy_tag():
     o = db.get_user(owner) if owner != g.user else None
     likes = db.get_tags(owner).get(tag) if o and o['public'] else None
     if not likes:
-        return "error, this tag isn't shared (anymore)", 404
+        return error_page('Not shared', "This tag isn't shared (anymore), or it doesn't exist.", 404)
     err = _check_tag(new)
     if err:
-        return err, 400
+        return error_page("Can't use that name", err.removeprefix('error, ').capitalize() + '.', 400)
     if rate_limited('copy'):
         return too_many('copy')
     mine = db.get_tags(g.user).get(new, set())

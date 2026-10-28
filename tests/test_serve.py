@@ -385,3 +385,13 @@ def test_unknown_paper_and_odd_tag_names(client, corpus):
     assert 'no paper with this id' in client.get('/?rank=pid&pid=2999.99999&format=json').get_json()['notice']
     for bad in ('.', '..'):
         assert client.post('/import', data={'text': next(iter(corpus)), 'tag': bad}).status_code == 400
+
+
+def test_errors_are_pages_of_the_site(client, corpus):
+    r = client.get('/inspect?pid=2999.99999')
+    assert r.status_code == 404 and b'Unknown paper' in r.data and b'<header' in r.data
+    login(client)
+    pid = next(iter(corpus))
+    client.post(f'/add/{pid}/cv')
+    page = client.get('/?rank=saved&tags=cv').data.decode()
+    assert 'id="deltag"' in page  # deleting a tag is on its page, not on the chips

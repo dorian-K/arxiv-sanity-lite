@@ -64,7 +64,7 @@ const TagPicker = ({ mode, tags, onPick, onCancel }) => {
 };
 
 // rankings whose scores mean something to show next to the title
-const SHOW_SCORE = ['tags', 'pid', 'search'];
+const SHOW_SCORE = ['tags', 'pid']; // (search scores are raw text-match numbers, meaningless to read)
 
 // a rank fraction as people read it: 0.0031 -> "top 0.3%"
 const fmtPct = x => 'top ' + (x < 0.001 ? '0.1' : x < 0.1 ? (100 * x).toFixed(1) : Math.round(100 * x)) + '%';
@@ -288,17 +288,20 @@ const Results = () => {
         <${PaperList} papers=${data.papers} />`;
 };
 
+// deleting a tag is on the tag's own page (#deltag), not on the chips used to get around
+document.addEventListener('click', e => {
+    const btn = e.target.closest('#deltag');
+    if (!btn) return;
+    const name = btn.dataset.tag;
+    if (!confirm("Delete the tag '" + name + "'? Its saved papers and downvotes are forgotten (the papers stay in the database).")) return;
+    tagRequest('/del/' + encodeURIComponent(name)).then(() => { window.location.href = '/'; }).catch(() => {});
+});
+
 const Tag = ({ tag: t }) => {
-    const del = e => {
-        e.preventDefault();
-        if (!confirm("delete the tag '" + t.name + "' and its downvotes? the papers stay in the database")) return;
-        tagRequest('/del/' + encodeURIComponent(t.name)).then(() => window.location.reload()).catch(() => {});
-    };
     const active = ['tags', 'saved', 'down'].includes(gvars.rank) && gvars.tags.split(',').includes(t.name);
     return html`
         <span class=${'chip chip-tag chip-count' + (t.name === 'all' ? ' rel_utag_all' : '') + (active ? ' active' : '')}>
             <a href=${tagUrl(t.name)}>${t.name}${t.n !== undefined ? html` <small>${t.n}</small>` : null}</a>
-            ${t.name !== 'all' && canEdit ? html`<button class="chip-x" title=${'delete tag ' + t.name} aria-label=${'delete tag ' + t.name} onClick=${del}>×</button>` : null}
         </span>`;
 };
 

@@ -24,6 +24,8 @@ function tagRequest(path) {
 
 // a tag's page: its recommendations, minus the papers already saved (those are its "Saved" tab)
 const FOR_YOU_DAYS = 30; // as in serve.py
+// venues are aslite.arxiv.venue() of what the authors wrote in the comment or journal reference
+const VENUE_NOTE = 'parsed from the arXiv metadata (the authors\' comment or journal reference), not verified';
 const tagUrl = (tag, days = FOR_YOU_DAYS) => '/?rank=tags&tags=' + encodeURIComponent(tag)
     + (days ? '&time_filter=' + days : '') + '&skip_have=yes';
 
@@ -198,7 +200,7 @@ const Paper = ({ paper: p, quickTag }) => {
             ${score}
             <a class="rel_title_c" href=${'https://arxiv.org/abs/' + p.id}><${MathText} text=${p.title} /></a>
             ${utags.length ? html`<span class="rel_saved" title=${'saved to ' + utags.join(', ')}>★</span>` : null}
-            ${p.venue ? html`<span class="rel_venue_c" title=${p.venue + ' (as the authors put it)'}>✓</span>` : null}
+            ${p.venue ? html`<span class="rel_venue_c" title=${p.venue + ' (' + VENUE_NOTE + ')'}>✓</span>` : null}
             <span class="rel_time">${p.time}</span>
             ${canEdit && quickTag ? html`<${QuickVote} pid=${p.id} tag=${quickTag} state=${state} onChange=${onVote} compact />` : null}
         </article>`;
@@ -224,7 +226,7 @@ const Paper = ({ paper: p, quickTag }) => {
             <span class="rel_time">${p.time}</span>
             <span class="rel_tags">${p.tags}</span>
         </div>
-        ${p.venue ? html`<div class="rel_venue" title="as the authors put it in the arXiv comment or journal reference; not checked">✓ ${p.venue}</div>` : null}
+        ${p.venue ? html`<div class="rel_venue" title=${VENUE_NOTE[0].toUpperCase() + VENUE_NOTE.slice(1)}>✓ ${p.venue} <span class="rel_venue_note">(from arXiv metadata, unverified)</span></div>` : null}
         ${canEdit && quickTag ? html`
         <${QuickVote} pid=${p.id} tag=${quickTag} state=${state} onChange=${onVote} />` : null}
         ${canEdit ? html`

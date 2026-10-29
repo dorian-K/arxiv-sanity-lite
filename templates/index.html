@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 
 {% macro pubfilter() %}
-<label class="pubfilter" title="Only papers whose authors say where they were accepted or published (a conference, journal or workshop), taken from the arXiv comment or journal reference. Authors fill these in themselves and often only later, so recent papers and some published ones won't show up">
+<label class="pubfilter" title="Only papers whose authors say where they were accepted or published (a conference, journal or workshop), taken from the arXiv comment or journal reference. Not verified: authors fill these in themselves, and often only later, so recent papers and some published ones won't show up">
     <input type="checkbox" id="published_only" {{ 'checked' if gvars.published }}> accepted / published only
 </label>
 {% endmacro %}

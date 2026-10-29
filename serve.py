@@ -416,6 +416,35 @@ def _drop_orphan_models(user, tags):
             db.delete_models(user, t)
 
 
+def _model_key(features, user, tags, pos, neg, feats, model, C):
+    feats, model = resolve_feats(features, feats), resolve_model(features, model)
+    stored = not tags.startswith('pid:')
+    return (user if stored else '', tags, f'{feats}|{model}|{C}', fingerprint(pos, neg), features['_version'])
+
+
+def models_ready(tags, mix, C, feats, model):
+    """
+    whether ranking by these tags of the page's owner trains nothing: every model it needs is
+    in memory or models.sqlite (usually, after the refit that follows a vote). then the page
+    ranks right away (~15 ms for 30 days) instead of sending a placeholder and a second request
+    """
+    features = get_features()
+    tags_db, neg_db = get_tags(), get_neg_tags()
+    names = (set(tags_db) if tags == 'all' else {t for t in tags.split(',') if t}) if mix == 'turns' else set()
+    if len(names) < 2:  # as in _ranked: turns need two tags
+        names = {tags}
+    for t in names:
+        pos, neg = training_set(tags_db, neg_db, t)
+        key = _model_key(features, g.owner or '', t, pos, neg, feats, model, C)
+        with _models_lock:
+            if key in _models:
+                continue
+        if not (pos & features['ptoi'].keys()) or db.has_model(*key):  # nothing to train, or stored
+            continue
+        return False
+    return True
+
+
 def get_model(features, user, tags, pos, neg, feats='auto', model='auto', C=None):
     """
     the model for this training set: from memory, else models.sqlite, else trained now. if
@@ -423,9 +452,8 @@ def get_model(features, user, tags, pos, neg, feats='auto', model='auto', C=None
     vote), waits for it instead of training it twice. tags is what it ranks by ('pid:<id>'
     for "similar to"; those stay in memory only). None if no liked paper has features yet
     """
-    feats, model = resolve_feats(features, feats), resolve_model(features, model)
-    stored = not tags.startswith('pid:')
-    key = (user if stored else '', tags, f'{feats}|{model}|{C}', fingerprint(pos, neg), features['_version'])
+    key = _model_key(features, user, tags, pos, neg, feats, model, C)
+    stored = bool(key[0])
     while True:
         with _models_lock:
             m = _models.get(key)
@@ -936,6 +964,11 @@ def main():
     key = (g.owner, query, features_ok and db.features_version(), db.db_mtime(PAPERS_DB_FILE), _tags_fingerprint())
     res = _rank_cache_get(key) if cacheable else None
     pending = res is None and opt_rank in SLOW_RANKS and features_ok and not want_json
+    if pending and opt_rank == 'tags':
+        try:
+            pending = not models_ready(opt_tags, opt_mix, C, opt_feats, opt_model)
+        except Exception as e:  # only a shortcut: the placeholder path still works
+            print("checking for cached models failed: %s" % (e,))
     if res is None and not pending:
         if opt_rank in ('tags', 'pid', 'search') and rate_limited('search' if opt_rank == 'search' else 'rank'):
             return too_many('search' if opt_rank == 'search' else 'rank')

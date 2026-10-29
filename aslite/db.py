@@ -930,6 +930,16 @@ def _models_db():
     return connect(MODELS_DB_FILE, MODELS_SCHEMA)
 
 
+def has_model(user, tags, variant, fp, version):
+    """whether get_model would find it, without reading it"""
+    con = _models_db()
+    try:
+        q = 'SELECT 1 FROM models WHERE user=? AND tags=? AND variant=? AND fp=? AND version=?'
+        return con.execute(q, (user, tags, variant, fp, version)).fetchone() is not None
+    finally:
+        con.close()
+
+
 def get_model(user, tags, variant, fp, version):
     """
     the model trained on exactly fp with features version, or None. the key names the

@@ -220,3 +220,23 @@ def test_a_vote_during_a_background_fit_gets_its_own(client, corpus, monkeypatch
     monkeypatch.setattr(serve, 'PREFIT', False)
     assert rank_json(client, '/?rank=tags&tags=cv&skip_have=yes')
     assert len(calls) == n  # the model of the state after the second vote was ready
+
+
+def test_a_page_with_its_models_cached_comes_with_its_results(client, corpus):
+    import serve
+
+    login(client)
+    vision = vision_papers(corpus)
+    for p in vision[:4]:
+        client.post(f'/add/{p}/cv')
+    client.post(f'/add/{vision[6]}/more')  # two tags: turns has a model per tag
+    for mix in ('one', 'turns'):
+        url = f'/?rank=tags&tags=all&mix={mix}&skip_have=yes'
+        assert b'"pending": true' in client.get(url).data  # nothing trained yet: placeholder
+        rank_json(client, url)
+        serve._rank_cache.clear()
+        serve._models.clear()  # another worker: the model is in models.sqlite
+        r = client.get(url)
+        assert b'"pending": false' in r.data and b'2601.' in r.data
+    client.post(f'/add/{vision[4]}/cv')  # a new training set, not trained yet (PREFIT=0)
+    assert b'"pending": true' in client.get('/?rank=tags&tags=all&skip_have=yes').data

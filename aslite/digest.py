@@ -35,7 +35,10 @@ def compute(
     times is {pid: time} (PapersDB.times()); one model is trained per tag. sizes is
     {tag: papers} where the user picked another number than per_tag. left out of a tag's
     section: papers saved to any tag, and the ones marked not for / neutral for this tag
-    (seen is {tag: pids} of the neutral ones), which may still fit another tag
+    (seen is {tag: pids} of the neutral ones), which may still fit another tag.
+    a paper shows up once, under the tag it fits best: where it ranks highest among all
+    papers (scores of different tags' models aren't comparable, their ranks are). the best
+    fits are placed first, so a tag that loses a paper to another fills up with its next one
     """
     sizes = sizes or {}
     seen = seen or {}
@@ -44,7 +47,7 @@ def compute(
     recent = {p for p, t in times.items() if now - t < days * 86400} - liked
     pids = features['pids']
     ptoi = features.get('ptoi') or {p: i for i, p in enumerate(pids)}
-    sections = []
+    want, candidates = {}, []  # candidates: (rank fraction among all papers, tag, -score, row)
     for tag in sorted(tags):
         n = sizes.get(tag, per_tag)
         if not tags[tag] or not recent or n <= 0:
@@ -52,11 +55,23 @@ def compute(
         s, _ = score(features, tags[tag], neg_tags.get(tag, set()), feats=feats, model=model)
         if s is None:
             continue
+        want[tag] = n
         rated = neg_tags.get(tag, set()) | seen.get(tag, set())
-        # only the recent papers get sorted, not all of them
+        # only the recent papers get sorted, not all of them; deep enough to refill whatever
+        # the other tags take
         rows = np.array([ptoi[p] for p in recent - rated if p in ptoi], dtype=np.int64)
-        rows = rows[np.argsort(-s[rows], kind='stable')][:n]
-        top = [[pids[r], round(float(s[r]), 4)] for r in rows]
+        rows = rows[np.argsort(-s[rows], kind='stable')][: n + sum(sizes.get(t, per_tag) for t in tags)]
+        ordered = np.sort(s)
+        higher = len(s) - np.searchsorted(ordered, s[rows], side='right')
+        candidates += [(h / len(s), tag, -float(s[r]), int(r)) for h, r in zip(higher, rows, strict=True)]
+    picked, taken = {t: [] for t in want}, set()
+    for _, tag, neg_score, r in sorted(candidates):
+        if r not in taken and len(picked[tag]) < want[tag]:
+            taken.add(r)
+            picked[tag].append((neg_score, r))
+    sections = []
+    for tag in sorted(picked):
+        top = [[pids[r], round(-neg, 4)] for neg, r in sorted(picked[tag])]
         if top:
             sections.append({'tag': tag, 'papers': top})
     return sections

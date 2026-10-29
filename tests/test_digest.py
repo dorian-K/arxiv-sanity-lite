@@ -23,6 +23,31 @@ def test_digest_recommends_new_untagged_papers(features, corpus):
     assert digest.compute(features, times, {'cv': set(v[:4])}, {}, days=7, now=max(times.values()) + 30 * 86400) == []
 
 
+def test_digest_shows_each_paper_once_under_its_best_tag(features, corpus):
+    v = vision(corpus)
+    times = {p: corpus[p]['_time'] for p in corpus}
+    # two tags about the same topic recommend the same papers; the second is smaller
+    tags = {'cv': set(v[:5]), 'cv2': set(v[5:7])}
+    sections = digest.compute(features, times, tags, {}, days=7, per_tag=4)
+    got = [p for s in sections for p, _ in s['papers']]
+    assert len(got) == len(set(got)) == 8  # no duplicates, and each tag still gets its 4
+    # a paper that would rank higher in the other tag only lands here if the other tag filled
+    # up with papers that rank even higher there (the best fits are placed first)
+    from aslite.rank import score
+
+    scores = {t: score(features, tags[t])[0] for t in tags}
+
+    def higher(t, p):
+        sc = scores[t]
+        return int((sc > sc[features['ptoi'][p]]).sum())
+
+    picked = {s['tag']: [p for p, _ in s['papers']] for s in sections}
+    for t, other in (('cv', 'cv2'), ('cv2', 'cv')):
+        for p in picked[t]:
+            if higher(other, p) < higher(t, p):
+                assert all(higher(other, q) <= higher(other, p) for q in picked[other])
+
+
 def test_digest_page_and_votes(client, corpus):
     from conftest import login
 

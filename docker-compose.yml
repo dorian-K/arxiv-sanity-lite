@@ -46,6 +46,7 @@ services:
       WARM_CACHES: "1"  # each worker keeps features and paper times loaded, so no request waits for them
       FETCH_LIMIT_USER: ${FETCH_LIMIT_USER:-200}  # papers per user per day that /import may fetch from arXiv
       FETCH_LIMIT_TOTAL: ${FETCH_LIMIT_TOTAL:-2000}
+      THUMB_KIND: ${THUMB_KIND:-figure}  # which thumbnail cards show (figure or page), see enrich_daemon.py
       # the web service mails the confirmation links of the double opt-in; links use
       # PUBLIC_URL, and requests for other hosts are refused once it is set
       PUBLIC_URL: ${PUBLIC_URL:-}

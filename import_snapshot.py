@@ -32,7 +32,7 @@ from collections import Counter
 import pyarrow.parquet as pq
 
 from aslite.arxiv import make_paper, CATEGORIES
-from aslite.db import get_papers_db, DATA_DIR
+from aslite.db import get_papers_db, request_compute, DATA_DIR
 
 REPO = 'librarian-bots/arxiv-metadata-snapshot'
 REVISION = 'c428226b689a0e17db2cd55265133b9eca15d97f'  # 2026-10-27; --revision main for the latest
@@ -148,6 +148,8 @@ if __name__ == '__main__':
         f"{time.strftime('%Y-%m-%d', time.gmtime(newest))}"
     )
     pdb.close()
+    if n_new:
+        request_compute()  # the docker updater rebuilds the index soon (COMPUTE_MIN_INTERVAL)
 
     # 3. papers per month: a hole in the snapshot would show up as a dip
     print("\npapers per month (first submission):")

@@ -71,7 +71,7 @@ services:
     build:
       context: .
       args:
-        EXTRAS: --extra embed
+        EXTRAS: --extra embed --extra bulk  # bulk: pyarrow for import_snapshot.py
     image: arxiv_resanity_updater
     container_name: arxiv_resanity_updater
     command: ["sh", "docker/update.sh"]

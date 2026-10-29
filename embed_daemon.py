@@ -55,10 +55,18 @@ def queue(cache, new_days, now=None):
 def main():
     parser = argparse.ArgumentParser(description='embeds papers slowly in the background')
     parser.add_argument('--model', default=os.environ.get('EMBED_MODEL', ''), help='defaults to $EMBED_MODEL')
-    parser.add_argument('--duty', type=float, default=float(os.environ.get('EMBED_DUTY') or 0.1),
-                        help='share of the time spent embedding, 0-1 (default $EMBED_DUTY or 0.1)')
-    parser.add_argument('--threads', type=int, default=int(os.environ.get('EMBED_THREADS') or 2),
-                        help='CPU threads for the model (default $EMBED_THREADS or 2)')
+    parser.add_argument(
+        '--duty',
+        type=float,
+        default=float(os.environ.get('EMBED_DUTY') or 0.1),
+        help='share of the time spent embedding, 0-1 (default $EMBED_DUTY or 0.1)',
+    )
+    parser.add_argument(
+        '--threads',
+        type=int,
+        default=int(os.environ.get('EMBED_THREADS') or 2),
+        help='CPU threads for the model (default $EMBED_THREADS or 2)',
+    )
     parser.add_argument('--batch', type=int, default=8, help='papers per step')
     parser.add_argument('--new_days', type=float, default=30, help='papers this new come before the backlog')
     parser.add_argument('--once', action='store_true', help='exit when nothing is missing')

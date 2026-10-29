@@ -76,6 +76,16 @@ def has_embeddings(features):
     return features.get('x_emb') is not None
 
 
+def usable(features, feats):
+    """
+    which papers a model on these feats can score: those with an embedding, while
+    embed_daemon.py is still filling them in (compute.py's emb_mask); None means all. the
+    others have zero rows, so they must neither be ranked nor stand in as random negatives
+    """
+    mask = features.get('emb_mask')
+    return None if mask is None or feats == 'tfidf' else np.asarray(mask, dtype=bool)
+
+
 def resolve_feats(features, feats):
     if feats in (None, '', 'auto'):
         return 'concat' if has_embeddings(features) else 'tfidf'
@@ -141,8 +151,9 @@ def _bg_stats(features, n_sample):
     key = (id(features['x']), n_sample)  # restrict_to (eval.py) copies the dict, not this cache
     if key in cache:
         return cache[key]
-    n = len(features['pids'])
-    rows = np.sort(np.random.default_rng(0).choice(n, size=min(n, n_sample), replace=False))
+    ok = usable(features, 'emb')
+    pool = np.arange(len(features['pids'])) if ok is None else np.flatnonzero(ok)
+    rows = np.sort(np.random.default_rng(0).choice(pool, size=min(len(pool), n_sample), replace=False))
     xs = features['x'][rows]
     mu = np.asarray(xs.mean(axis=0)).ravel()
     var = np.asarray(xs.multiply(xs).mean(axis=0)).ravel() - mu**2
@@ -198,6 +209,7 @@ def _fit(features, feats, alpha, pos, neg, model, C, opts, seed):
     n = len(features['pids'])
     if model == 'lda':
         return _fit_lda(features, feats, alpha, pos, neg, C, opts)
+    ok = usable(features, feats)
 
     if model == 'svm':
         y = np.zeros(n, dtype=np.float32)
@@ -207,18 +219,22 @@ def _fit(features, feats, alpha, pos, neg, model, C, opts, seed):
             w[neg] = opts['svm_neg_weight']
         rows = None
         cap = opts['svm_max_neg']
-        if cap and n - len(pos) - len(neg) > cap:
+        labeled = np.zeros(n, dtype=bool)
+        labeled[pos] = True
+        labeled[neg] = True
+        pool = ~labeled if ok is None else ~labeled & ok  # the untagged papers that can stand in
+        if cap and pool.sum() > cap:
             # big corpus: train on a random sample of the untagged papers instead of all of
-            # them. scaling the weights by n / sample size keeps the loss an unbiased estimate
-            # of the full one, so the same C works at any corpus size
-            labeled = np.zeros(n, dtype=bool)
-            labeled[pos] = True
-            labeled[neg] = True
+            # them. scaling the weights by (papers) / sample size keeps the loss an unbiased
+            # estimate of the full one, so the same C works at any corpus size
             rng = np.random.default_rng(seed)
-            rand = rng.choice(np.flatnonzero(~labeled), size=cap, replace=False)
+            rand = rng.choice(np.flatnonzero(pool), size=cap, replace=False)
             rows = np.sort(np.concatenate([np.flatnonzero(labeled), rand]))
-            w = w[rows] * (n / len(rows))
+            w = w[rows] * ((labeled.sum() + pool.sum()) / len(rows))
             y = y[rows]
+        elif ok is not None:
+            rows = np.flatnonzero(labeled | pool)
+            w, y = w[rows], y[rows]
         clf = svm.LinearSVC(class_weight='balanced', max_iter=10000, tol=1e-6, C=C, dual=True)
         clf.fit(_rows(features, feats, alpha, rows), y, sample_weight=w)
 
@@ -227,7 +243,7 @@ def _fit(features, feats, alpha, pos, neg, model, C, opts, seed):
         taken = np.zeros(n, dtype=bool)
         taken[pos] = True
         taken[neg] = True
-        others = np.flatnonzero(~taken)
+        others = np.flatnonzero(~taken if ok is None else ~taken & ok)
         rand = rng.choice(others, size=min(opts['n_random'], len(others)), replace=False)
 
         nP, nN, nR = len(pos), len(neg), len(rand)
@@ -305,6 +321,8 @@ def fit(features, pos_pids, neg_pids=(), feats='auto', model='auto', C=None, ske
         for f, wf in (('emb', w), ('tfidf', 1 - w)):
             coef, b = _fit(features, f, 1.0, pos, neg, model, C_for(f), opts, seed)
             raw = _decision(features, f, 1.0, coef, np.float64(b))
+            if usable(features, 'emb') is not None:
+                raw = raw[usable(features, 'emb')]  # z-scores over the papers that get ranked
             parts.append(
                 {'feats': f, 'coef': coef, 'b': b, 'w': wf, 'mu': float(raw.mean()), 'sd': float(raw.std() + 1e-12)}
             )
@@ -318,11 +336,13 @@ def fit(features, pos_pids, neg_pids=(), feats='auto', model='auto', C=None, ske
     m = {'feats': feats, 'model': model, 'alpha': opts['alpha'], 'parts': parts, 'words': words}
     s = apply(features, m)
     if sketch:
-        k = min(SKETCH_TOP, len(s))
-        top = s[np.argpartition(-s, k - 1)[:k]]
+        ok = usable(features, feats)
+        ranked = s if ok is None else s[ok]  # "top x%" among the papers that get ranked
+        k = min(SKETCH_TOP, len(ranked))
+        top = ranked[np.argpartition(-ranked, k - 1)[:k]]
         m['top'] = np.sort(top)[::-1].copy()  # best first
-        m['quantiles'] = np.quantile(s, np.linspace(0, 1, SKETCH_QUANTILES))  # ascending
-        m['n'] = len(s)
+        m['quantiles'] = np.quantile(ranked, np.linspace(0, 1, SKETCH_QUANTILES))  # ascending
+        m['n'] = len(ranked)
     return m, s
 
 

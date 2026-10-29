@@ -10,7 +10,7 @@ import time
 import numpy as np
 
 from aslite import db
-from aslite.rank import score
+from aslite.rank import score, usable, resolve_feats
 
 
 PER_TAG = 3  # papers per tag, unless the user set another number for the tag (0 leaves it out)
@@ -60,6 +60,9 @@ def compute(
         # only the recent papers get sorted, not all of them; deep enough to refill whatever
         # the other tags take
         rows = np.array([ptoi[p] for p in recent - rated if p in ptoi], dtype=np.int64)
+        ok = usable(features, resolve_feats(features, feats))
+        if ok is not None:
+            rows = rows[ok[rows]]  # not the papers still waiting for an embedding
         rows = rows[np.argsort(-s[rows], kind='stable')][: n + sum(sizes.get(t, per_tag) for t in tags)]
         ordered = np.sort(s)
         higher = len(s) - np.searchsorted(ordered, s[rows], side='right')

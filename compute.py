@@ -39,6 +39,14 @@ if __name__ == '__main__':
     parser.add_argument(
         '--embed_batch', type=int, default=32, help='papers per embedding batch; 32 suits a CPU, use 512+ on a big GPU'
     )
+    parser.add_argument(
+        '--embed_budget',
+        type=float,
+        default=float(os.environ['EMBED_BUDGET']) if os.environ.get('EMBED_BUDGET') else None,
+        help='seconds to spend embedding missing papers (default: all of them; 0: none, only what '
+        'embed_daemon.py cached). papers without an embedding are left out of recommendations. '
+        'defaults to $EMBED_BUDGET',
+    )
     args = parser.parse_args()
     print(args)
 
@@ -107,17 +115,27 @@ if __name__ == '__main__':
 
     if args.embed_model:
         print("computing embeddings...")
-        x_emb = embed_papers(pids, pdb, args.embed_model, batch_size=args.embed_batch)
-        if 0 < args.emb_dims < x_emb.shape[1]:
-            # Scholar Inbox found 256 PCA dims lose ~nothing for recommendation,
-            # while making the per-request classifier faster and the file smaller
-            pca = PCA(n_components=args.emb_dims, random_state=0)
-            x_emb = pca.fit_transform(x_emb).astype(np.float32)
-            x_emb /= np.linalg.norm(x_emb, axis=1, keepdims=True) + 1e-12
-            print(f"PCA to {args.emb_dims} dims keeps {pca.explained_variance_ratio_.sum():.1%} of variance")
-        features['x_emb'] = x_emb
-        features['emb_model'] = args.embed_model
-        print(x_emb.shape)
+        x_emb, have = embed_papers(pids, pdb, args.embed_model, batch_size=args.embed_batch, budget=args.embed_budget)
+        if x_emb is None or have.sum() <= args.emb_dims:
+            print("too few papers have embeddings yet, tfidf only for now")
+        else:
+            if 0 < args.emb_dims < x_emb.shape[1]:
+                # Scholar Inbox found 256 PCA dims lose ~nothing for recommendation,
+                # while making the per-request classifier faster and the file smaller.
+                # fitted on the papers that have an embedding; the others stay zero
+                pca = PCA(n_components=args.emb_dims, random_state=0)
+                pca.fit(x_emb[have])
+                reduced = np.zeros((len(pids), args.emb_dims), dtype=np.float32)
+                reduced[have] = pca.transform(x_emb[have])
+                reduced[have] /= np.linalg.norm(reduced[have], axis=1, keepdims=True) + 1e-12
+                x_emb = reduced
+                print(f"PCA to {args.emb_dims} dims keeps {pca.explained_variance_ratio_.sum():.1%} of variance")
+            features['x_emb'] = x_emb
+            features['emb_model'] = args.embed_model
+            if not have.all():
+                features['emb_mask'] = have  # see rank.emb_mask
+                print(f"{int((~have).sum())} papers have no embedding yet: not recommended until they do")
+            print(x_emb.shape)
 
     print("saving to features to disk...")
     save_features(features)

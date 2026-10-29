@@ -33,6 +33,7 @@ from aslite.db import get_papers_db, get_secret_key, load_features, features_exi
 from aslite.arxiv import find_arxiv_id, fetch_papers_by_id, OLD_ARXIV_ID_RE
 from aslite.rank import (
     fit,
+    usable,
     apply,
     pct,
     fingerprint,
@@ -599,6 +600,9 @@ def _model_ranking(m, opt_time_filter, skip_have, scope=None, limit=None, publis
         ok &= ~np.isin(rows, rated)
     if published:
         ok &= row_published(features)[rows]
+    scorable = usable(features, m['feats'])  # papers still waiting for an embedding: not yet
+    if scorable is not None:
+        ok &= scorable[rows]
     keep = np.flatnonzero(ok)
     if limit and limit < len(keep):  # the best few first, then sort only those
         keep = np.sort(keep[np.argpartition(-s[keep], limit - 1)[:limit]])

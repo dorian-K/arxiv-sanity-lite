@@ -121,16 +121,19 @@ def get_backend(model):
     raise ValueError(f"model must look like 'st:<hf model>' or 'api:<model>', got {model!r}")
 
 
-def embed_papers(pids, pdb, model, batch_size=64, log_every=1000):
+def embed_papers(pids, pdb, model, batch_size=64, log_every=1000, budget=None):
     """
-    Returns an (len(pids), d) float32 matrix of unit-norm embeddings, aligned with pids.
-    Only papers missing from the cache for this model are actually embedded.
+    Returns (x, have): an (len(pids), d) float32 matrix of unit-norm embeddings aligned with
+    pids, and which rows have one. Only papers missing from the cache for this model are
+    embedded, for at most `budget` seconds (None: all of them, 0: none, use the cache as it
+    is; embed_daemon.py fills it slowly). Rows without an embedding are zero; x is None if no
+    paper has one yet
     """
     with EmbeddingCache(model) as cache:
         have = cache.pids()
         missing = [pid for pid in pids if pid not in have]
-        print(f"embeddings for {model}: {len(pids) - len(missing)} cached, {len(missing)} to compute")
-        if missing:
+        print(f"embeddings for {model}: {len(pids) - len(missing)} cached, {len(missing)} missing")
+        if missing and budget != 0:
             backend = get_backend(model)
             texts = {pid: paper_text(p, backend.text_format) for pid, p in pdb.get_many(missing).items()}
             # batches get padded to their longest text, so group similar lengths together;
@@ -138,6 +141,9 @@ def embed_papers(pids, pdb, model, batch_size=64, log_every=1000):
             missing.sort(key=lambda pid: len(texts[pid]))
             t0 = time.time()
             for i in range(0, len(missing), batch_size):
+                if budget is not None and time.time() - t0 > budget:
+                    print(f"  embedding budget of {budget}s used up, {len(missing) - i} left for later")
+                    break
                 batch = missing[i : i + batch_size]
                 # put() zips strictly: a backend returning the wrong count must not misalign the cache
                 cache.put(batch, backend.encode([texts[pid] for pid in batch]))
@@ -145,6 +151,7 @@ def embed_papers(pids, pdb, model, batch_size=64, log_every=1000):
                 if done % log_every < batch_size or done == len(missing):
                     rate = done / max(time.time() - t0, 1e-6)
                     print(f"  embedded {done}/{len(missing)} ({rate:.1f} papers/s)")
-        x = cache.matrix(pids)
-    x /= np.linalg.norm(x, axis=1, keepdims=True) + 1e-12
-    return x
+        x, have = cache.matrix(pids, partial=True)
+    if x is not None:
+        x /= np.linalg.norm(x, axis=1, keepdims=True) + 1e-12  # zero rows stay zero
+    return x, have

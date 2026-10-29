@@ -83,6 +83,11 @@ services:
       # must match the model the features were computed with, or a run embeds the whole
       # corpus again (on CPU). empty = tfidf only
       EMBED_MODEL: ${EMBED_MODEL-st:google/embeddinggemma-2}
+      # embeddings come from embed_daemon.py, a few papers at a time between pauses: compute.py
+      # only uses what it cached. EMBED_DUTY is the share of the time it works (0.1 = 10%)
+      EMBED_BUDGET: ${EMBED_BUDGET:-0}
+      EMBED_DUTY: ${EMBED_DUTY:-0.1}
+      EMBED_THREADS: ${EMBED_THREADS:-2}
       HF_TOKEN: ${HF_TOKEN:-}  # only for gated models; embeddinggemma-2 downloads without one
       COMPUTE_ARGS: ${COMPUTE_ARGS:---max_docs 100000}
       DAEMON_NUM: ${DAEMON_NUM:-2000}

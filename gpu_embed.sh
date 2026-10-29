@@ -64,9 +64,9 @@ ssh -t "$host" "$rpath; cd $remote && nvidia-smi -L && \
 echo "== copying results back"
 # compute.py has exited, so the remote databases are checkpointed and safe to copy
 rsync -az --info=progress2 "$host:$remote/$data/embeddings.sqlite" "$out/"
-if [ -f "$data/embeddings.sqlite" ]; then snap "$data/embeddings.sqlite" "$data/embeddings.sqlite.bak"; fi
-rm -f "$data/embeddings.sqlite-wal" "$data/embeddings.sqlite-shm"
-mv "$out/embeddings.sqlite" "$data/embeddings.sqlite"
+# merged into the local cache, not copied over it: embed_daemon.py may have added some meanwhile
+ARXIV_SANITY_DATA=$data uv run --no-sync python -c "import sys; from aslite.db import EmbeddingCache
+with EmbeddingCache('') as c: print('merged', c.merge(sys.argv[1]), 'new embeddings')" "$out/embeddings.sqlite"
 # features/<version>/ plus the current symlink; the server picks up the new version by itself
 rsync -az --info=progress2 --delete-after "$host:$remote/$data/features/" "$data/features/"  # old version goes last
-echo "done: $data/features and $data/embeddings.sqlite updated (previous cache kept as .bak)"
+echo "done: $data/features and $data/embeddings.sqlite updated"

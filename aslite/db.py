@@ -718,10 +718,13 @@ class EmbeddingCache:
                 ((self.model, p, np.asarray(v, dtype=np.float16).tobytes()) for p, v in zip(pids, x, strict=True)),
             )
 
-    def matrix(self, pids):
-        """float32 matrix with the rows of pids, which must all be cached"""
+    def matrix(self, pids, partial=False):
+        """
+        float32 matrix with the rows of pids, which must all be cached; with partial, also
+        returns which are (the others stay zero), and (None, mask) if none is
+        """
         ix = {p: i for i, p in enumerate(pids)}
-        x, seen = None, 0
+        x, have = None, np.zeros(len(pids), dtype=bool)
         for pid, vec in self.con.execute('SELECT pid, vec FROM embeddings WHERE model = ?', (self.model,)):
             i = ix.get(pid)
             if i is None:
@@ -730,10 +733,26 @@ class EmbeddingCache:
             if x is None:
                 x = np.zeros((len(pids), len(v)), dtype=np.float32)
             x[i] = v
-            seen += 1
-        if seen != len(pids):
-            raise KeyError(f"{len(pids) - seen} papers have no cached {self.model} embedding")
+            have[i] = True
+        if partial:
+            return x, have
+        if not have.all():
+            raise KeyError(f"{int((~have).sum())} papers have no cached {self.model} embedding")
         return x
+
+    def merge(self, path):
+        """
+        adds the embeddings of another embeddings.sqlite (e.g. computed on a GPU machine) that
+        this cache doesn't have yet, for every model; returns how many. existing ones are kept
+        """
+        self.con.execute('ATTACH DATABASE ? AS other', (path,))
+        try:
+            with self.con:
+                return self.con.execute(
+                    'INSERT OR IGNORE INTO embeddings (model, pid, vec) SELECT model, pid, vec FROM other.embeddings'
+                ).rowcount
+        finally:
+            self.con.execute('DETACH DATABASE other')
 
 
 # -----------------------------------------------------------------------------
@@ -744,7 +763,7 @@ class EmbeddingCache:
 # arrays are memory-mapped: all processes share them through the page cache, and a
 # process that is still using an old version keeps its mapping after it is deleted.
 
-_ARRAYS = ('x_data', 'x_indices', 'x_indptr', 'x_emb')
+_ARRAYS = ('x_data', 'x_indices', 'x_indptr', 'x_emb', 'emb_mask')
 
 
 def features_exist(path=None):
@@ -763,10 +782,12 @@ def save_features(features):
     arrays = {'x_data': x.data, 'x_indices': x.indices, 'x_indptr': x.indptr}
     if features.get('x_emb') is not None:
         arrays['x_emb'] = np.ascontiguousarray(features['x_emb'], dtype=np.float32)
+    if features.get('emb_mask') is not None:
+        arrays['emb_mask'] = np.ascontiguousarray(features['emb_mask'], dtype=bool)
     for k, v in arrays.items():
         np.save(os.path.join(d, k + '.npy'), v)
     # (keys with _ are what load_features adds)
-    meta = {k: v for k, v in features.items() if k not in ('x', 'x_emb', 'ptoi') and not k.startswith('_')}
+    meta = {k: v for k, v in features.items() if k not in ('x', 'x_emb', 'emb_mask', 'ptoi') and not k.startswith('_')}
     meta['x_shape'] = x.shape
     with open(os.path.join(d, 'meta.p'), 'wb') as f:
         pickle.dump(meta, f, -1)
@@ -792,6 +813,7 @@ def _load(d):
     shape = features.pop('x_shape')
     features['x'] = sp.csr_matrix((a['x_data'], a['x_indices'], a['x_indptr']), shape=shape, copy=False)
     features['x_emb'] = a.get('x_emb')
+    features['emb_mask'] = a.get('emb_mask')  # None: every paper has an embedding
     return features
 
 

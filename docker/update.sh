@@ -20,6 +20,13 @@ compute() {
 last_daily=0
 last_compute=0
 
+# embeddings trickle in from a background process at the lowest priority (embed_daemon.py),
+# so neither new papers nor a backlog keep the server busy; it asks for a compute run when
+# the new ones are done. restarted if it ever exits
+if [ -n "${EMBED_MODEL:-}" ]; then
+    (while true; do python embed_daemon.py || echo "embed_daemon.py exited, restarting in 5 min"; sleep 300; done) &
+fi
+
 # the weekly digest emails, when DIGEST_ENABLED=1: send_emails.py --if-due sends at the
 # DIGEST_SCHEDULE slot (default sunday 08:00 Europe/Berlin) and otherwise exits right away.
 # its first run only starts the clock, so turning the digest on never mails everyone on the

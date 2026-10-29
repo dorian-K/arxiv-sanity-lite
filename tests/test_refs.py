@@ -1,6 +1,7 @@
 """references and thumbnails (aslite/refs.py, aslite/thumbs.py, enrich_daemon.py) and the Cited tab"""
 
 import io
+import os
 import sys
 import urllib.error
 
@@ -208,6 +209,20 @@ def test_saved_papers_get_references_and_thumbnails_with_fallbacks(client, corpu
     r = client.get(saved[with_html]['thumb_url'])
     assert r.status_code == 200 and r.mimetype == 'image/jpeg' and r.data[:2] == b'\xff\xd8'
     assert client.get('/thumb/figure/..%2F..%2Fusers.sqlite').status_code == 404
+    # clicking a card's image opens the big one: a readable page
+    from PIL import Image
+
+    big = client.get(saved[without_html]['thumb_url'] + '?size=big')
+    assert big.status_code == 200 and Image.open(io.BytesIO(big.data)).width > thumbs.SIZE[0]
+    card = client.get(saved[without_html]['thumb_url'])
+    assert Image.open(io.BytesIO(card.data)).width <= thumbs.SIZE[0]
+    os.remove(db._thumb_file(with_html, 'figure', big=True))  # made before there were big ones
+    assert client.get(saved[with_html]['thumb_url'] + '?size=big').data == r.data
+    run_daemon(monkeypatch)  # ...and made again, once, now with a big one
+    assert os.path.isfile(db._thumb_file(with_html, 'figure', big=True))
+    asked.clear()
+    run_daemon(monkeypatch)
+    assert asked == []
     # an image made under a license that doesn't allow showing it is never served
     db.save_thumb(default_license, 'page', thumbs.from_pdf(pdf_bytes()))
     assert client.get(f'/thumb/page/{default_license}').status_code == 404

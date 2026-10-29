@@ -11,7 +11,8 @@ Per paper, up to four requests to arxiv.org:
    only) when there is no HTML version or its bibliography didn't convert
 Thumbnails only for papers under an open license (aslite/thumbs.py says why): for the others,
 2 is skipped, and 3 too unless the references need it.
-A paper is done ('ok') with whatever of that worked; it isn't asked for again. A network error
+A paper is done ('ok') with whatever of that worked; it isn't asked for again (except, once,
+the papers whose thumbnails were made before there were big ones). A network error
 or a broken answer marks it 'error': tried again after a day, at most 3 times.
 
 Order: papers someone saved (the Cited tab is made of them), newest first, then the papers in
@@ -98,6 +99,13 @@ def paper_license(pid, fetch, rdb):
     return code
 
 
+def save_thumbs(pid, kind, big):
+    """the card's thumbnail and the enlarged one, made from the big one"""
+    card, big = thumbs.both(big)
+    db.save_thumb(pid, kind, big, big=True)
+    db.save_thumb(pid, kind, card)
+
+
 def process(pid, fetch, matcher, license):
     """
     (refs rows, where they came from, figure made, page made) for one paper; see the docstring.
@@ -119,7 +127,7 @@ def process(pid, fetch, matcher, license):
             if not img_final:
                 continue
             try:
-                db.save_thumb(pid, 'figure', thumbs.from_image(img))
+                save_thumbs(pid, 'figure', thumbs.from_image(img, thumbs.BIG))
                 figure = True
                 break
             except Exception as e:  # e.g. an svg, or a broken file: the next figure, or none
@@ -134,7 +142,7 @@ def process(pid, fetch, matcher, license):
     if pdf_url and pdf.startswith(b'%PDF'):
         if may_show:
             try:
-                db.save_thumb(pid, 'page', thumbs.from_pdf(pdf))
+                save_thumbs(pid, 'page', thumbs.from_pdf(pdf, thumbs.BIG))
                 page = True
             except Exception as e:
                 print(f"  {pid}: rendering the PDF: {e}", flush=True)
@@ -154,12 +162,13 @@ def queue(pdb, rdb, now=None):
     now = now or time.time()
     times = pdb.times()
     done = rdb.fetched()
+    redo = rdb.without_big_thumbs()  # made again, once: they predate the enlarged view
 
     def due(p):
         if p not in times:
             return False
         st = done.get(p)
-        return st is None or (st[0] == 'error' and st[2] < MAX_TRIES and now - st[1] > RETRY)
+        return st is None or p in redo or (st[0] == 'error' and st[2] < MAX_TRIES and now - st[1] > RETRY)
 
     saved = set()
     for tags in db.get_all_tags().values():

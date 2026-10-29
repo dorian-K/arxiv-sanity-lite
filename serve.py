@@ -412,7 +412,7 @@ def thumb_info(pid):
 def thumb(kind, pid):
     if kind not in ('figure', 'page') or not re.fullmatch(r'[a-zA-Z.\-]*/?\d{4,7}(\.\d{4,5})?', pid):
         abort(404)  # only arXiv ids (2610.12345, cs/0701001) become file names
-    path, _ = db.thumb_file(pid, (kind,))
+    path, _ = db.thumb_file(pid, (kind,), big=request.args.get('size') == 'big')
     if path is None or not _thumb_license(pid):
         abort(404)  # also a thumbnail made before its license was known not to allow it
     return send_file(os.path.abspath(path), mimetype='image/jpeg', max_age=86400)

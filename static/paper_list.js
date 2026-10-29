@@ -75,6 +75,31 @@ const TagPicker = ({ mode, tags, onPick, onCancel }) => {
 };
 
 // rankings whose scores mean something to show next to the title
+// a card's thumbnail, enlarged: one <dialog> for the page, closed by Escape or any click. It opens
+// with the card's image (already loaded) and swaps in the big one when that has arrived.
+let imageView = null;
+const openImage = (p, e) => {
+    e.preventDefault();
+    if (!imageView) {
+        imageView = document.createElement('dialog');
+        imageView.className = 'imgview';
+        imageView.innerHTML = '<button class="imgview_close" aria-label="close" title="close (Esc)">×</button>'
+            + '<img alt=""><p class="imgview_cap"><span></span> · image from the paper, <a></a></p>';
+        imageView.addEventListener('click', ev => { if (!ev.target.closest('a')) imageView.close(); });
+        document.body.appendChild(imageView);
+    }
+    const img = imageView.querySelector('img'), big = new Image(), src = p.thumb_url + '?size=big';
+    img.src = p.thumb_url;
+    big.onload = () => { if (imageView.open && img.dataset.want === src) img.src = src; };
+    img.dataset.want = src;
+    big.src = src;
+    imageView.querySelector('.imgview_cap span').textContent = p.title;
+    const a = imageView.querySelector('.imgview_cap a');
+    a.href = p.thumb_license_url;
+    a.textContent = p.thumb_license;
+    imageView.showModal();
+};
+
 const SHOW_SCORE = ['tags', 'pid']; // (search scores are raw text-match numbers, meaningless to read)
 
 // a rank fraction as people read it: 0.0031 -> "top 0.3%"
@@ -208,7 +233,8 @@ const Paper = ({ paper: p, quickTag }) => {
 
     return html`
     <article class="rel_paper">
-        ${p.thumb_url ? html`<figure class="rel_img"><img src=${p.thumb_url} alt="" loading="lazy" />
+        ${p.thumb_url ? html`<figure class="rel_img"><a href=${p.thumb_url + '?size=big'} title="click to enlarge"
+                onClick=${e => openImage(p, e)}><img src=${p.thumb_url} alt="" loading="lazy" /><span class="rel_img_zoom" aria-hidden="true">⤢</span></a>
             <figcaption><a href=${p.thumb_license_url} title="this image is from the paper, under this license">${p.thumb_license}</a></figcaption></figure>` : null}
         <div class="rel_head">
             ${compactView ? html`<button class="rel_expand" aria-expanded="true" title="back to one line"

@@ -1295,6 +1295,17 @@ class RefsDB:
         """{pid: (status, last try, tries)}"""
         return {p: (s, t, n) for p, s, t, n in self.con.execute('SELECT pid, status, t, tries FROM fetched')}
 
+    def without_big_thumbs(self):
+        """the papers with thumbnails from before there were big ones (for the enlarged view)"""
+        rows = self.con.execute("SELECT pid, figure, page FROM fetched WHERE status = 'ok' AND (figure OR page)")
+        return {
+            p
+            for p, figure, page in rows
+            if any(
+                made and not os.path.isfile(_thumb_file(p, k, True)) for k, made in (('figure', figure), ('page', page))
+            )
+        }
+
     def unmatched(self):
         """[(citing, pos, title, raw)] of the references no paper was found for"""
         return self.con.execute('SELECT citing, pos, title, raw FROM refs WHERE cited IS NULL').fetchall()
@@ -1346,23 +1357,29 @@ def get_refs_db(path=None):
     return RefsDB(path)
 
 
-def _thumb_file(pid, kind):
-    return os.path.join(THUMBS_DIR, f"{pid.replace('/', '_')}.{kind}.jpg")  # old ids: cs/0701001
+def _thumb_file(pid, kind, big=False):
+    big = '.big' if big else ''
+    return os.path.join(THUMBS_DIR, f"{pid.replace('/', '_')}.{kind}{big}.jpg")  # old ids: cs/0701001
 
 
-def save_thumb(pid, kind, data):
-    """a thumbnail (JPEG bytes) of kind 'figure' or 'page', written atomically"""
+def save_thumb(pid, kind, data, big=False):
+    """a thumbnail (JPEG bytes) of kind 'figure' or 'page', written atomically; big: the enlarged view's"""
     os.makedirs(THUMBS_DIR, exist_ok=True)
-    path = _thumb_file(pid, kind)
+    path = _thumb_file(pid, kind, big)
     with open(path + '.tmp', 'wb') as f:
         f.write(data)
     os.replace(path + '.tmp', path)
 
 
-def thumb_file(pid, kinds):
-    """(path, kind) of the first of these kinds this paper has a thumbnail of, else (None, None)"""
+def thumb_file(pid, kinds, big=False):
+    """
+    (path, kind) of the first of these kinds this paper has a thumbnail of, else (None, None).
+    big: the enlarged one, falling back to the card's (thumbnails made before there were big ones)
+    """
     for kind in kinds:
-        path = _thumb_file(pid, kind)
+        path = _thumb_file(pid, kind, True) if big else None
+        if path is None or not os.path.isfile(path):
+            path = _thumb_file(pid, kind)
         if os.path.isfile(path):
             return path, kind
     return None, None

@@ -6,7 +6,8 @@ Thumbnails of papers, made by enrich_daemon.py, two kinds per paper:
   figure with one image at least MIN_FIGURE px wide.
 - 'page': the first page of the PDF, rendered with pypdfium2 (no ImageMagick, no shell).
 
-Both are JPEGs of at most SIZE, in data/thumbs/ (db.save_thumb). Which one the cards show is
+Both are JPEGs of at most SIZE for the cards, plus one of at most BIG that opens when the card's
+image is clicked, in data/thumbs/ (db.save_thumb). Which one the cards show is
 THUMB_KIND in serve.py; the other is the fallback. Images from papers are untrusted input:
 Pillow's decompression-bomb limit is lowered, and every failure here just means no thumbnail.
 
@@ -25,7 +26,8 @@ import re
 from html.parser import HTMLParser
 from urllib.parse import urljoin
 
-SIZE = (480, 360)
+SIZE = (480, 360)  # cards show them at most 220x140, so this is sharp on 2x screens
+BIG = (1400, 1050)  # the enlarged view: a page is readable at this size
 MIN_FIGURE = 200  # px: narrower images are panels or icons
 MAX_PIXELS = 40_000_000
 ALLOWED = 'https://arxiv.org/html/'  # figures are only fetched from arXiv's own HTML pages
@@ -126,7 +128,7 @@ def figure_urls(html, page_url, n=3):
     return out
 
 
-def _jpeg(img):
+def _jpeg(img, size):
     from PIL import Image
 
     if img.mode in ('RGBA', 'LA', 'P'):
@@ -136,14 +138,16 @@ def _jpeg(img):
         img = bg
     else:
         img = img.convert('RGB')
-    img.thumbnail(SIZE)
+    img.thumbnail(size)
     out = io.BytesIO()
-    img.save(out, 'JPEG', quality=82, optimize=True)
+    # full-resolution colour (no 4:2:0 subsampling): figures are line art and coloured text, which
+    # subsampling smears; ~40% bigger files
+    img.save(out, 'JPEG', quality=90, subsampling=0, optimize=True, progressive=size != SIZE)
     return out.getvalue()
 
 
-def from_image(data):
-    """a thumbnail of an image file (png, jpg, gif, ...); raises on anything else"""
+def from_image(data, size=SIZE):
+    """a thumbnail of an image file (png, jpg, gif, ...) of at most size; raises on anything else"""
     from PIL import Image
 
     Image.MAX_IMAGE_PIXELS = MAX_PIXELS
@@ -151,7 +155,7 @@ def from_image(data):
         img.load()
         if img.width < 32 or img.height < 32:
             raise ValueError('too small to be a figure')
-        return _jpeg(img)
+        return _jpeg(img, size)
 
 
 def _pdf(data):
@@ -160,15 +164,20 @@ def _pdf(data):
     return pdfium.PdfDocument(data)
 
 
-def from_pdf(data):
-    """a thumbnail of the first page of a PDF"""
+def from_pdf(data, size=SIZE):
+    """a thumbnail of the first page of a PDF, of at most size"""
     pdf = _pdf(data)
     try:
         page = pdf[0]
-        scale = SIZE[0] / max(page.get_width(), 1)
-        return _jpeg(page.render(scale=scale).to_pil())
+        scale = size[0] / max(page.get_width(), 1)
+        return _jpeg(page.render(scale=scale).to_pil(), size)
     finally:
         pdf.close()
+
+
+def both(big):
+    """(card, big) thumbnails from the big one"""
+    return from_image(big), big
 
 
 def pdf_text(data, max_pages=60):

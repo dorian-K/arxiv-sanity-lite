@@ -462,6 +462,68 @@ def get_model(features, user, tags, pos, neg, feats='auto', model='auto', C=None
         done.set()
 
 
+# after a vote, the models its pages will want (the tag's and 'all') are trained in the
+# background, so the next page finds them ready. one thread per worker; the other worker
+# finds the result in models.sqlite. off with PREFIT=0 (the tests drive prefit() themselves)
+PREFIT = os.environ.get('PREFIT', '1') == '1'
+PREFIT_DELAY = 1.0  # seconds after the latest vote, so a burst of votes ends in one fit
+PREFIT_MAX = 200  # pending (user, tags); beyond that pages just train on demand
+_prefit_pending = OrderedDict()  # (user, tags) -> time of its latest vote, oldest first
+_prefit_cv = threading.Condition()
+_prefit_thread = None
+
+
+def prefit_later(user, *tag_sets):
+    """queues the models of these tag sets of the user for training, after PREFIT_DELAY"""
+    global _prefit_thread
+    if not PREFIT:
+        return
+    with _prefit_cv:
+        for tags in tag_sets:
+            key = (user, tags)
+            if key in _prefit_pending or len(_prefit_pending) < PREFIT_MAX:
+                _prefit_pending[key] = time.time()
+                _prefit_pending.move_to_end(key)
+        if _prefit_thread is None or not _prefit_thread.is_alive():
+            _prefit_thread = threading.Thread(target=_prefit_loop, daemon=True, name='prefit')
+            _prefit_thread.start()
+        _prefit_cv.notify()
+
+
+def _prefit_loop():
+    while True:
+        with _prefit_cv:
+            while True:
+                if not _prefit_pending:
+                    _prefit_cv.wait()
+                    continue
+                key, voted = next(iter(_prefit_pending.items()))
+                wait = voted + PREFIT_DELAY - time.time()
+                if wait <= 0:
+                    del _prefit_pending[key]  # a vote from now on queues it again
+                    break
+                _prefit_cv.wait(wait)
+        try:
+            prefit(*key)
+        except Exception as e:  # one failed job must not end the thread
+            print("training a model in the background failed: %s" % (e,))
+
+
+def prefit(user, tags):
+    """
+    trains (or finds) the model that a page of these tags will want. reads the user's tags now,
+    not when the vote queued it, so it trains on the latest state; a vote during the fit queues
+    it again, and the model of the older state is stored under that state's fingerprint
+    """
+    if not features_exist():
+        return
+    tags_db, neg_db = db.get_tags(user), db.get_tags(user, neg=True)
+    if tags != 'all' and tags not in tags_db:
+        return  # deleted meanwhile, or only downvotes left: nothing to train
+    pos, neg = training_set(tags_db, neg_db, tags)
+    get_model(load_features(), user, tags, pos, neg)
+
+
 def svm_rank(tags: str = '', pid: str = '', C=None, feats='auto', model='auto'):
     """
     (model, unindexed, n_pos): the model that ranks by these tags of the page's owner (or by
@@ -1061,6 +1123,7 @@ def add(pid=None, tag=None):
     if pid not in get_papers():
         return "error, unknown paper %s" % (pid,)
     db.tag_paper(g.user, pid, tag)  # replaces a downvote: a paper can't be both liked and downvoted
+    prefit_later(g.user, tag, 'all')
     print("added paper %s to tag %s for user %s" % (pid, tag, g.user))
     return "ok"
 
@@ -1071,6 +1134,7 @@ def sub(pid=None, tag=None):
         return "error, not logged in"
     if not db.untag_paper(g.user, pid, tag):
         return "user doesn't have paper %s in tag %s" % (pid, tag)
+    prefit_later(g.user, tag, 'all')
     return "ok removed pid %s from tag %s" % (pid, tag)
 
 
@@ -1083,6 +1147,7 @@ def addneg(pid=None, tag=None):
     if pid not in get_papers():
         return "error, unknown paper %s" % (pid,)
     db.tag_paper(g.user, pid, tag, neg=True)
+    prefit_later(g.user, tag, 'all')
     print("downvoted paper %s for tag %s for user %s" % (pid, tag, g.user))
     return "ok"
 
@@ -1093,6 +1158,7 @@ def subneg(pid=None, tag=None):
         return "error, not logged in"
     if not db.untag_paper(g.user, pid, tag, neg=True):
         return "user hasn't downvoted paper %s for tag %s" % (pid, tag)
+    prefit_later(g.user, tag, 'all')
     return "ok removed downvote of pid %s for tag %s" % (pid, tag)
 
 
@@ -1124,6 +1190,7 @@ def delete_tag(tag=None):
 
     if not db.delete_tag(g.user, tag):
         return "user does not have this tag"
+    prefit_later(g.user, 'all')
 
     print("deleted tag %s for user %s" % (tag, g.user))
     return "ok"
@@ -1150,6 +1217,7 @@ def copy_tag():
         db.tag_paper(g.user, pid, new)
     for pid in db.get_tags(owner, neg=True).get(tag, set()) - likes - mine:
         db.tag_paper(g.user, pid, new, neg=True)  # downvotes too, unless the user likes the paper there
+    prefit_later(g.user, new, 'all')
     print("user %s copied tag %s of %s as %s" % (g.user, tag, owner, new))
     return redirect('/?rank=tags&tags=%s&skip_have=yes' % quote(new, safe=''))
 
@@ -1231,6 +1299,7 @@ def import_papers():
             r[1] = None
         if r[1] in have or r[1] in fetched:  # not the ones over the limit or not reached: they'd have no paper
             db.tag_paper(g.user, pid, tag)
+    prefit_later(g.user, tag, 'all')
     found = pdb.get_many([r[1] for r in results if r[1]])
     context['results'] = [
         {'line': line, 'pid': pid, 'status': status, 'title': found[pid]['title'] if pid in found else ''}

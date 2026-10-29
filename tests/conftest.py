@@ -13,6 +13,9 @@ import time
 
 import pytest
 
+# no background model training: tests call serve.prefit() when they want it
+os.environ.setdefault('PREFIT', '0')
+
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, REPO)
 

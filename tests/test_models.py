@@ -161,3 +161,62 @@ def test_window_ranking_matches_a_full_sort(client, corpus, features):
     assert [p['id'] for p in papers] == [p for _, p in expect][:25]
     assert [p['pct'] for p in papers] == [(i + 1) / len(pids) for i, _ in expect][:25]
     assert features['pids'] == sorted(features['pids'], key=times.get)  # compute.py: oldest first
+
+
+def prefit_on(monkeypatch):
+    import serve
+
+    monkeypatch.setattr(serve, 'PREFIT', True)
+    monkeypatch.setattr(serve, 'PREFIT_DELAY', 0.2)
+
+
+def wait_for_prefit(timeout=20):
+    """until no model is queued or training (and stays so for a moment)"""
+    import serve
+
+    quiet_since, end = None, time.time() + timeout
+    while time.time() < end:
+        busy = bool(serve._prefit_pending or serve._models_inflight)
+        if busy:
+            quiet_since = None
+        elif quiet_since is None:
+            quiet_since = time.time()
+        elif time.time() - quiet_since > 0.5:
+            return
+        time.sleep(0.02)
+    raise AssertionError('background training did not finish')
+
+
+def test_a_vote_trains_the_next_page_s_model_in_the_background(client, corpus, monkeypatch):
+    login(client)
+    prefit_on(monkeypatch)
+    calls = counting_fit(monkeypatch)
+    vision = vision_papers(corpus)
+    for p in vision[:5]:  # a burst of votes: one fit per page, of the final state
+        client.post(f'/add/{p}/cv')
+    wait_for_prefit()
+    assert len(calls) == 2  # cv and all
+    rank_json(client, '/?rank=tags&tags=cv&skip_have=yes')
+    rank_json(client, '/?rank=tags&tags=all&skip_have=yes')
+    assert len(calls) == 2  # both pages found theirs ready
+
+
+def test_a_vote_during_a_background_fit_gets_its_own(client, corpus, monkeypatch):
+    import serve
+
+    login(client)
+    prefit_on(monkeypatch)
+    calls = counting_fit(monkeypatch, delay=0.6)
+    vision = vision_papers(corpus)
+    for p in vision[:3]:
+        client.post(f'/add/{p}/cv')
+    end = time.time() + 10
+    while not calls and time.time() < end:  # the first fit is running
+        time.sleep(0.01)
+    client.post(f'/add/{vision[3]}/cv')
+    wait_for_prefit()
+    n = len(calls)
+    assert n >= 3  # the old state (cv, all) and the new one again
+    monkeypatch.setattr(serve, 'PREFIT', False)
+    assert rank_json(client, '/?rank=tags&tags=cv&skip_have=yes')
+    assert len(calls) == n  # the model of the state after the second vote was ready

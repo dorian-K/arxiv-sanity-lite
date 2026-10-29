@@ -187,7 +187,7 @@ def get_papers():
     return g._pdb
 
 
-_times = None  # (mtime, pid -> time, pids newest first, their times as an array), swapped in one piece
+_times = None  # (mtime, *what get_times returns), swapped in one piece
 _times_lock = threading.Lock()
 
 
@@ -195,15 +195,17 @@ def _load_times():
     pdb = get_papers_db()
     try:
         times = pdb.times()
+        venues = pdb.venues()
     finally:
         pdb.close()
     pids = sorted(times, key=times.get, reverse=True)
-    return times, pids, np.array([times[p] for p in pids], dtype=np.float64)
+    return times, pids, np.array([times[p] for p in pids], dtype=np.float64), venues
 
 
 def get_times():
     """
-    (pid -> time, pids newest first, their times as an array) for all papers. reading every meta takes seconds on a
+    (pid -> time, pids newest first, their times as an array, pid -> venue for the papers that
+    say where they were accepted or published, see aslite.arxiv.venue) for all papers. reading every meta takes seconds on a
     big corpus, so each worker keeps them in memory until the papers database changes.
     while one thread re-reads them, the others keep answering from the old ones
     """
@@ -359,6 +361,7 @@ def render_pid(pid, d=None):
         ntags=[t for t, pids in neg_tags.items() if pid in pids],
         stags=[t for t, pids in get_seen_tags().items() if pid in pids],
         summary=d['summary'],
+        venue=d.get('venue', ''),
         thumb_url=thumb_url,
     )
 
@@ -380,7 +383,7 @@ def random_rank(opt_time_filter=''):
 
 
 def time_rank(opt_time_filter=''):
-    _, pids, tarr = get_times()
+    _, pids, tarr, _ = get_times()
     n = _newer_than(opt_time_filter)
     return pids[:n], ((time.time() - tarr[:n]) / 86400).tolist()  # time delta in days
 
@@ -544,19 +547,34 @@ def svm_rank(tags: str = '', pid: str = '', C=None, feats='auto', model='auto'):
     return m, unindexed, len(pos)
 
 
-_row_times = (None, None, None)  # (features, times, the time of each features row), see row_times
+_row_times = (None, None, None, None)  # (features, times, time of each row, venue mask), see row_times
+
+
+def _rows_info(features):
+    global _row_times
+    times, venues = get_times()[0], get_times()[3]
+    if _row_times[0] is not features or _row_times[1] is not times:
+        pids = features['pids']
+        _row_times = (
+            features,
+            times,
+            np.array([times.get(p, 0) for p in pids], dtype=np.float64),
+            np.array([p in venues for p in pids], dtype=bool),
+        )
+    return _row_times
 
 
 def row_times(features):
     """the time of every paper in the order of the features' rows (0 if unknown), for numpy filters"""
-    global _row_times
-    times = get_times()[0]
-    if _row_times[0] is not features or _row_times[1] is not times:
-        _row_times = (features, times, np.array([times.get(p, 0) for p in features['pids']], dtype=np.float64))
-    return _row_times[2]
+    return _rows_info(features)[2]
 
 
-def _model_ranking(m, opt_time_filter, skip_have, scope=None, limit=None):
+def row_published(features):
+    """whether each paper, in the order of the features' rows, says where it was accepted or published"""
+    return _rows_info(features)[3]
+
+
+def _model_ranking(m, opt_time_filter, skip_have, scope=None, limit=None, published=False):
     """
     (pids, scores, pct) of the papers that pass the filters (see _filtered), best first, by
     model m. only the papers of the time window get scored: compute.py stores the rows oldest
@@ -574,11 +592,14 @@ def _model_ranking(m, opt_time_filter, skip_have, scope=None, limit=None):
     if not len(rows):
         return [], [], []
     s = apply(features, m, sel)
-    keep = np.arange(len(rows))
+    ok = np.ones(len(rows), dtype=bool)
     if skip_have:
         ptoi = features['ptoi']
         rated = np.array([ptoi[p] for p in _rated(scope) if p in ptoi], dtype=np.int64)
-        keep = np.flatnonzero(~np.isin(rows, rated))
+        ok &= ~np.isin(rows, rated)
+    if published:
+        ok &= row_published(features)[rows]
+    keep = np.flatnonzero(ok)
     if limit and limit < len(keep):  # the best few first, then sort only those
         keep = np.sort(keep[np.argpartition(-s[keep], limit - 1)[:limit]])
     order = keep[np.argsort(-s[keep], kind='stable')]
@@ -677,8 +698,11 @@ def _rated(scope=None):
     return set().union(*get_tags().values(), *(neg.get(t, ()) for t in names), *(seen.get(t, ()) for t in names))
 
 
-def _filtered(pids, opt_time_filter, skip_have, scope=None):
-    """indices of the papers that pass the time window and, with skip_have, aren't rated (see _rated)"""
+def _filtered(pids, opt_time_filter, skip_have, scope=None, published=False):
+    """
+    indices of the papers that pass the time window and, with skip_have, aren't rated (see
+    _rated); with published, only those that say where they were accepted or published
+    """
     keep = range(len(pids))
     if opt_time_filter:
         times = get_times()[0]
@@ -688,10 +712,15 @@ def _filtered(pids, opt_time_filter, skip_have, scope=None):
     if skip_have:
         have = _rated(scope)
         keep = [i for i in keep if pids[i] not in have]
+    if published:
+        venues = get_times()[3]
+        keep = [i for i in keep if pids[i] in venues]
     return list(keep)
 
 
-def _ranked_tags_in_turns(tag_names, opt_time_filter, opt_skip_have, C, opt_feats, opt_model, limit=None):
+def _ranked_tags_in_turns(
+    tag_names, opt_time_filter, opt_skip_have, C, opt_feats, opt_model, limit=None, published=False
+):
     """
     several tags (or all) with mix=turns: one model per tag, and the tags take turns picking
     their next best paper. the default, one model trained on all the tags at once, is one
@@ -703,7 +732,7 @@ def _ranked_tags_in_turns(tag_names, opt_time_filter, opt_skip_have, C, opt_feat
         m, u, n = svm_rank(tags=t, C=C, feats=opt_feats, model=opt_model)
         unindexed, n_pos = unindexed + u, n_pos + n
         if m is not None:
-            pids, scores, pcts = _model_ranking(m, opt_time_filter, opt_skip_have == 'yes', {t}, limit)
+            pids, scores, pcts = _model_ranking(m, opt_time_filter, opt_skip_have == 'yes', {t}, limit, published)
             lists.append([(p, sc, pc, t) for p, sc, pc in zip(pids, scores, pcts, strict=True)])
     out, seen = [], set()
     for row in zip_longest(*lists):
@@ -723,13 +752,26 @@ def _ranked_tags_in_turns(tag_names, opt_time_filter, opt_skip_have, C, opt_feat
 
 
 def _ranked(
-    opt_rank, opt_q, opt_tags, opt_pid, opt_time_filter, opt_skip_have, C, opt_feats, opt_model, opt_mix, limit=None
+    opt_rank,
+    opt_q,
+    opt_tags,
+    opt_pid,
+    opt_time_filter,
+    opt_skip_have,
+    C,
+    opt_feats,
+    opt_model,
+    opt_mix,
+    opt_published=False,
+    limit=None,
 ):
     """the ranked and filtered results of a query (model rankings: the best `limit`), see main()"""
     if opt_rank == 'tags' and opt_mix == 'turns':
         tag_names = set(get_tags()) if opt_tags == 'all' else {t for t in opt_tags.split(',') if t}
         if len(tag_names) > 1:
-            return _ranked_tags_in_turns(tag_names, opt_time_filter, opt_skip_have, C, opt_feats, opt_model, limit)
+            return _ranked_tags_in_turns(
+                tag_names, opt_time_filter, opt_skip_have, C, opt_feats, opt_model, limit, opt_published
+            )
     if opt_rank in SLOW_RANKS:
         if opt_rank == 'tags':
             m, unindexed, n_pos = svm_rank(tags=opt_tags, C=C, feats=opt_feats, model=opt_model)
@@ -738,7 +780,7 @@ def _ranked(
         scope = {t for t in opt_tags.split(',') if t} if opt_rank == 'tags' and opt_tags != 'all' else None
         pids, scores, pcts = [], [], []
         if m is not None:
-            pids, scores, pcts = _model_ranking(m, opt_time_filter, opt_skip_have == 'yes', scope, limit)
+            pids, scores, pcts = _model_ranking(m, opt_time_filter, opt_skip_have == 'yes', scope, limit, opt_published)
         return {
             'pids': pids,
             'scores': scores,
@@ -760,8 +802,8 @@ def _ranked(
         opt_time_filter = ''
 
     skip_have = opt_skip_have == 'yes' and opt_rank not in ('saved', 'down')
-    if opt_time_filter or skip_have:
-        keep = _filtered(pids, opt_time_filter, skip_have)
+    if opt_time_filter or skip_have or opt_published:
+        keep = _filtered(pids, opt_time_filter, skip_have, published=opt_published)
         pids, scores = [pids[i] for i in keep], [scores[i] for i in keep]
     return {
         'pids': pids,
@@ -811,9 +853,10 @@ def main():
     default_tags = ''
     default_time_filter = ''
     default_skip_have = 'no'
-    # (format, page_number and u don't count: the page fetches its results as /?format=json,
-    # page 2 of the default is /?page_number=2, and ?u= is a shared link; all stay "For you")
-    if not (set(request.args) - {'format', 'page_number', 'u'}) and get_tags():
+    # (format, page_number, u and published don't count: the page fetches its results as
+    # /?format=json, page 2 of the default is /?page_number=2, ?u= is a shared link, and
+    # published=yes a filter on top; all stay "For you")
+    if not (set(request.args) - {'format', 'page_number', 'u', 'published'}) and get_tags():
         # the main use: a user with tags lands on the best recent papers for them (FOR_YOU_DAYS)
         default_rank, default_tags, default_time_filter, default_skip_have = 'tags', 'all', str(FOR_YOU_DAYS), 'yes'
 
@@ -828,6 +871,7 @@ def main():
     opt_feats = request.args.get('feats', 'auto')  # auto|tfidf|emb|concat|fusion, see aslite/rank.py
     opt_model = request.args.get('model', 'auto')  # auto|svm|logreg, see aslite/rank.py
     opt_mix = request.args.get('mix', 'one')  # several tags: one model on all of them, or one per tag taking turns
+    opt_published = request.args.get('published') == 'yes'  # only papers accepted/published somewhere
     opt_page_number = request.args.get('page_number', '1')  # page number for pagination
     want_json = request.args.get('format') == 'json'  # the page fetching slow results, see SLOW_RANKS
 
@@ -870,7 +914,19 @@ def main():
     eff_model = resolve_model(load_features(), opt_model) if features_ok else 'svm'
 
     # rank and filter, from the cache if this user asked the same recently
-    query = (opt_rank, opt_q, opt_tags, opt_pid, opt_time_filter, opt_skip_have, C, opt_feats, opt_model, opt_mix)
+    query = (
+        opt_rank,
+        opt_q,
+        opt_tags,
+        opt_pid,
+        opt_time_filter,
+        opt_skip_have,
+        C,
+        opt_feats,
+        opt_model,
+        opt_mix,
+        opt_published,
+    )
     cacheable = opt_rank in ('search', 'tags', 'pid') and page_number * RET_NUM <= RANK_CACHE_RESULTS
     key = (g.owner, query, features_ok and db.features_version(), db.db_mtime(PAPERS_DB_FILE), _tags_fingerprint())
     res = _rank_cache_get(key) if cacheable else None
@@ -954,6 +1010,7 @@ def main():
     context['gvars']['feats'] = opt_feats
     context['gvars']['model'] = opt_model
     context['gvars']['mix'] = opt_mix
+    context['gvars']['published'] = opt_published
     context['gvars']['eff_feats'] = eff_feats
     context['gvars']['eff_model'] = eff_model
     # the C the model uses when the field is empty (fusion trains two models, one C each)

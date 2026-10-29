@@ -116,7 +116,9 @@ if __name__ == '__main__':
     months, kept_ids, newest = Counter(), set(), 0.0
     n_new = 0
     for path in paths:
-        for batch in pq.ParquetFile(path).iter_batches(batch_size=20000, columns=COLUMNS):
+        pf = pq.ParquetFile(path)
+        cols = COLUMNS + [c for c in ('journal-ref',) if c in pf.schema_arrow.names]  # older snapshots lack it
+        for batch in pf.iter_batches(batch_size=20000, columns=cols):
             papers = []
             for r in batch.to_pylist():
                 if not CATEGORIES & set(r['categories'].split()):
@@ -129,6 +131,7 @@ if __name__ == '__main__':
                     author_names(r['authors_parsed']),
                     r['categories'],
                     r['comments'],
+                    r.get('journal-ref') or '',
                 )
                 if made is None or made[1] < since:
                     continue

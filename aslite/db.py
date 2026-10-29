@@ -31,6 +31,8 @@ from contextlib import contextmanager
 import numpy as np
 import scipy.sparse as sp
 
+from aslite.arxiv import venue
+
 # -----------------------------------------------------------------------------
 # global configuration
 
@@ -99,7 +101,9 @@ CREATE TABLE IF NOT EXISTS papers (
     summary TEXT NOT NULL,
     authors TEXT NOT NULL,      -- json list of names
     categories TEXT NOT NULL,   -- json list, primary category first
-    comment TEXT NOT NULL DEFAULT ''
+    comment TEXT NOT NULL DEFAULT '',
+    journal_ref TEXT NOT NULL DEFAULT '',  -- where it was published, if the authors said so
+    venue TEXT NOT NULL DEFAULT ''         -- aslite.arxiv.venue() of comment and journal_ref
 );
 CREATE INDEX IF NOT EXISTS papers_time ON papers(time);
 
@@ -115,20 +119,20 @@ CREATE TRIGGER IF NOT EXISTS papers_ad AFTER DELETE ON papers BEGIN
     INSERT INTO papers_fts(papers_fts, rowid, title, authors, summary)
         VALUES ('delete', old.n, old.title, old.authors, old.summary);
 END;
-CREATE TRIGGER IF NOT EXISTS papers_au AFTER UPDATE ON papers BEGIN
+CREATE TRIGGER IF NOT EXISTS papers_au AFTER UPDATE OF title, authors, summary ON papers BEGIN
     INSERT INTO papers_fts(papers_fts, rowid, title, authors, summary)
         VALUES ('delete', old.n, old.title, old.authors, old.summary);
     INSERT INTO papers_fts(rowid, title, authors, summary) VALUES (new.n, new.title, new.authors, new.summary);
 END;
 """
-_COLS = 'id, version, time, time_str, published, title, summary, authors, categories, comment'
+_COLS = 'id, version, time, time_str, published, title, summary, authors, categories, comment, journal_ref, venue'
 # bm25 weights per column: a word in the title counts for more than one in the abstract
 SEARCH_WEIGHTS = (20.0, 10.0, 1.0)
 
 
 def _row_to_paper(r):
     """a row as the paper dict the rest of the code uses (the shape arxiv_daemon.py always stored)"""
-    pid, version, t, time_str, published, title, summary, authors, cats, comment = r
+    pid, version, t, time_str, published, title, summary, authors, cats, comment, journal_ref, venue_ = r
     return {
         '_id': pid,
         '_idv': f'{pid}v{version}',
@@ -142,6 +146,8 @@ def _row_to_paper(r):
         'authors': [{'name': a} for a in json.loads(authors)],
         'tags': [{'term': c} for c in json.loads(cats)],
         'arxiv_comment': comment,
+        'arxiv_journal_ref': journal_ref,
+        'venue': venue_,
     }
 
 
@@ -157,7 +163,12 @@ def _paper_to_row(p):
         json.dumps([a['name'] for a in p['authors']], ensure_ascii=False),
         json.dumps([t['term'] for t in p['tags']]),
         p.get('arxiv_comment') or '',
+        p.get('arxiv_journal_ref') or '',
+        venue(p.get('arxiv_comment') or '', p.get('arxiv_journal_ref') or ''),
     )
+
+
+_papers_columns_done = set()
 
 
 class PapersDB:
@@ -169,6 +180,35 @@ class PapersDB:
     def __init__(self, path=None):
         self.path = path or PAPERS_DB_FILE
         self.con = connect(self.path, PAPERS_SCHEMA)
+        key = os.path.abspath(self.path)
+        if key not in _papers_columns_done:
+            self._add_columns()
+            _papers_columns_done.add(key)
+
+    def _add_columns(self):
+        """
+        columns added after the table first shipped (CREATE TABLE IF NOT EXISTS won't add them).
+        under the write lock, so two processes starting at once don't both add them
+        """
+        if {'journal_ref', 'venue'} <= {r[1] for r in self.con.execute('PRAGMA table_info(papers)')}:
+            return
+        self.con.execute('BEGIN IMMEDIATE')
+        try:
+            cols = {r[1] for r in self.con.execute('PRAGMA table_info(papers)')}
+            if 'journal_ref' not in cols:
+                self.con.execute("ALTER TABLE papers ADD COLUMN journal_ref TEXT NOT NULL DEFAULT ''")
+            if 'venue' not in cols:
+                self.con.execute("ALTER TABLE papers ADD COLUMN venue TEXT NOT NULL DEFAULT ''")
+                # the search index only needs updating when its own columns change, not for this
+                self.con.execute('DROP TRIGGER IF EXISTS papers_au')
+                self.con.execute(PAPERS_SCHEMA[PAPERS_SCHEMA.index('CREATE TRIGGER IF NOT EXISTS papers_au') :].strip())
+                # one-time backfill, about 20 s for 465k papers
+                self.con.create_function('venue', 2, venue, deterministic=True)
+                self.con.execute('UPDATE papers SET venue = venue(comment, journal_ref)')
+            self.con.execute('COMMIT')
+        except BaseException:
+            self.con.execute('ROLLBACK')
+            raise
 
     def __enter__(self):
         return self
@@ -213,6 +253,16 @@ class PapersDB:
         """{pid: time of the latest version}"""
         return dict(self.con.execute('SELECT id, time FROM papers'))
 
+    def venues(self):
+        """{pid: venue} of the papers that say where they were accepted or published"""
+        return dict(self.con.execute("SELECT id, venue FROM papers WHERE venue != ''"))
+
+    def recompute_venues(self):
+        """fills the venue column again, after aslite.arxiv.venue() changed (a few seconds per 100k papers)"""
+        self.con.create_function('venue', 2, venue, deterministic=True)
+        with self.con:
+            self.con.execute("UPDATE papers SET venue = venue(comment, journal_ref)")
+
     def upsert(self, papers):
         """
         stores papers that are new, or newer versions of ones we have, in one transaction.
@@ -221,7 +271,7 @@ class PapersDB:
         """
         with self.con:
             cur = self.con.executemany(
-                f"INSERT INTO papers ({_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                f"INSERT INTO papers ({_COLS}) VALUES ({', '.join('?' * len(_COLS.split(', ')))}) "
                 "ON CONFLICT(id) DO UPDATE SET "
                 + ', '.join(f'{c} = excluded.{c}' for c in _COLS.split(', ')[1:])
                 + " WHERE excluded.version > papers.version",

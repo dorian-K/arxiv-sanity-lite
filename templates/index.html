@@ -1,5 +1,10 @@
 {% extends "base.html" %}
 
+{% macro pubfilter() %}
+<label class="pubfilter" title="Only papers whose authors say where they were accepted or published (a conference, journal or workshop), taken from the arXiv comment or journal reference. Authors fill these in themselves and often only later, so recent papers and some published ones won't show up">
+    <input type="checkbox" id="published_only" {{ 'checked' if gvars.published }}> accepted / published only
+</label>
+{% endmacro %}
 {% block variables %}
 <script>
 var papers = {{ papers | tojson }};
@@ -8,13 +13,18 @@ var words = {{ words | tojson }};
 var words_desc = {{ words_desc | tojson }};
 var gvars = {{ gvars | tojson }};
 
-// the time window of a recommendation page
+// the time window of a recommendation page, and "accepted / published only" on any list
 document.addEventListener('change', function(e) {
-    if (e.target.id !== 'window_select') return;
+    if (e.target.id !== 'window_select' && e.target.id !== 'published_only') return;
     var q = new URLSearchParams(window.location.search);
-    if (e.target.value) q.set('time_filter', e.target.value); else q.delete('time_filter');
+    if (!q.has('rank')) {  // the bare / with its defaults: spell them out, so only the one choice changes
+        q.set('rank', gvars.rank); q.set('tags', gvars.tags); q.set('skip_have', gvars.skip_have);
+        if (gvars.time_filter) q.set('time_filter', gvars.time_filter);
+    }
+    if (e.target.id === 'published_only') {
+        if (e.target.checked) q.set('published', 'yes'); else q.delete('published');
+    } else if (e.target.value) q.set('time_filter', e.target.value); else q.delete('time_filter');
     q.delete('page_number');
-    if (!q.has('rank')) { q.set('rank', gvars.rank); q.set('tags', gvars.tags); q.set('skip_have', gvars.skip_have); }
     showBusy('Loading…');
     window.location.href = '/?' + q.toString();
 });
@@ -68,11 +78,11 @@ var move_page = function(int_offset) {
         {% if not all and not viewing and not readonly and user %}<button type="button" class="linkbtn deltag" id="deltag" data-tag="{{ gvars.tags }}">delete tag</button>{% endif %}</h1>
     <div class="tabrow">
         <nav class="tabs" aria-label="{{ gvars.tags }}">
-            <a href="/?rank=tags&tags={{ gvars.tags | urlencode }}&time_filter={{ gvars.time_filter or for_you_days }}&skip_have=yes{{ '&mix=turns' if gvars.mix == 'turns' }}" class="{{ 'active' if gvars.rank == 'tags' }}"
+            <a href="/?rank=tags&tags={{ gvars.tags | urlencode }}&time_filter={{ gvars.time_filter or for_you_days }}&skip_have=yes{{ '&mix=turns' if gvars.mix == 'turns' }}{{ '&published=yes' if gvars.published }}" class="{{ 'active' if gvars.rank == 'tags' }}"
                title="new papers that match {{ 'your tags' if all else 'this tag' }}, best first">Recommended</a>
-            <a href="/?rank=saved&tags={{ gvars.tags | urlencode }}" class="{{ 'active' if gvars.rank == 'saved' }}"
+            <a href="/?rank=saved&tags={{ gvars.tags | urlencode }}{{ '&published=yes' if gvars.published }}" class="{{ 'active' if gvars.rank == 'saved' }}"
                title="the papers you saved{{ where }}">Saved ({{ n_saved }})</a>
-            <a href="/?rank=down&tags={{ gvars.tags | urlencode }}" class="{{ 'active' if gvars.rank == 'down' }}"
+            <a href="/?rank=down&tags={{ gvars.tags | urlencode }}{{ '&published=yes' if gvars.published }}" class="{{ 'active' if gvars.rank == 'down' }}"
                title="papers you marked as not for {{ 'a tag' if all else 'this tag' }}">Not for {{ 'a tag' if all else 'this tag' }} ({{ n_down }})</a>
         </nav>
         {% if gvars.rank == 'tags' %}
@@ -85,6 +95,7 @@ var move_page = function(int_offset) {
             </select>
         </label>
         {% endif %}
+        {{ pubfilter() }}
     </div>
     <p class="muted">
         {% if gvars.rank == 'tags' %}
@@ -120,7 +131,7 @@ var move_page = function(int_offset) {
 </section>
 {% endif %}
 {% elif heading %}
-<section id="taghead"><h1>{{ heading }}</h1></section>
+<section id="taghead"><h1>{{ heading }}</h1>{{ pubfilter() }}</section>
 {% endif %}
 
 {% if gvars.rank in ('tags', 'pid') %}

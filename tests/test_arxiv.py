@@ -29,3 +29,21 @@ def test_daemon_backs_off_and_gives_up(monkeypatch):
     pages = iter([['a'] * 40, ['a'] * 40])
     monkeypatch.setattr(arxiv_daemon, 'get_response', lambda search_query, start_index: next(pages))
     assert len(arxiv_daemon.fetch_page('q', 0)) == 40
+
+
+def test_venue_from_comment_or_journal_ref():
+    from aslite.arxiv import venue
+
+    assert venue('12 pages, 4 figures, Accepted at NeurIPS 2026') == 'Accepted at NeurIPS 2026'
+    assert venue('To appear in TPAMI. Code: https://x.org') == 'To appear in TPAMI.'.rstrip('.')
+    assert venue('Published as a conference paper at ICLR 2026') == 'Published as a conference paper at ICLR 2026'
+    assert venue('', 'Nature 600, 1-5 (2026)') == 'Nature 600, 1-5 (2026)'  # the journal reference wins
+    for no in (
+        'Submitted to ICML 2026',
+        'Under review',
+        'v2 matches the published version',
+        '10 pages',
+        '',
+        'Not accepted',
+    ):
+        assert venue(no) == '', no

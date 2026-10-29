@@ -15,6 +15,7 @@
     --tag: #2f5bd3;
     --tag-soft: #e6ecfb;
     --neg: #b4471a;
+    --ok: #2e7d32;
     --neg-soft: #fbe9e1;
     --pos-word: #1d7a3e;
     --shadow: 0 1px 2px rgba(20, 18, 12, .06), 0 1px 1px rgba(20, 18, 12, .04);
@@ -37,6 +38,7 @@
         --tag: #8fb0ff;
         --tag-soft: #24304d;
         --neg: #f0a07a;
+        --ok: #81c995;
         --neg-soft: #3d2a20;
         --pos-word: #6fd394;
         --shadow: none;
@@ -659,3 +661,12 @@ details.danger form { margin-top: 10px; }
     .tabs a { padding: 6px 8px; font-size: 14px; }
     .tabrow { align-items: center; }
 }
+
+/* "accepted / published only", and where a paper says it was accepted or published */
+.pubfilter { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; color: var(--muted); cursor: pointer; white-space: nowrap; }
+.pubfilter input { margin: 0; accent-color: var(--accent); }
+.tabrow .tabs { margin-right: auto; }
+.tabrow .pubfilter { margin: 0 0 8px 8px; }
+#taghead h1 + .pubfilter { margin-top: 4px; }
+.rel_venue { margin: 2px 0 4px; font-size: 13px; color: var(--ok); }
+.rel_venue_c { flex: none; font-size: 13px; color: var(--ok); }

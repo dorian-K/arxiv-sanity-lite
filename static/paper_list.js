@@ -25,7 +25,7 @@ const tagUrl = (tag, days = FOR_YOU_DAYS) => '/?rank=tags&tags=' + encodeURIComp
 // a chip in the tag row switches the tag and keeps what is shown: the same tab, the same time window
 const chipUrl = tag => (['saved', 'down'].includes(gvars.rank)
     ? '/?rank=' + gvars.rank + '&tags=' + encodeURIComponent(tag)
-    : tagUrl(tag, gvars.rank === 'tags' ? gvars.time_filter : FOR_YOU_DAYS));
+    : tagUrl(tag, gvars.rank === 'tags' ? gvars.time_filter : FOR_YOU_DAYS)) + (gvars.published ? '&published=yes' : '');
 
 // a tag the paper is in: the name links to the tag's page, x takes the paper out of it
 const UTag = ({ tag, onRemove }) => html`
@@ -183,6 +183,7 @@ const Paper = ({ paper: p, quickTag }) => {
             ${score}
             <a class="rel_title_c" href=${'https://arxiv.org/abs/' + p.id}><${MathText} text=${p.title} /></a>
             ${utags.length ? html`<span class="rel_saved" title=${'saved to ' + utags.join(', ')}>★</span>` : null}
+            ${p.venue ? html`<span class="rel_venue_c" title=${p.venue + ' (as the authors put it)'}>✓</span>` : null}
             <span class="rel_time">${p.time}</span>
             ${canEdit && quickTag ? html`<${QuickVote} pid=${p.id} tag=${quickTag} state=${state} onChange=${onVote} compact />` : null}
         </article>`;
@@ -207,6 +208,7 @@ const Paper = ({ paper: p, quickTag }) => {
             <span class="rel_time">${p.time}</span>
             <span class="rel_tags">${p.tags}</span>
         </div>
+        ${p.venue ? html`<div class="rel_venue" title="as the authors put it in the arXiv comment or journal reference; not checked">✓ ${p.venue}</div>` : null}
         ${canEdit && quickTag ? html`
         <${QuickVote} pid=${p.id} tag=${quickTag} state=${state} onChange=${onVote} />` : null}
         ${canEdit ? html`

@@ -1,7 +1,7 @@
 
 # Arxiv Resanity
 
-Arxiv Resanity keeps up with arXiv for you. You save papers you like into tags, one per topic you follow, and it ranks every new paper against each tag. It trains a small model per tag on the spot, using tfidf features plus dense embeddings of titles and abstracts. Each paper you mark as not relevant improves that tag's ranking. Every Sunday it can email you a digest of the week's best papers per tag, which you rate with one click. Search, browse and add papers by link, from any year.
+Arxiv Resanity keeps up with arXiv for you. You save papers you like into tags, one per topic you follow, and it ranks every new paper against each tag. It trains a small model per tag on the spot, using tfidf features plus dense embeddings of titles and abstracts. Each paper you mark as not relevant improves that tag's ranking. Every Sunday it can email you a digest of the week's best papers per tag, which you rate with one click. Search, browse and add papers by link, from any year. Any list can be limited to papers whose authors say where they were accepted or published ("Accepted at NeurIPS 2026" in the arXiv comment, or a journal reference).
 
 It is a fork of Andrej Karpathy's [arxiv-sanity-lite](https://github.com/karpathy/arxiv-sanity-lite). Compared to the original, it adds embeddings, tuned with an evaluation on real user ratings, as well as:
 - downvotes;

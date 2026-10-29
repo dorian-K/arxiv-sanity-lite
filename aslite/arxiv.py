@@ -134,11 +134,41 @@ def fetch_papers_by_id(ids):
     return out
 
 
+# what an author's comment says when the paper went through peer review: "Accepted at NeurIPS
+# 2026", "To appear in TPAMI", "Published in Nature", "Oral at ICML". not "Submitted to",
+# "Under review" or "the published version"
+VENUE_RE = re.compile(
+    r'\b(accepted|accept|to appear (at|in)|published (at|in|by|as|to|online)|camera[- ]ready'
+    r'|(in )?proceedings of|(oral|spotlight|poster)( presentation| paper)? (at|in))\b',
+    re.IGNORECASE,
+)
+VENUE_NOT_RE = re.compile(r'\b(not|under review|submitted|for review|author[- ]accepted manuscript)\b', re.IGNORECASE)
+_BOILERPLATE_RE = re.compile(r'^\s*\d+\s*(pages?|figures?|figs?|tables?|pp|appendi(x|ces))\b', re.IGNORECASE)
+
+
+def venue(comment='', journal_ref=''):
+    """
+    where the paper was published or accepted, as the authors put it: the journal reference if
+    there is one, else the clause of the comment that says so ('' for neither). a hint for
+    readers, not a verified fact: arXiv doesn't check either field
+    """
+    if journal_ref and journal_ref.strip():
+        return ' '.join(journal_ref.split())
+    for part in re.split(r'(?<=[.;|])\s+|\s*\n\s*', comment or ''):
+        if VENUE_RE.search(part) and not VENUE_NOT_RE.search(part):
+            chunks = part.split(',')
+            while len(chunks) > 1 and _BOILERPLATE_RE.match(chunks[0]):
+                chunks.pop(0)  # "12 pages, 4 figures, accepted at ..."
+            part = ' '.join(','.join(chunks).split()).rstrip('.;|')
+            return part if len(part) <= 100 else part[:99].rstrip() + '…'
+    return ''
+
+
 # daemon categories; the bulk importers (harvest_papers.py, import_snapshot.py) filter on these too
 CATEGORIES = {'cs.CV', 'cs.LG', 'cs.CL', 'cs.AI', 'cs.NE', 'cs.RO'}
 
 
-def make_paper(pid, version_dates, title, abstract, authors, categories, comments=''):
+def make_paper(pid, version_dates, title, abstract, authors, categories, comments='', journal_ref=''):
     """
     builds a paper dict in the shape arxiv_daemon.py stores (feedparser-like) from bulk
     metadata. version_dates are the RFC 2822 dates of v1..vN, authors a list of names.
@@ -165,6 +195,7 @@ def make_paper(pid, version_dates, title, abstract, authors, categories, comment
         'tags': [{'term': c, 'scheme': 'http://arxiv.org/schemas/atom', 'label': None} for c in cats],
         'arxiv_primary_category': {'term': cats[0] if cats else ''},
         'arxiv_comment': comments or '',
+        'arxiv_journal_ref': ' '.join((journal_ref or '').split()),
         'published': first.strftime('%Y-%m-%dT%H:%M:%SZ'),
         'updated': last.strftime('%Y-%m-%dT%H:%M:%SZ'),
     }

@@ -74,7 +74,9 @@ def to_paper(meta):
     g = lambda tag: (meta.findtext('raw:' + tag, default='', namespaces=NS) or '').strip()
     dates = [v.findtext('raw:date', namespaces=NS) for v in meta.findall('raw:version', NS)]
     names = [a['name'] for a in split_authors(g('authors'))]
-    return make_paper(g('id'), dates, g('title'), g('abstract'), names, g('categories'), g('comments'))
+    return make_paper(
+        g('id'), dates, g('title'), g('abstract'), names, g('categories'), g('comments'), g('journal-ref')
+    )
 
 
 if __name__ == '__main__':

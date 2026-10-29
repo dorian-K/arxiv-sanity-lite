@@ -411,3 +411,50 @@ def test_static_files_are_versioned_and_cached(client):
     assert '/static/common.js?v=' in page
     assert 'immutable' in client.get('/static/common.js?v=1').headers['Cache-Control']
     assert 'immutable' not in client.get('/static/common.js').headers.get('Cache-Control', '')
+
+
+def test_published_filter_and_venues(client, corpus):
+    from aslite import db
+
+    pids = sorted(corpus)
+    with db.get_papers_db() as pdb:
+        p = pdb[pids[3]]
+        p['arxiv_comment'], p['_version'] = '8 pages. Accepted at NeurIPS 2026', 2
+        pdb.upsert([p])
+    for url in ('/?rank=time&published=yes', '/?rank=search&q=paper&published=yes'):
+        ids = [x['id'] for x in client.get(url + '&format=json').get_json()['papers']]
+        assert ids == [pids[3]], url
+    page = client.get('/?rank=time&format=json').get_json()['papers']
+    assert next(x for x in page if x['id'] == pids[3])['venue'] == 'Accepted at NeurIPS 2026'
+    assert 'published_only' in client.get('/?rank=time').get_data(as_text=True)  # the checkbox
+    # recommendations too
+    login(client)
+    for x in pids[:6]:
+        client.post(f'/add/{x}/t')
+    res = client.get('/?rank=tags&tags=t&published=yes&format=json').get_json()['papers']
+    assert all(x['venue'] for x in res)
+
+
+def test_old_papers_db_gets_the_new_columns(tmp_path, monkeypatch):
+    """a papers.sqlite from before journal_ref/venue: both columns added, venues filled in once"""
+    import sqlite3
+
+    from aslite import db
+
+    path = str(tmp_path / 'old.sqlite')
+    con = sqlite3.connect(path)
+    schema = db.PAPERS_SCHEMA.replace(
+        ",\n    journal_ref TEXT NOT NULL DEFAULT '',  -- where it was published, if the authors said so\n    venue TEXT NOT NULL DEFAULT ''         -- aslite.arxiv.venue() of comment and journal_ref",
+        '',
+    )
+    assert 'venue' not in schema.split('CREATE INDEX')[0]
+    con.executescript(schema)
+    con.execute(
+        "INSERT INTO papers (id, version, time, time_str, published, title, summary, authors, categories, comment) "
+        "VALUES ('2601.00001', 1, 0, '', '', 't', 's', '[]', '[]', 'Accepted to ACL 2026')"
+    )
+    con.commit()
+    con.close()
+    with db.get_papers_db(path) as pdb:
+        assert pdb.venues() == {'2601.00001': 'Accepted to ACL 2026'}
+        assert pdb.search('t')[0] == ['2601.00001']

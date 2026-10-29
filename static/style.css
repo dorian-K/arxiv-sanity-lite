@@ -379,7 +379,6 @@ input:focus, select:focus, .btn:focus-visible, .iconbtn:focus-visible {
 .rel_img figcaption { font-size: 0.7rem; text-align: right; margin-top: 2px; }
 .rel_img figcaption a { color: var(--muted); }
 .rel_img a { display: block; position: relative; cursor: zoom-in; }
-.rel_img_zoom { position: absolute; right: 4px; bottom: 4px; padding: 0 4px; font-size: 12px; line-height: 16px; border-radius: 4px; background: rgba(0, 0, 0, 0.55); color: #fff; }
 .imgview { max-width: 96vw; max-height: 96vh; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); cursor: zoom-out; }
 .imgview::backdrop { background: rgba(0, 0, 0, 0.7); }
 .imgview img { display: block; max-width: min(1400px, 92vw); max-height: 84vh; margin: 0 auto; background: #fff; }

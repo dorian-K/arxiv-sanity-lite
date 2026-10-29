@@ -234,7 +234,7 @@ const Paper = ({ paper: p, quickTag }) => {
     return html`
     <article class="rel_paper">
         ${p.thumb_url ? html`<figure class="rel_img"><a href=${p.thumb_url + '?size=big'} title="click to enlarge"
-                onClick=${e => openImage(p, e)}><img src=${p.thumb_url} alt="" loading="lazy" /><span class="rel_img_zoom" aria-hidden="true">⤢</span></a>
+                onClick=${e => openImage(p, e)}><img src=${p.thumb_url} alt="" loading="lazy" /></a>
             <figcaption><a href=${p.thumb_license_url} title="this image is from the paper, under this license">${p.thumb_license}</a></figcaption></figure>` : null}
         <div class="rel_head">
             ${compactView ? html`<button class="rel_expand" aria-expanded="true" title="back to one line"

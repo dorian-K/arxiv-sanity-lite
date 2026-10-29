@@ -122,3 +122,14 @@ def test_backlog_order_tagged_then_new_then_old(corpus):
     assert missing[1] == pids[-2]  # then newest first
     new = [p for p in pids[1:-1] if corpus[p]['_time'] > now - 86400]
     assert urgent == 1 + len(new) and missing[1 : 1 + len(new)] == new[::-1]
+
+
+def test_no_embedding_session_while_compute_runs(corpus):
+    with db.heavy_slot() as free:
+        assert free
+    held = db.hold_heavy_lock()  # what compute.py does first
+    with db.heavy_slot() as free:
+        assert not free
+    held.close()  # compute.py exits
+    with db.heavy_slot() as free:
+        assert free

@@ -8,7 +8,8 @@ torch, sleeps so that the work takes about --duty of the time (EMBED_DUTY, defau
 at the lowest CPU priority, on --threads cores (EMBED_THREADS, default 2). At 10% of a CPU
 like a Ryzen 7 1700 that is several thousand papers a day: the ~1000 new ones, and the rest
 goes to the backlog. The model is in memory about --duty of the time, and once the backlog is
-done only while new papers come in.
+done only while new papers come in. No session runs while compute.py does (db.heavy_slot), so
+the two never need their memory at the same time.
 
 Order: papers someone tagged or downvoted (they train the models), then the papers of the
 last --new_days days, newest first, then everything else, newest first. When none of the
@@ -130,8 +131,12 @@ def main():
             try:
                 # a few papers more than a session can do, at ~1 paper/s
                 todo = missing[: int(args.session * 10) + args.batch]
-                with spawn.Pool(1) as pool:
-                    n = pool.apply(session, (args.model, args.threads, todo, args.session, args.batch))
+                with db.heavy_slot() as free:
+                    if not free:  # compute.py runs, and needs the memory: wait for it
+                        time.sleep(60)
+                        continue
+                    with spawn.Pool(1) as pool:
+                        n = pool.apply(session, (args.model, args.threads, todo, args.session, args.batch))
             except Exception as e:  # e.g. the database mid-replace: try again later
                 print(f"embedding failed: {e}", flush=True)
                 time.sleep(60)

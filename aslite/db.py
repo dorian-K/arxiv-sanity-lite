@@ -630,6 +630,7 @@ def count_fetches(since, user=None):
 
 
 ARXIV_LOCK_FILE = os.path.join(DATA_DIR, 'arxiv.lock')
+HEAVY_LOCK_FILE = os.path.join(DATA_DIR, 'heavy.lock')  # compute.py vs embed_daemon.py
 # set by serve.py when users added papers; the docker updater then recomputes features
 COMPUTE_FLAG_FILE = os.path.join(DATA_DIR, 'compute_requested')
 
@@ -653,6 +654,37 @@ def arxiv_slot(pause=3.5):
             f.truncate()
             f.write(str(time.time()))
             f.flush()
+            fcntl.flock(f, fcntl.LOCK_UN)
+
+
+def hold_heavy_lock():
+    """
+    for compute.py: waits until no embed_daemon.py session runs, and keeps it from starting one
+    until this process exits, so the two (~2 GB of RAM each) never run at the same time
+    """
+    os.makedirs(DATA_DIR, exist_ok=True)
+    f = open(HEAVY_LOCK_FILE, 'a')
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print("waiting for the embedding session to finish (at most a few minutes)...", flush=True)
+        fcntl.flock(f, fcntl.LOCK_EX)
+    return f  # the lock lasts as long as the file stays open, so until exit
+
+
+@contextmanager
+def heavy_slot():
+    """for embed_daemon.py: yields False (do nothing) while compute.py runs, else True"""
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(HEAVY_LOCK_FILE, 'a') as f:
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
             fcntl.flock(f, fcntl.LOCK_UN)
 
 

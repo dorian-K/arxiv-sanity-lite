@@ -11,7 +11,7 @@ import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 from aslite import spell
-from aslite.db import get_papers_db, save_features, save_terms
+from aslite.db import get_papers_db, hold_heavy_lock, save_features, save_terms
 from aslite.embed import embed_papers
 
 # -----------------------------------------------------------------------------
@@ -50,6 +50,8 @@ if __name__ == '__main__':
     )
     args = parser.parse_args()
     print(args)
+    # never at the same time as an embed_daemon.py session: each takes ~2 GB of RAM
+    heavy_lock = hold_heavy_lock()
 
     v = TfidfVectorizer(
         input='content',

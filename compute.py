@@ -91,6 +91,13 @@ if __name__ == '__main__':
     assert x.shape[0] == len(pids), "papers were added while computing, run compute.py again"
     print(x.shape)
 
+    # rows oldest first, so the papers of the last N days are one slice at the end, which
+    # serve.py scores without copying anything (see _model_ranking)
+    times = pdb.times()
+    order = np.argsort([times[p] for p in pids], kind='stable')
+    pids = [pids[i] for i in order]
+    x = x[order]
+
     features = {
         'pids': pids,
         'x': x,

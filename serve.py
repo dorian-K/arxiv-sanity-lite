@@ -31,7 +31,19 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from aslite import db, digest, mail
 from aslite.db import get_papers_db, get_secret_key, load_features, features_exist, PAPERS_DB_FILE
 from aslite.arxiv import find_arxiv_id, fetch_papers_by_id, OLD_ARXIV_ID_RE
-from aslite.rank import score, holdout_ranks, resolve_feats, resolve_model, has_embeddings, FEATS, MODELS, DEFAULT_C
+from aslite.rank import (
+    fit,
+    apply,
+    pct,
+    fingerprint,
+    holdout_ranks,
+    resolve_feats,
+    resolve_model,
+    has_embeddings,
+    FEATS,
+    MODELS,
+    DEFAULT_C,
+)
 
 # -----------------------------------------------------------------------------
 # inits and globals
@@ -373,36 +385,101 @@ def time_rank(opt_time_filter=''):
     return pids[:n], ((time.time() - tarr[:n]) / 86400).tolist()  # time delta in days
 
 
+def training_set(tags_db, neg_db, tags):
+    """(liked, downvoted) papers of these tags: one, several (a,b) or 'all'"""
+    names = set(tags_db) | set(neg_db) if tags == 'all' else set(tags.split(','))
+    pos = set().union(*(pids for t, pids in tags_db.items() if t in names))
+    neg = set().union(*(pids for t, pids in neg_db.items() if t in names))
+    return pos, neg
+
+
+# trained models, per process in front of models.sqlite (shared by all workers). the key names
+# the exact training set and features version, so a model is only ever used for the state it
+# was trained on: a vote, or new features, while a fit runs just make the next lookup a miss
+MODEL_LRU = 64
+_models = OrderedDict()
+_models_inflight = {}  # key -> Event, set when the fit of that key is done (or failed)
+_models_lock = threading.Lock()
+
+
+def _drop_orphan_models(user, tags):
+    """erases the models of a user or tags that were deleted while a model for them trained"""
+    have = set(db.get_tags(user)) | set(db.get_tags(user, neg=True))
+    if db.get_user(user) is None and not have:
+        db.delete_models(user)
+    elif tags != 'all':
+        for t in set(tags.split(',')) - have:
+            db.delete_models(user, t)
+
+
+def get_model(features, user, tags, pos, neg, feats='auto', model='auto', C=None):
+    """
+    the model for this training set: from memory, else models.sqlite, else trained now. if
+    another thread of this worker is training the same one (a request, or the refit after a
+    vote), waits for it instead of training it twice. tags is what it ranks by ('pid:<id>'
+    for "similar to"; those stay in memory only). None if no liked paper has features yet
+    """
+    feats, model = resolve_feats(features, feats), resolve_model(features, model)
+    stored = not tags.startswith('pid:')
+    key = (user if stored else '', tags, f'{feats}|{model}|{C}', fingerprint(pos, neg), features['_version'])
+    while True:
+        with _models_lock:
+            m = _models.get(key)
+            if m is not None:
+                _models.move_to_end(key)
+                return m
+            done = _models_inflight.get(key)
+            if done is None:
+                done = _models_inflight[key] = threading.Event()
+                break  # this thread trains it
+        done.wait(120)  # then look again: if that fit failed, this thread takes over
+    try:
+        m = None
+        if stored:
+            try:
+                m = db.get_model(*key)
+            except Exception as e:  # only a cache: rank without it
+                print("reading a cached model failed: %s" % (e,))
+        if m is None:
+            m, _ = fit(features, pos, neg, feats, model, C)
+            if m is not None and stored:
+                try:
+                    db.put_model(*key, m)
+                    # deleted meanwhile (tag or account): its models must not stay behind. a
+                    # deletion before put_model is seen here, one after it erases the row itself
+                    _drop_orphan_models(user, tags)
+                except Exception as e:
+                    print("storing a model failed: %s" % (e,))
+        if m is not None:
+            with _models_lock:
+                _models[key] = m
+                while len(_models) > MODEL_LRU:
+                    _models.popitem(last=False)
+        return m
+    finally:
+        with _models_lock:
+            del _models_inflight[key]
+        done.set()
+
+
 def svm_rank(tags: str = '', pid: str = '', C=None, feats='auto', model='auto'):
     """
-    (scores, words, unindexed, n_pos): the score of every paper in the order of the features'
-    rows (None if there is nothing to rank by), see aslite/rank.py score(). _model_ranking
-    turns them into the filtered ranking
+    (model, unindexed, n_pos): the model that ranks by these tags of the page's owner (or by
+    one paper, pid), None if there is nothing to rank by. _model_ranking ranks with it
     """
     # tag can be one tag or a few comma-separated tags or 'all' for all tags we have in db
     # pid can be a specific paper id to set as positive for a kind of nearest neighbor search
     if not (tags or pid) or not features_exist():  # no features before compute.py's first run
-        return None, [], 0, 0
-
+        return None, 0, 0
     features = get_features()
-
-    # construct the positive set, and the negative set from the user's downvotes
-    pos, neg = set(), set()
     if pid:
-        pos.add(pid)
-    elif tags:
-        tags_db, neg_db = get_tags(), get_neg_tags()
-        tags_filter_to = set(tags_db.keys()) | set(neg_db.keys()) if tags == 'all' else set(tags.split(','))
-        for tag, pids in tags_db.items():
-            if tag in tags_filter_to:
-                pos |= pids
-        for tag, pids in neg_db.items():
-            if tag in tags_filter_to:
-                neg |= pids
-
+        pos, neg = {pid}, set()
+    else:
+        pos, neg = training_set(get_tags(), get_neg_tags(), tags)
     # papers added since the last compute.py run have no features yet, so they can't count
     unindexed = sum(p not in features['ptoi'] for p in pos)
-    return (*score(features, pos, neg, feats=feats, model=model, C=C), unindexed, len(pos))
+    m = get_model(features, g.owner or '', 'pid:' + pid if pid else tags, pos, neg, feats, model, C)
+    return m, unindexed, len(pos)
 
 
 _row_times = (None, None, None)  # (features, times, the time of each features row), see row_times
@@ -417,24 +494,34 @@ def row_times(features):
     return _row_times[2]
 
 
-def _model_ranking(s, opt_time_filter, skip_have, scope=None):
+def _model_ranking(m, opt_time_filter, skip_have, scope=None, limit=None):
     """
-    (pids, scores, pct) of the papers that pass the filters (see _filtered), best first, from
-    the scores of svm_rank. pct is where each landed among all papers, before filters ("top
-    0.3%"). in numpy throughout: a python loop over 465k papers took longer than the model
+    (pids, scores, pct) of the papers that pass the filters (see _filtered), best first, by
+    model m. only the papers of the time window get scored: compute.py stores the rows oldest
+    first, so "the last 30 days" is a slice at the end (a view, no copy). pct is where each
+    landed among all papers ("top 0.3%"), from the model's sketch. limit: only the best this many
     """
     features = get_features()
-    order = np.argsort(-s, kind='stable')
-    ok = np.ones(len(s), dtype=bool)
+    n = len(features['pids'])
     if opt_time_filter:
-        ok &= row_times(features) > time.time() - int(opt_time_filter) * 86400
+        rows = np.flatnonzero(row_times(features) > time.time() - int(opt_time_filter) * 86400)
+        contiguous = len(rows) and rows[-1] - rows[0] + 1 == len(rows)
+        sel = slice(int(rows[0]), int(rows[-1]) + 1) if contiguous else rows  # older features: any order
+    else:
+        rows, sel = np.arange(n), None
+    if not len(rows):
+        return [], [], []
+    s = apply(features, m, sel)
+    keep = np.arange(len(rows))
     if skip_have:
         ptoi = features['ptoi']
-        ok[[ptoi[p] for p in _rated(scope) if p in ptoi]] = False
-    at = np.flatnonzero(ok[order])  # places in the full ranking that pass
-    rows = order[at]
+        rated = np.array([ptoi[p] for p in _rated(scope) if p in ptoi], dtype=np.int64)
+        keep = np.flatnonzero(~np.isin(rows, rated))
+    if limit and limit < len(keep):  # the best few first, then sort only those
+        keep = np.sort(keep[np.argpartition(-s[keep], limit - 1)[:limit]])
+    order = keep[np.argsort(-s[keep], kind='stable')]
     pids = features['pids']
-    return [pids[r] for r in rows], s[rows].tolist(), ((at + 1) / len(s)).tolist()
+    return [pids[r] for r in rows[order]], s[order].tolist(), pct(m, s[order])
 
 
 def saved_rank(tags: str = '', neg=False):
@@ -542,7 +629,7 @@ def _filtered(pids, opt_time_filter, skip_have, scope=None):
     return list(keep)
 
 
-def _ranked_tags_in_turns(tag_names, opt_time_filter, opt_skip_have, C, opt_feats, opt_model):
+def _ranked_tags_in_turns(tag_names, opt_time_filter, opt_skip_have, C, opt_feats, opt_model, limit=None):
     """
     several tags (or all) with mix=turns: one model per tag, and the tags take turns picking
     their next best paper. the default, one model trained on all the tags at once, is one
@@ -551,11 +638,11 @@ def _ranked_tags_in_turns(tag_names, opt_time_filter, opt_skip_have, C, opt_feat
     """
     lists, unindexed, n_pos = [], 0, 0
     for t in sorted(tag_names):
-        s, _, u, n = svm_rank(tags=t, C=C, feats=opt_feats, model=opt_model)
+        m, u, n = svm_rank(tags=t, C=C, feats=opt_feats, model=opt_model)
         unindexed, n_pos = unindexed + u, n_pos + n
-        if s is not None:
-            pids, scores, pct = _model_ranking(s, opt_time_filter, opt_skip_have == 'yes', scope={t})
-            lists.append([(p, sc, pc, t) for p, sc, pc in zip(pids, scores, pct, strict=True)])
+        if m is not None:
+            pids, scores, pcts = _model_ranking(m, opt_time_filter, opt_skip_have == 'yes', {t}, limit)
+            lists.append([(p, sc, pc, t) for p, sc, pc in zip(pids, scores, pcts, strict=True)])
     out, seen = [], set()
     for row in zip_longest(*lists):
         for item in row:
@@ -573,27 +660,29 @@ def _ranked_tags_in_turns(tag_names, opt_time_filter, opt_skip_have, C, opt_feat
     }
 
 
-def _ranked(opt_rank, opt_q, opt_tags, opt_pid, opt_time_filter, opt_skip_have, C, opt_feats, opt_model, opt_mix):
-    """the ranked and filtered results of a query: see main()"""
+def _ranked(
+    opt_rank, opt_q, opt_tags, opt_pid, opt_time_filter, opt_skip_have, C, opt_feats, opt_model, opt_mix, limit=None
+):
+    """the ranked and filtered results of a query (model rankings: the best `limit`), see main()"""
     if opt_rank == 'tags' and opt_mix == 'turns':
         tag_names = set(get_tags()) if opt_tags == 'all' else {t for t in opt_tags.split(',') if t}
         if len(tag_names) > 1:
-            return _ranked_tags_in_turns(tag_names, opt_time_filter, opt_skip_have, C, opt_feats, opt_model)
+            return _ranked_tags_in_turns(tag_names, opt_time_filter, opt_skip_have, C, opt_feats, opt_model, limit)
     if opt_rank in SLOW_RANKS:
         if opt_rank == 'tags':
-            s, words, unindexed, n_pos = svm_rank(tags=opt_tags, C=C, feats=opt_feats, model=opt_model)
+            m, unindexed, n_pos = svm_rank(tags=opt_tags, C=C, feats=opt_feats, model=opt_model)
         else:
-            s, words, unindexed, n_pos = svm_rank(pid=opt_pid, C=C, feats=opt_feats, model=opt_model)
+            m, unindexed, n_pos = svm_rank(pid=opt_pid, C=C, feats=opt_feats, model=opt_model)
         scope = {t for t in opt_tags.split(',') if t} if opt_rank == 'tags' and opt_tags != 'all' else None
-        pids, scores, pct = [], [], []
-        if s is not None:
-            pids, scores, pct = _model_ranking(s, opt_time_filter, opt_skip_have == 'yes', scope)
+        pids, scores, pcts = [], [], []
+        if m is not None:
+            pids, scores, pcts = _model_ranking(m, opt_time_filter, opt_skip_have == 'yes', scope, limit)
         return {
             'pids': pids,
             'scores': scores,
-            'pct': pct,
+            'pct': pcts,
             'for_tag': None,
-            'words': words,
+            'words': m['words'] if m is not None else [],
             'unindexed': unindexed,
             'n_pos': n_pos,
         }
@@ -727,7 +816,8 @@ def main():
     if res is None and not pending:
         if opt_rank in ('tags', 'pid', 'search') and rate_limited('search' if opt_rank == 'search' else 'rank'):
             return too_many('search' if opt_rank == 'search' else 'rank')
-        res = _ranked(*query)
+        # enough for the cache, or for this page and whether there is a next one
+        res = _ranked(*query, limit=max(RANK_CACHE_RESULTS, page_number * RET_NUM + 1))
         if cacheable:
             res['pids'], res['scores'] = res['pids'][:RANK_CACHE_RESULTS], res['scores'][:RANK_CACHE_RESULTS]
             for k in ('pct', 'for_tag'):

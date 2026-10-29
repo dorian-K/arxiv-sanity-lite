@@ -27,6 +27,7 @@ Models ("model"):
 
 import zlib
 import random
+import hashlib
 
 import numpy as np
 import scipy.sparse as sp
@@ -96,21 +97,33 @@ def _rows(features, feats, alpha, rows):
     raise ValueError(feats)
 
 
-def _decision(features, feats, alpha, coef, intercept):
-    """scores of all papers, without materializing the concat matrix (it would be a full copy)"""
+def _sel(m, rows):
+    """rows of a feature matrix: all (None), a slice (a view, no copy) or an index array"""
+    if isinstance(rows, slice) and sp.issparse(m):
+        # scipy copies a sliced csr matrix (0.17 s for a year of papers); this one shares the
+        # memory-mapped arrays and only shifts the row pointers
+        a, b = rows.start, rows.stop
+        lo, hi = m.indptr[a], m.indptr[b]
+        return sp.csr_matrix((m.data[lo:hi], m.indices[lo:hi], m.indptr[a : b + 1] - lo), shape=(b - a, m.shape[1]))
+    return m if rows is None else m[rows]
+
+
+def _decision(features, feats, alpha, coef, intercept, rows=None):
+    """scores of the papers in rows, without materializing the concat matrix (it would be a full copy)"""
     # in the features' own float32: a float64 coef makes numpy upcast the whole matrix first,
     # which took 10x longer than the product itself (0.4 s on 465k papers)
     coef = coef.astype(np.float32)
     if feats == 'tfidf':
-        return features['x'] @ coef + intercept
+        return _sel(features['x'], rows) @ coef + intercept
     if feats == 'emb':
-        return features['x_emb'] @ coef + intercept
+        return _sel(features['x_emb'], rows) @ coef + intercept
     n_vocab = features['x'].shape[1]
-    return features['x'] @ coef[:n_vocab] + alpha * (features['x_emb'] @ coef[n_vocab:]) + intercept
+    x, emb = _sel(features['x'], rows), _sel(features['x_emb'], rows)
+    return x @ coef[:n_vocab] + alpha * (emb @ coef[n_vocab:]) + intercept
 
 
-def _fit_score(features, feats, alpha, pos, neg, model, C, opts, seed):
-    """fits one linear model, returns (scores for all papers, coef vector)"""
+def _fit(features, feats, alpha, pos, neg, model, C, opts, seed):
+    """fits one linear model, returns (coef vector as float32, intercept)"""
     n = len(features['pids'])
 
     if model == 'svm':
@@ -163,26 +176,35 @@ def _fit_score(features, feats, alpha, pos, neg, model, C, opts, seed):
     else:
         raise ValueError(f"unknown model {model!r}, options: {MODELS}")
 
-    coef = clf.coef_[0]
-    return _decision(features, feats, alpha, coef, clf.intercept_[0]), coef
-
-
-def _zscore(s):
-    return (s - s.mean()) / (s.std() + 1e-12)
+    return clf.coef_[0].astype(np.float32), float(clf.intercept_[0])
 
 
 def _top_words(features, coef_tfidf):
-    ivocab = {v: k for k, v in features['vocab'].items()}
+    ivocab = features.get('_ivocab')
+    if ivocab is None:
+        ivocab = features['_ivocab'] = {v: k for k, v in features['vocab'].items()}
     sortix = np.argsort(-coef_tfidf)
     return [{'word': ivocab[ix], 'weight': float(coef_tfidf[ix])} for ix in list(sortix[:40]) + list(sortix[-20:])]
 
 
-def score(features, pos_pids, neg_pids=(), feats='auto', model='auto', C=None, **kwargs):
+SKETCH_TOP = 5000  # the scores of this many best papers are kept exactly, for "top 0.01%"
+SKETCH_QUANTILES = 1001  # and this many quantiles of all scores for the rest
+
+
+def fingerprint(pos_pids, neg_pids=()):
+    """names a training set, the same in every process (unlike hash()): the key of a cached model"""
+    pos = sorted(set(pos_pids))
+    neg = sorted(set(neg_pids) - set(pos))
+    return hashlib.sha1(('\n'.join(pos) + '\n--\n' + '\n'.join(neg)).encode()).hexdigest()
+
+
+def fit(features, pos_pids, neg_pids=(), feats='auto', model='auto', C=None, sketch=True, **kwargs):
     """
-    Returns (scores, words): the score of every paper, as an array in the order of
-    features['pids'] (None without positives), and the tfidf words with the most
-    positive / negative weight (empty if no tfidf model was trained). Cheaper than rank()
-    when only some papers are wanted: sorting 465k pids into a list takes longer than the fit
+    Trains the model for these positives (and downvotes) and returns (m, scores): m is a
+    plain dict that apply() scores any papers with, so it can be cached and stored, and
+    scores are those of all papers in the order of features['pids']. (None, None) without
+    positives. m holds the tfidf words with the most positive / negative weight ('words',
+    empty if no tfidf model was trained) and, with sketch, what pct() needs for "top x%"
     """
     opts = dict(DEFAULTS)
     opts.update({k: v for k, v in kwargs.items() if v is not None})
@@ -193,7 +215,7 @@ def score(features, pos_pids, neg_pids=(), feats='auto', model='auto', C=None, *
     pos = np.array(sorted({ptoi[p] for p in pos_pids if p in ptoi}), dtype=np.int64)
     neg = np.array(sorted({ptoi[p] for p in neg_pids if p in ptoi} - set(pos.tolist())), dtype=np.int64)
     if len(pos) == 0:
-        return None, []
+        return None, None
 
     # deterministic random negatives for a given set of positives, so reloading
     # the page does not reshuffle the ranking
@@ -202,18 +224,70 @@ def score(features, pos_pids, neg_pids=(), feats='auto', model='auto', C=None, *
     def C_for(f):
         return C if C is not None else DEFAULT_C[(model, f)]
 
+    # the score is sum(w * (raw - mu) / sd) over the parts: one part scaled by w, or for
+    # fusion each model's score z-normalized over all papers and mixed
     if feats == 'fusion':
-        s_t, coef_t = _fit_score(features, 'tfidf', 1.0, pos, neg, model, C_for('tfidf'), opts, seed)
-        s_e, _ = _fit_score(features, 'emb', 1.0, pos, neg, model, C_for('emb'), opts, seed)
         w = opts['fusion_w']
-        s = w * _zscore(s_e) + (1 - w) * _zscore(s_t)
-        words = _top_words(features, coef_t)
+        parts = []
+        for f, wf in (('emb', w), ('tfidf', 1 - w)):
+            coef, b = _fit(features, f, 1.0, pos, neg, model, C_for(f), opts, seed)
+            raw = _decision(features, f, 1.0, coef, np.float64(b))
+            parts.append(
+                {'feats': f, 'coef': coef, 'b': b, 'w': wf, 'mu': float(raw.mean()), 'sd': float(raw.std() + 1e-12)}
+            )
+        words = _top_words(features, parts[1]['coef'])
     else:
-        s, coef = _fit_score(features, feats, opts['alpha'], pos, neg, model, C_for(feats), opts, seed)
-        s = 100 * s if model == 'svm' else s  # keep the original svm score scale
+        coef, b = _fit(features, feats, opts['alpha'], pos, neg, model, C_for(feats), opts, seed)
+        # svm: keep the original score scale
+        parts = [{'feats': feats, 'coef': coef, 'b': b, 'w': 100.0 if model == 'svm' else 1.0, 'mu': 0.0, 'sd': 1.0}]
         n_vocab = features['x'].shape[1]
         words = _top_words(features, coef[:n_vocab]) if feats in ('tfidf', 'concat') else []
-    return s, words
+    m = {'feats': feats, 'model': model, 'alpha': opts['alpha'], 'parts': parts, 'words': words}
+    s = apply(features, m)
+    if sketch:
+        k = min(SKETCH_TOP, len(s))
+        top = s[np.argpartition(-s, k - 1)[:k]]
+        m['top'] = np.sort(top)[::-1].copy()  # best first
+        m['quantiles'] = np.quantile(s, np.linspace(0, 1, SKETCH_QUANTILES))  # ascending
+        m['n'] = len(s)
+    return m, s
+
+
+def apply(features, m, rows=None):
+    """the scores of model m (see fit) for the papers in rows: all (None), a slice or an index array"""
+    s = None
+    for p in m['parts']:
+        # the intercept as a float64 scalar, which makes the scores float64 as they always were
+        raw = _decision(features, p['feats'], m['alpha'], p['coef'], np.float64(p['b']), rows)
+        v = p['w'] * ((raw - p['mu']) / p['sd'])
+        s = v if s is None else s + v
+    return s
+
+
+def pct(m, scores):
+    """
+    where each of these scores lands among all papers, as a fraction (0.003 = top 0.3%), from
+    m's sketch: exact among the best SKETCH_TOP papers, interpolated from quantiles below them
+    """
+    scores = np.asarray(scores, dtype=np.float64)
+    top, n = m['top'], m['n']
+    higher = np.searchsorted(-top, -scores, side='left').astype(np.float64)  # best papers above each
+    below = scores < top[-1]
+    if below.any():
+        frac = np.interp(scores[below], m['quantiles'], np.linspace(0, 1, len(m['quantiles'])))
+        higher[below] = np.maximum(len(top), np.round((1 - frac) * n))
+    return ((higher + 1) / n).tolist()
+
+
+def score(features, pos_pids, neg_pids=(), feats='auto', model='auto', C=None, **kwargs):
+    """
+    Returns (scores, words): the score of every paper, as an array in the order of
+    features['pids'] (None without positives), and the tfidf words with the most
+    positive / negative weight (empty if no tfidf model was trained). Cheaper than rank()
+    when only some papers are wanted: sorting 465k pids into a list takes longer than the fit
+    """
+    m, s = fit(features, pos_pids, neg_pids, feats, model, C, sketch=False, **kwargs)
+    return (None, []) if m is None else (s, m['words'])
 
 
 def rank(features, pos_pids, neg_pids=(), feats='auto', model='auto', C=None, **kwargs):

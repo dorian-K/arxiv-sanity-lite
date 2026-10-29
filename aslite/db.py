@@ -8,11 +8,14 @@ Storage, all in DATA_DIR:
                        keep in sync. written by the fetch/import scripts, read by everything
     users.sqlite       accounts, tags and downvotes, written by serve.py
     embeddings.sqlite  per-paper embedding cache of compute.py, per model
+    models.sqlite      the trained ranking model per user and tag(s), a cache that serve.py
+                       fills and that can be deleted any time
     features/          what compute.py produces for ranking: .npy arrays that every reader
                        memory-maps, so web workers share one copy in the page cache
 All databases run in WAL mode, so the web server keeps reading while the updater writes.
 """
 
+import io
 import os
 import re
 import json
@@ -38,6 +41,7 @@ PAPERS_DB_FILE = os.path.join(DATA_DIR, 'papers.sqlite')
 USERS_DB_FILE = os.path.join(DATA_DIR, 'users.sqlite')
 EMBEDDINGS_DB_FILE = os.path.join(DATA_DIR, 'embeddings.sqlite')
 FEATURES_DIR = os.path.join(DATA_DIR, 'features')
+MODELS_DB_FILE = os.path.join(DATA_DIR, 'models.sqlite')
 
 # -----------------------------------------------------------------------------
 # sqlite plumbing
@@ -401,6 +405,7 @@ def delete_user(name):
                 con.execute(f'DELETE FROM {table} WHERE {col} = ?', (name,))
     finally:
         con.close()
+    delete_models(name)
 
 
 def export_user(name):
@@ -468,7 +473,9 @@ def untag_paper(user, pid, tag, neg=False):
 def delete_tag(user, tag):
     """removes a tag with all its likes and downvotes; returns whether it existed"""
     _run('DELETE FROM digest_sizes WHERE user = ? AND tag = ?', (user, tag))
-    return _run('DELETE FROM tags WHERE user = ? AND tag = ?', (user, tag)) > 0
+    existed = _run('DELETE FROM tags WHERE user = ? AND tag = ?', (user, tag)) > 0
+    delete_models(user, tag)
+    return existed
 
 
 def get_digest_sizes(user):
@@ -708,7 +715,8 @@ def save_features(features):
         arrays['x_emb'] = np.ascontiguousarray(features['x_emb'], dtype=np.float32)
     for k, v in arrays.items():
         np.save(os.path.join(d, k + '.npy'), v)
-    meta = {k: v for k, v in features.items() if k not in ('x', 'x_emb', 'ptoi')}
+    # (keys with _ are what load_features adds)
+    meta = {k: v for k, v in features.items() if k not in ('x', 'x_emb', 'ptoi') and not k.startswith('_')}
     meta['x_shape'] = x.shape
     with open(os.path.join(d, 'meta.p'), 'wb') as f:
         pickle.dump(meta, f, -1)
@@ -775,7 +783,110 @@ def load_features(path=None):
             else:
                 features = _load(key[1])
             features['ptoi'] = {p: i for i, p in enumerate(features['pids'])}
+            features['_version'] = str(key[1])  # what a model trained on these is valid for
             _features_cache['entry'] = cached = (key, features)  # one swap, never half updated
         return cached[1]
     finally:
         _features_lock.release()
+
+
+# -----------------------------------------------------------------------------
+# trained ranking models (see aslite/rank.py fit), cached across requests and web workers
+
+MODELS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS models (
+    user TEXT NOT NULL,
+    tags TEXT NOT NULL,       -- what it ranks by: a tag, several (a,b) or 'all'
+    variant TEXT NOT NULL,    -- feats|model|C
+    fp TEXT NOT NULL,         -- rank.fingerprint() of the exact papers it was trained on
+    version TEXT NOT NULL,    -- the features version it was trained on
+    used REAL NOT NULL,
+    meta TEXT NOT NULL,       -- the model dict without its arrays, as json
+    arrays BLOB NOT NULL,     -- its arrays, as an .npz
+    PRIMARY KEY (user, tags, variant, fp, version)
+);
+"""
+MODELS_PER_SLOT = 3  # older training sets of the same user, tags and variant get dropped
+
+
+def _models_db():
+    return connect(MODELS_DB_FILE, MODELS_SCHEMA)
+
+
+def get_model(user, tags, variant, fp, version):
+    """
+    the model trained on exactly fp with features version, or None. the key names the
+    training set, so a model can never stand in for another state of the user's tags
+    """
+    con = _models_db()
+    try:
+        key = (user, tags, variant, fp, version)
+        row = con.execute(
+            'SELECT meta, arrays, used FROM models WHERE user=? AND tags=? AND variant=? AND fp=? AND version=?', key
+        ).fetchone()
+        if row is None:
+            return None
+        now = time.time()
+        if now - row[2] > 3600:  # for pruning; at most one write an hour per model
+            with con:
+                con.execute(
+                    'UPDATE models SET used=? WHERE user=? AND tags=? AND variant=? AND fp=? AND version=?',
+                    (now, *key),
+                )
+    finally:
+        con.close()
+    m = json.loads(row[0])
+    with np.load(io.BytesIO(row[1]), allow_pickle=False) as a:
+        for i, part in enumerate(m['parts']):
+            part['coef'] = a[f'coef{i}']
+        for k in ('top', 'quantiles'):
+            if k in a:
+                m[k] = a[k]
+    return m
+
+
+def put_model(user, tags, variant, fp, version, m):
+    """
+    stores a model. the same key always holds the same model (training is deterministic),
+    so two workers storing it at once is harmless. keeps the newest MODELS_PER_SLOT per
+    user, tags and variant, and drops models of other features versions an hour after their use
+    """
+    arrays = {f'coef{i}': p['coef'] for i, p in enumerate(m['parts'])}
+    arrays.update({k: m[k] for k in ('top', 'quantiles') if k in m})
+    buf = io.BytesIO()
+    np.savez(buf, **arrays)
+    meta = {k: v for k, v in m.items() if k not in ('top', 'quantiles')}
+    meta['parts'] = [{k: v for k, v in p.items() if k != 'coef'} for p in m['parts']]
+    now = time.time()
+    con = _models_db()
+    try:
+        with con:
+            con.execute(
+                'INSERT OR REPLACE INTO models VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                (user, tags, variant, fp, version, now, json.dumps(meta), buf.getvalue()),
+            )
+            con.execute(
+                'DELETE FROM models WHERE user=? AND tags=? AND variant=? AND rowid NOT IN '
+                '(SELECT rowid FROM models WHERE user=? AND tags=? AND variant=? ORDER BY used DESC LIMIT ?)',
+                (user, tags, variant, user, tags, variant, MODELS_PER_SLOT),
+            )
+            con.execute('DELETE FROM models WHERE version != ? AND used < ?', (version, now - 3600))
+    finally:
+        con.close()
+
+
+def delete_models(user, tag=None):
+    """erases the user's models (derived from their tags), or those that a tag went into"""
+    if not os.path.exists(MODELS_DB_FILE):
+        return
+    con = _models_db()
+    try:
+        with con:
+            if tag is None:
+                con.execute('DELETE FROM models WHERE user=?', (user,))
+            else:
+                for (tags,) in con.execute('SELECT DISTINCT tags FROM models WHERE user=?', (user,)).fetchall():
+                    if tags == 'all' or tag in tags.split(','):
+                        con.execute('DELETE FROM models WHERE user=? AND tags=?', (user, tags))
+    finally:
+        con.close()

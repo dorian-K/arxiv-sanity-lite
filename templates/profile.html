@@ -9,7 +9,7 @@
     {% if readonly %}
     <section class="card">
         <h1>Viewing {{ user }}, read-only</h1>
-        <p class="muted">{{ user }} shares their tags, so you can browse their recommendations and digest.
+        <p class="muted">{{ user }} has a public profile, so you can browse their tags, recommendations and digest.
             To change anything, log in with the password.</p>
         {% if error %}<p class="form-error">{{ error }}</p>{% endif %}
         <form id="profile-login-form" action="/login" method="POST">
@@ -32,18 +32,18 @@
         </form>
     </section>
     <section class="card" id="sharing">
-        <h1>Sharing</h1>
+        <h1>Public profile</h1>
         <form action="/sharing" method="post">
             <label class="check">
                 <input type="checkbox" name="public" value="1" {{ 'checked' if public }} onchange="this.form.submit()">
-                <span>Let anyone with a link view my tags read-only</span>
+                <span>Public profile: anyone with a link can view my tags read-only</span>
             </label>
             <noscript><button type="submit" class="btn btn-small">Save</button></noscript>
         </form>
         <p class="muted">Then every page address you see has <code>?u={{ user }}</code> in it, and "🔗 Share" copies it:
             others see your tags, recommendations and digest there (never your email), can't change anything,
             and can copy a tag to their own account.
-            {{ 'Turning this off ends their access right away.' if public else 'Off by default.' }}</p>
+            {{ 'Turning this off makes it private and ends their access right away.' if public else 'Private now: nobody but you sees your tags.' }}</p>
         {% if public %}<p>Your page: <a href="/?u={{ user }}">/?u={{ user }}</a></p>{% endif %}
     </section>
     <section class="card">
@@ -129,8 +129,14 @@
               <label for="password">Password</label>
               <input class="form-control" type="password" id="password" name="password" autocomplete="current-password">
             </div>
+            {% if allow_signup %}
+            <label class="check" title="Anyone with a link to your pages (it contains your username) can see your tags, saved papers, recommendations and digest, read-only; never your email address. You can make it private any time on your profile">
+                <input type="checkbox" name="public" value="1" checked>
+                <span>Public profile <span class="muted small">(new accounts only: others with a link can view your tags read-only; change it any time on your profile)</span></span>
+            </label>
+            {% endif %}
             <button type="submit" class="btn btn-primary">Log in / sign up</button>
-            <p class="muted small">Leave the password empty to view a shared account read-only.
+            <p class="muted small">Leave the password empty to view a public profile read-only.
                 How we handle your data: <a href="/privacy">privacy policy</a>.</p>
         </form>
     </section>

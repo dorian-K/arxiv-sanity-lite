@@ -342,7 +342,7 @@ def test_shared_links(client, corpus):
     client.post('/logout')
     # not shared: a link shows nothing of bob's
     page = client.get('/?u=bob&rank=saved&tags=cv').data.decode()
-    assert "doesn't share" in page and vision[0] not in page
+    assert "profile isn't public" in page and vision[0] not in page
     db.set_public('bob', True)
     # shared: anyone with the link sees bob's tag, read-only, no login needed
     page = client.get('/?u=bob&rank=saved&tags=cv').data.decode()
@@ -458,3 +458,19 @@ def test_old_papers_db_gets_the_new_columns(tmp_path, monkeypatch):
     with db.get_papers_db(path) as pdb:
         assert pdb.venues() == {'2601.00001': 'Accepted to ACL 2026'}
         assert pdb.search('t')[0] == ['2601.00001']
+
+
+def test_signup_makes_a_public_profile_unless_unticked(client):
+    from aslite import db
+
+    page = client.get('/profile').get_data(as_text=True)
+    assert 'name="public" value="1" checked' in page  # ticked on the signup form
+    client.post('/login', data={'username': 'pub', 'password': 'correct horse', 'public': '1'})
+    client.post('/logout')
+    client.post('/login', data={'username': 'priv', 'password': 'correct horse'})  # unticked: not sent
+    assert db.get_user('pub')['public'] == 1 and db.get_user('priv')['public'] == 0
+    client.post('/logout')
+    client.post(
+        '/login', data={'username': 'priv', 'password': 'correct horse', 'public': '1'}
+    )  # a login changes nothing
+    assert db.get_user('priv')['public'] == 0

@@ -670,3 +670,4 @@ details.danger form { margin-top: 10px; }
 #taghead h1 + .pubfilter { margin-top: 4px; }
 .rel_venue { margin: 2px 0 4px; font-size: 13px; color: var(--ok); }
 .rel_venue_c { flex: none; font-size: 13px; color: var(--ok); }
+#profile-login-form .check { margin-bottom: 12px; }

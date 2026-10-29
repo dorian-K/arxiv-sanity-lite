@@ -151,7 +151,7 @@ document.addEventListener('click', e => {
     const btn = e.target.closest('#share');
     if (!btn) return;
     if (!viewing && !sharing) {
-        if (confirm('Sharing is off, so a link to your pages shows nothing to others. Turn it on in your profile?')) {
+        if (confirm('Your profile is private, so a link to your pages shows nothing to others. Make it public in your profile?')) {
             window.location.href = '/profile#sharing';
         }
         return;

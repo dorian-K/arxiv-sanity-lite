@@ -288,7 +288,7 @@ def before_request():
         db.touch_user(g.user)
 
     # whose tags the page shows: one's own, or on a shared link (?u=<name>) the tags of a user
-    # who shares them (off by default). someone else's page is read-only: votes and edits
+    # whose profile is public. someone else's page is read-only: votes and edits
     # still only ever go to g.user's own tags, and "copy to my tags" takes a tag over
     g.owner, g.viewing, g.not_shared = g.user, False, ''
     u = request.args.get('u', '')
@@ -1497,7 +1497,7 @@ def login():
 
     user = db.get_user(username)
     if password == '':
-        # no password: a read-only view, if this user shares their tags (off by default)
+        # no password: a read-only view, if this user's profile is public
         if user and user['public']:
             _start_session(user, readonly=True)
             return redirect(url_for('main'))
@@ -1514,6 +1514,9 @@ def login():
         if len(password) < MIN_PASSWORD:
             return profile(error=f"Choose a password of at least {MIN_PASSWORD} characters."), 400
         db.set_password(username, generate_password_hash(password))
+        # "Public profile" on the signup form, ticked unless the user unticks it (the operator's
+        # choice; see CLAUDE.md about Art. 25(2) GDPR)
+        db.set_public(username, request.form.get('public') == '1')
         print("registered user %s" % (username,))
     elif not check_password_hash(user['pw_hash'], password):
         if rate_limited('login', f'fail:{username}:{request.remote_addr}'):

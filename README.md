@@ -75,7 +75,7 @@ EU law (GDPR, ePrivacy, German imprint duty). What the code takes care of:
 
 What's left to you: fill in those details; sign a data processing agreement with your VPS provider (usually a click in their panel); check that your nginx keeps its logs only briefly; and have someone qualified read the privacy text if the site grows beyond friends.
 
-Read-only sharing: users can turn on "let anyone view my tags read-only" on their profile (off by default). Anyone can then log in as them with an empty password and browse their tags, recommendations and digest. A viewer can't change anything, and never sees the email address. Turning it off ends those sessions on their next request.
+Public profiles: while a user's profile is public, anyone can log in as them with an empty password, or open their pages with `?u=<name>`, and browse their tags, recommendations and digest. New accounts are public unless the "Public profile" box on the signup form is unticked; the profile page switches it. A viewer can't change anything, and never sees the email address. Turning it off ends those sessions on their next request.
 
 Example nginx config for the proxy. The `X-Forwarded-*` headers are required, because the app takes the scheme, host and client IP from them (`TRUST_PROXY=1`), and session cookies are https-only (`SECURE_COOKIES=1`):
 

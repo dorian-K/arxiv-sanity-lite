@@ -34,7 +34,7 @@ var sharing = {{ sharing | default(false) | tojson }};
 
 <main>
 {% if not_shared %}
-<div id="log-fun-warn">@{{ not_shared }} doesn't share their tags (or there is no such user).</div>
+<div id="log-fun-warn">@{{ not_shared }}'s profile isn't public (or there is no such user).</div>
 {% elif viewing %}
 <div id="log-fun-warn">👁 You're viewing <b>@{{ owner }}</b>'s tags, read-only.
     {% if user and not readonly %}To vote or change something, copy a tag to your own account from its page.

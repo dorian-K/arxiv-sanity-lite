@@ -201,7 +201,7 @@ You can also set `EMBED_MODEL` in the environment instead of passing `--embed_mo
 **Pick features and model per request.** The front page gets two new options, also usable as URL parameters and as `send_emails.py --feats/--model`:
 
 - `feats`: `tfidf`, `emb` (embeddings only), `concat` (both in one model), `fusion` (one model each, scores averaged) or `auto` (concat if embeddings exist, else tfidf).
-- `model`: `svm` (the original), `logreg`, the recipe from [Scholar Inbox](https://arxiv.org/abs/2504.08385): logistic regression on your liked papers, your downvotes and 5000 random other papers, with tuned class weights, or `auto` (logreg if embeddings exist, else svm). svm trains on every paper in the corpus, except on corpora with more than 20k untagged papers, where a random 20k of them stand in for the rest (`svm_max_neg`; with as few as 4k the eval scores are within .002 of using all papers), so it stays usable on any corpus size.
+- `model`: `svm` (the original), `lda` (closed form, ~5 ms, slightly worse, see the results below), `logreg`, the recipe from [Scholar Inbox](https://arxiv.org/abs/2504.08385): logistic regression on your liked papers, your downvotes and 5000 random other papers, with tuned class weights, or `auto` (logreg if embeddings exist, else svm). svm trains on every paper in the corpus, except on corpora with more than 20k untagged papers, where a random 20k of them stand in for the rest (`svm_max_neg`; with as few as 4k the eval scores are within .002 of using all papers), so it stays usable on any corpus size.
 
 Without embeddings both `auto`s give the original tfidf + svm, so nothing changes until you run `compute.py --embed_model`.
 
@@ -249,11 +249,15 @@ uv run python eval.py run --source si --pool rated
 | emb:logreg | .961 | .810 | .412 | .963 | .816 | .426 | .933 | .764 |
 | **concat:logreg (auto)** | .965 | .815 | .416 | .967 | .819 | .420 | .938 | **.766** |
 | fusion:logreg | .968 | .803 | .429 | .969 | .805 | **.429** | **.939** | .756 |
+| tfidf:lda | – | – | – | .961 | .786 | .404 | .897 | .724 |
+| emb:lda | – | – | – | .958 | .809 | .426 | .914 | .759 |
+| concat:lda | – | – | – | .964 | .811 | .428 | .922 | .761 |
 
 - Adding embeddings to tfidf helps most at telling liked papers from near misses (`auc_hard` .79 → .82) and for small tags (.72 → .77). `concat` and `fusion` are within noise of each other; `auto` picks `concat` because one model also explains the ranking ("why these papers?").
 - EmbeddingGemma 2 (`st:google/embeddinggemma-2`, 270M) beats bge-small (33M) in almost every cell, but only by about .002–.006, a small gain for about 8× the embedding cost on a CPU.
 - With tuned C, `logreg` and `svm` are about equal. `auto` picks `logreg` because it trains on 5k papers instead of 20k.
 - The original default C for logreg (1.0) was far too strong a regularizer; the tuned values are in `DEFAULT_C`.
+- `lda` (closed-form linear discriminant analysis, no training loop) trains in about 5 ms instead of about 0.3 s on 465k papers. Tuned on these profiles (`C`, `lda_neg` 0.25, `lda_w` 0.7), it ranks a little worse than `logreg`: about .003 / .008 lower on large profiles and .016 on `auc_rand` with only 5 likes, the case new tags are in. Since models are cached and retrained in the background after each vote, training time rarely shows, so `auto` stays on `logreg`; `lda` is under "Advanced". (Its three settings were tuned on the same 60 profiles they are scored on, like `logreg`'s C, so both rows are slightly optimistic.)
 
 #### Todos
 

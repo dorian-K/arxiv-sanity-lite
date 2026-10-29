@@ -64,6 +64,7 @@ The pipeline runs in batch through cron jobs, and the web server only reads its 
 3. **`serve.py`** (Flask) and **`send_emails.py`** both rank through **`aslite/rank.py`**. Its `rank(features, pos_pids, neg_pids, feats, model, C)` trains a small linear model on the fly for each request or tag and returns sorted pids, scores and top tfidf words. Nothing is precomputed per user.
    - `feats`: `tfidf | emb | concat | fusion | auto`. Every option except `tfidf` needs `x_emb`, and `auto` falls back to tfidf when it is missing.
    - `model`: `svm` (the original: every untagged paper counts as a negative, up to a random 20k sample on big corpora, and downvotes get extra weight) or `logreg` (Scholar Inbox recipe: random negatives plus S/V class weights).
+   - `model` also has `lda`: closed-form discriminant analysis on background statistics cached per features (`_bg_stats`), ~5 ms per fit, slightly worse than logreg in eval.py (README), so not the default.
    - `DEFAULT_C` and `DEFAULTS` are untuned starting points, meant to be tuned with `eval.py`.
 
 All file I/O and DB access goes through **`aslite/db.py`**. Scripts don't touch the filesystem directly, so add new storage there.

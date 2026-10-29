@@ -21,6 +21,10 @@ Models ("model"):
             with class weights set by S (total negative weight) and V (share of the
             negative weight that goes to downvotes rather than random papers).
             Its training set doesn't grow with the corpus, so it stays fast on 100k+ papers.
+    lda     linear discriminant analysis in closed form: the mean of the liked papers minus a
+            reference (all papers, moved a little towards the downvotes), scaled by how much
+            all papers vary. no iterations, so it trains in ~5 ms instead of ~0.3 s on 465k
+            papers, but ranks a little worse than logreg (README), most of all for small tags
     auto    logreg if embeddings were computed, else svm (so without embeddings nothing
             changes from the original arxiv-sanity-lite)
 """
@@ -35,7 +39,7 @@ from sklearn import svm
 from sklearn.linear_model import LogisticRegression
 
 FEATS = ('auto', 'tfidf', 'emb', 'concat', 'fusion')
-MODELS = ('auto', 'svm', 'logreg')
+MODELS = ('auto', 'svm', 'logreg', 'lda')
 
 # default regularization per (model, feature set); C is "inverse regularization"
 # so lower = smoother. the tfidf svm value is the original arxiv-sanity-lite one; the
@@ -49,6 +53,9 @@ DEFAULT_C = {
     ('logreg', 'tfidf'): 100.0,
     ('logreg', 'emb'): 100.0,
     ('logreg', 'concat'): 100.0,
+    ('lda', 'tfidf'): 0.1,
+    ('lda', 'emb'): 0.3,
+    ('lda', 'concat'): 0.3,
 }
 
 DEFAULTS = dict(
@@ -59,6 +66,9 @@ DEFAULTS = dict(
     n_random=5000,  # logreg: number of random negatives
     S=5.0,  # logreg: total weight of negatives relative to positives
     V=0.8,  # logreg: share of negative weight on downvotes vs random papers
+    lda_neg=0.25,  # lda: weight of the downvotes' mean in the reference point (the rest: all papers)
+    lda_w=0.7,  # lda with concat: weight of the embedding block (each block's score normalized first)
+    lda_sample=20000,  # lda: papers the background statistics are estimated from
 )
 
 
@@ -122,9 +132,72 @@ def _decision(features, feats, alpha, coef, intercept, rows=None):
     return x @ coef[:n_vocab] + alpha * (emb @ coef[n_vocab:]) + intercept
 
 
+def _bg_stats(features, n_sample):
+    """
+    lda: mean and spread of all papers, per block, from a fixed random sample. computed once
+    per features (and process), so each fit only needs the means of its own papers
+    """
+    cache = features.setdefault('_bg', {})
+    key = (id(features['x']), n_sample)  # restrict_to (eval.py) copies the dict, not this cache
+    if key in cache:
+        return cache[key]
+    n = len(features['pids'])
+    rows = np.sort(np.random.default_rng(0).choice(n, size=min(n, n_sample), replace=False))
+    xs = features['x'][rows]
+    mu = np.asarray(xs.mean(axis=0)).ravel()
+    var = np.asarray(xs.multiply(xs).mean(axis=0)).ravel() - mu**2
+    out = {'xs': xs, 't': (mu, var)}
+    if has_embeddings(features):
+        e = np.asarray(features['x_emb'][rows], dtype=np.float64)
+        out['es'] = e.astype(np.float32)
+        out['e'] = (e.mean(axis=0), np.cov(e, rowvar=False))
+    cache[key] = out
+    return out
+
+
+def _fit_lda(features, feats, alpha, pos, neg, C, opts):
+    """
+    linear discriminant analysis, closed form: w = S^-1 (mean of the liked papers - reference),
+    where the reference is the mean of all papers, moved towards the downvotes' mean, and S the
+    spread of all papers (full covariance for the embeddings, per-word variance for tfidf), plus
+    1/C times its average on the diagonal. no iterations, so a fit takes milliseconds
+    """
+    st = _bg_stats(features, opts['lda_sample'])
+    lneg = opts['lda_neg'] if len(neg) else 0.0
+
+    def block(m, mu, mean_of):
+        ref = (1 - lneg) * mu + (lneg * mean_of(neg) if lneg else 0)
+        return mean_of(pos) - ref, ref
+
+    def mean_rows(m):
+        return lambda r: np.asarray(m[r].mean(axis=0), dtype=np.float64).ravel()
+
+    ws = {}
+    if feats in ('tfidf', 'concat'):
+        mu, var = st['t']
+        d, ref = block(features['x'], mu, mean_rows(features['x']))
+        ws['t'] = d / (var + var.mean() / C)
+    if feats in ('emb', 'concat'):
+        mu, cov = st['e']
+        d, ref = block(features['x_emb'], mu, mean_rows(features['x_emb']))
+        ws['e'] = np.linalg.solve(cov + np.trace(cov) / len(cov) / C * np.eye(len(cov)), d)
+    if feats == 'tfidf':
+        return ws['t'].astype(np.float32), 0.0
+    if feats == 'emb':
+        return ws['e'].astype(np.float32), 0.0
+    # concat: each block's score scaled to unit spread over the sample, then mixed by lda_w
+    w = opts['lda_w']
+    sd_t = float(np.std(st['xs'] @ ws['t'].astype(np.float32))) + 1e-12
+    sd_e = float(np.std(st['es'] @ ws['e'].astype(np.float32))) + 1e-12
+    coef = np.concatenate([(1 - w) * ws['t'] / sd_t, w * ws['e'] / sd_e / alpha])  # _decision multiplies by alpha
+    return coef.astype(np.float32), 0.0
+
+
 def _fit(features, feats, alpha, pos, neg, model, C, opts, seed):
     """fits one linear model, returns (coef vector as float32, intercept)"""
     n = len(features['pids'])
+    if model == 'lda':
+        return _fit_lda(features, feats, alpha, pos, neg, C, opts)
 
     if model == 'svm':
         y = np.zeros(n, dtype=np.float32)

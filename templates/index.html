@@ -157,9 +157,9 @@ var move_page = function(int_offset) {
                 </select>
                 <small>how papers are compared; auto is tuned</small>
             </label>
-            <label title="The model that learns from your saved papers. svm: every other paper counts as a 'no' (the original arxiv-sanity). logreg: a random sample of papers counts as 'no', and your 'not for this tag' papers more. auto picks the tuned default">model
+            <label title="The model that learns from your saved papers. svm: every other paper counts as a 'no' (the original arxiv-sanity). logreg: a random sample of papers counts as 'no', and your 'not for this tag' papers more. lda: compares your papers' average with everyone else's, no training loop; much faster, slightly worse matches. auto picks the tuned default">model
                 <select name="model">
-                    {% for m in ['auto', 'svm', 'logreg'] %}
+                    {% for m in ['auto', 'svm', 'logreg', 'lda'] %}
                     <option value="{{ m }}" {{ gvars.model == m and 'selected' }}>{{ m }}{{ ' (' + gvars.eff_model + ')' if m == 'auto' else '' }}</option>
                     {% endfor %}
                 </select>

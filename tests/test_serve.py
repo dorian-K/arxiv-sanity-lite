@@ -18,7 +18,7 @@ def test_tag_rank_and_downvote(client, corpus):
         assert client.post(f'/add/{p}/cv').data.startswith(b'ok')
     assert client.post(f'/addneg/{vision[4]}/cv').data.startswith(b'ok')
 
-    for model in ['svm', 'logreg']:
+    for model in ['svm', 'logreg', 'lda']:
         # the page comes back at once with a placeholder, and fetches the ranking as json
         r = client.get(f'/?rank=tags&tags=cv&model={model}')
         assert r.status_code == 200 and b'"pending": true' in r.data

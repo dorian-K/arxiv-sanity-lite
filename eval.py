@@ -175,6 +175,8 @@ def run(args):
                     alpha=args.alpha,
                     fusion_w=args.fusion_w,
                     svm_max_neg=args.svm_max_neg,
+                    lda_neg=args.lda_neg,
+                    lda_w=args.lda_w,
                 )
                 times[v] += time.time() - t0
                 score = dict(zip(pids, scores, strict=True))
@@ -258,6 +260,8 @@ if __name__ == '__main__':
     r.add_argument('--alpha', type=float, default=None, help='concat: embedding block scale')
     r.add_argument('--fusion_w', type=float, default=None, help='fusion: weight of the embedding score')
     r.add_argument('--svm_max_neg', type=int, default=None, help='svm: untagged papers to train on (0 = all)')
+    r.add_argument('--lda_neg', type=float, default=None, help="lda: weight of the downvotes' mean")
+    r.add_argument('--lda_w', type=float, default=None, help='lda with concat: weight of the embedding block')
     r.add_argument('--out', default='', help='also write results to this csv')
     r.add_argument(
         '--train_pos',

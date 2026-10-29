@@ -33,6 +33,7 @@ import zlib
 import json
 import time
 import random
+import sqlite3
 import argparse
 from collections import defaultdict
 
@@ -50,13 +51,26 @@ SI_IDS = os.path.join(DATA_DIR, 'si_ids.txt')
 
 def prepare_si(args):
     """samples Scholar Inbox users and writes their profiles + the ids to fetch"""
+    have = None
+    if args.have:
+        # only papers already in this database: no fetching (and no arXiv load) needed
+        con = sqlite3.connect(args.have)
+        have = {r[0] for r in con.execute('SELECT id FROM papers')}
+        con.close()
+    exclude = set()
+    for path in args.exclude:
+        # e.g. the profiles the defaults were tuned on, for a check on users they never saw
+        with open(path) as f:
+            exclude |= {k.split(':', 1)[1] for k in json.load(f)}
     pos, neg = defaultdict(set), defaultdict(set)
     with open(args.ratings) as f:
         for row in csv.DictReader(f):
             if '/' in row['arxiv_id']:
                 continue  # old-style ids (hep-th/0408218): aslite.arxiv stores them under a mangled id
+            if have is not None and row['arxiv_id'] not in have:
+                continue
             (pos if row['rating'] == '1' else neg)[row['user_id']].add(row['arxiv_id'])
-    users = [u for u in pos if len(pos[u]) >= args.min_pos and len(neg[u]) >= args.min_neg]
+    users = [u for u in pos if len(pos[u]) >= args.min_pos and len(neg[u]) >= args.min_neg and u not in exclude]
     print(f"{len(users)} users have >= {args.min_pos} likes and >= {args.min_neg} downvotes")
     rng = random.Random(args.seed)
     users = rng.sample(sorted(users), min(args.users, len(users)))
@@ -70,19 +84,22 @@ def prepare_si(args):
         profiles['si:' + u] = {'pos': p, 'neg': n}
         ids.update(p)
         ids.update(n)
-    with open(SI_PROFILES, 'w') as f:
+    out = args.profiles or SI_PROFILES
+    with open(out, 'w') as f:
         json.dump(profiles, f)
-    with open(SI_IDS, 'w') as f:
-        f.write('\n'.join(sorted(ids)) + '\n')
-    print(f"wrote {len(profiles)} profiles to {SI_PROFILES} and {len(ids)} ids to {SI_IDS}")
+    if not args.have:
+        with open(SI_IDS, 'w') as f:
+            f.write('\n'.join(sorted(ids)) + '\n')
+        print(f"wrote {len(ids)} ids to fetch to {SI_IDS}")
+    print(f"wrote {len(profiles)} profiles to {out}")
 
 
 # -----------------------------------------------------------------------------
 
 
-def load_profiles(source):
+def load_profiles(source, path=''):
     if source == 'si':
-        with open(SI_PROFILES) as f:
+        with open(path or SI_PROFILES) as f:
             return {k: (set(v['pos']), set(v['neg'])) for k, v in json.load(f).items()}
     profiles = {}
     all_neg = get_all_tags(neg=True)
@@ -123,7 +140,7 @@ def restrict_to(features, keep):
 
 def run(args):
     features = load_features(args.features or None)
-    profiles = load_profiles(args.source)
+    profiles = load_profiles(args.source, args.profiles)
     if args.pool == 'rated':
         features = restrict_to(features, set().union(*(p | n for p, n in profiles.values())))
     known = set(features['pids'])
@@ -246,9 +263,13 @@ if __name__ == '__main__':
     p.add_argument('--min_neg', type=int, default=20)
     p.add_argument('--max_per_user', type=int, default=150, help='cap likes and downvotes per user')
     p.add_argument('--seed', type=int, default=0)
+    p.add_argument('--exclude', action='append', default=[], help='skip the users of this profiles json (repeatable)')
+    p.add_argument('--have', default='', help='only ratings of papers in this papers.sqlite (nothing to fetch)')
+    p.add_argument('--profiles', default='', help=f'write the profiles here instead of {SI_PROFILES}')
 
     r = sub.add_parser('run', help='run the comparison')
     r.add_argument('--source', choices=['tags', 'si'], default='tags')
+    r.add_argument('--profiles', default='', help=f'si: profiles json instead of {SI_PROFILES}')
     r.add_argument(
         '--variants',
         default='tfidf:svm,emb:svm,concat:svm,fusion:svm,tfidf:logreg,emb:logreg,fusion:logreg',

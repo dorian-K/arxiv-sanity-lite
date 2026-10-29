@@ -143,6 +143,7 @@ def main():
                 continue
             took = time.time() - t0  # loading the model counts too
             urgent_done += min(n, urgent)
+            db.put_job('embed', took, papers=n, left=len(missing) - n)
             rate = n / took * duty * 86400
             print(f"  {n} embedded in {took:.0f}s, {len(missing) - n} left, about {rate:.0f} a day", flush=True)
             time.sleep(min(3600.0, took * (1 / duty - 1)))

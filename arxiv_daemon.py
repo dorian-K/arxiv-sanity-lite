@@ -12,7 +12,7 @@ import argparse
 import urllib.error
 
 from aslite.arxiv import get_response, parse_response
-from aslite.db import get_papers_db, arxiv_slot
+from aslite.db import get_papers_db, arxiv_slot, put_job
 
 MAX_TRIES = 5  # per page; then this run gives up, and the next one tries again
 
@@ -74,6 +74,11 @@ if __name__ == '__main__':
 
     pdb = get_papers_db()
     prevn = len(pdb)
+    t_start = time.time()
+
+    def done(status, new):
+        put_job('arxiv', time.time() - t_start, new=new, ok=status != 2)  # for /stats
+        sys.exit(status)
 
     def store(p):
         pdb.upsert([p])
@@ -87,7 +92,7 @@ if __name__ == '__main__':
         papers = fetch_page(q, k)
         if not papers:
             logging.error("no papers from arxiv after %d tries, giving up for this run", MAX_TRIES)
-            sys.exit(2 if total_updated == 0 else 0)
+            done(2 if total_updated == 0 else 0, total_updated)
 
         # process the batch of retrieved papers
         nhad, nnew, nreplace = 0, 0, 0
@@ -132,4 +137,4 @@ if __name__ == '__main__':
         time.sleep(3 + random.uniform(0, 3))  # arXiv asks for >= 3s between requests
 
     # exit with OK status if anything at all changed, 1 if nothing did, 2 if arxiv failed us
-    sys.exit(0 if total_updated > 0 else 1)
+    done(0 if total_updated > 0 else 1, total_updated)

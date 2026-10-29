@@ -438,6 +438,14 @@ textarea.form-control {
     .iconbtn { width: 36px; height: 36px; }
 }
 
+/* /stats timings: numbers right-aligned, the label and steps columns left; wide tables scroll on phones */
+.tablescroll { overflow-x: auto; }
+.perftable th { text-align: right; padding: 4px 0 4px 16px; font-weight: 600; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.perftable td { text-align: right; padding: 4px 0 4px 16px; white-space: nowrap; }
+.perftable th:first-child, .perftable td:first-child { text-align: left; padding-left: 0; white-space: normal; }
+.perftable td:last-child { font-weight: normal; }
+.perftable td.muted { text-align: left; white-space: normal; }
+#statswrap h2 { font-size: 1rem; margin: 16px 0 6px; }
 /* after .stattable, which right-aligns its last column */
 .stattable.import-results td:last-child { text-align: left; font-weight: normal; padding-right: 0; width: 40%; }
 

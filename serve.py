@@ -28,7 +28,7 @@ from itsdangerous import URLSafeSerializer, URLSafeTimedSerializer, BadSignature
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import generate_password_hash, check_password_hash
 
-from aslite import db, digest, mail
+from aslite import db, digest, mail, metrics
 from aslite.spell import Speller
 from aslite.db import get_papers_db, get_secret_key, load_features, features_exist, PAPERS_DB_FILE
 from aslite.arxiv import find_arxiv_id, fetch_papers_by_id, OLD_ARXIV_ID_RE
@@ -283,6 +283,7 @@ SHAREABLE = ('main', 'digest_page', 'tag_check')  # pages a ?u= link can show fo
 
 @app.before_request
 def before_request():
+    g.t0 = time.perf_counter()  # for /stats, see record_timing
     # everything that changes state is a POST. SameSite=Lax already keeps the session
     # cookie off cross-site POSTs; rejecting them by Sec-Fetch-Site covers old browsers too
     if request.method == 'POST' and request.headers.get('Sec-Fetch-Site') == 'cross-site':
@@ -330,6 +331,14 @@ def static_version(endpoint, values):
             values['v'] = int(os.path.getmtime(os.path.join(app.static_folder, values['filename'])))
         except OSError:
             pass
+
+
+@app.after_request
+def record_timing(resp):
+    """how long this kind of page took (aslite/metrics.py), shown on /stats; static files aren't counted"""
+    if request.endpoint not in (None, 'static') and 't0' in g:
+        metrics.record(g.get('metric_name') or request.endpoint, time.perf_counter() - g.t0)
+    return resp
 
 
 @app.after_request
@@ -494,7 +503,9 @@ def get_model(features, user, tags, pos, neg, feats='auto', model='auto', C=None
             except Exception as e:  # only a cache: rank without it
                 print("reading a cached model failed: %s" % (e,))
         if m is None:
+            t0 = time.perf_counter()
             m, _ = fit(features, pos, neg, feats, model, C)
+            metrics.record('model training', time.perf_counter() - t0)
             if m is not None and stored:
                 try:
                     db.put_model(*key, m)
@@ -1028,6 +1039,8 @@ def main():
                 p['for_tag'] = res['for_tag'][i]  # picked by this tag (see _ranked_tags_in_turns)
             papers.append(p)
         words = res['words']
+    # the kind of list, for /stats: the first response of a slow one is just the placeholder
+    g.metric_name = f"list:{opt_rank}" + (':results' if want_json else ':placeholder' if pending else '')
     if want_json:
         return {'papers': papers, 'words': words, 'has_next': has_next, 'notice': notice}
 
@@ -1197,25 +1210,111 @@ def sharing():
     return redirect(url_for('profile'))
 
 
+# what the kinds of pages on /stats are (aslite/metrics.py names them by endpoint or list)
+STAT_LABELS = {
+    'list:tags': 'Recommendations, with results right away',
+    'list:tags:placeholder': 'Recommendations, placeholder first (a model to train)',
+    'list:tags:results': 'Recommendations, the results after the placeholder',
+    'list:pid:placeholder': 'Similar papers, placeholder first',
+    'list:pid:results': 'Similar papers, the results',
+    'list:pid': 'Similar papers',
+    'list:search': 'Search',
+    'list:time': 'Newest',
+    'list:random': 'Random',
+    'list:saved': 'Saved papers of a tag',
+    'list:down': 'Not for this tag',
+    'model training': 'Training a model (after a vote, or while a page waits)',
+    'add': 'Vote: save',
+    'sub': 'Vote: unsave',
+    'addneg': 'Vote: not for this tag',
+    'subneg': 'Vote: undo not for this tag',
+    'seen': 'Vote: neutral',
+    'unseen': 'Vote: undo neutral',
+    'digest': 'Digest',
+    'inspect': 'Paper details',
+    'tag_check': 'Tag check',
+    'profile': 'Profile',
+}
+
+
+def fmt_seconds(s):
+    if s < 1:
+        return f"{s * 1000:.0f} ms"
+    if s < 120:
+        return f"{s:.1f} s"
+    if s < 7200:
+        return f"{s / 60:.0f} min"
+    return f"{s / 3600:.1f} h"
+
+
+def fmt_ago(t):
+    return fmt_seconds(max(0.0, time.time() - t)) + ' ago'
+
+
 @app.route('/stats')
 def stats():
     context = default_context()
-    times = list(get_times()[0].values())
+    tarr = get_times()[2]  # newest first
     tstr = lambda t: time.strftime('%b %d %Y', time.localtime(t))
-
-    context['num_papers'] = len(times)
-    if len(times) > 0:
-        context['earliest_paper'] = tstr(min(times))
-        context['latest_paper'] = tstr(max(times))
-    else:
-        context['earliest_paper'] = 'N/A'
-        context['latest_paper'] = 'N/A'
-
-    # count number of papers from various time deltas to now
+    context['num_papers'] = len(tarr)
+    context['earliest_paper'] = tstr(tarr.min()) if len(tarr) else 'N/A'
+    context['latest_paper'] = tstr(tarr.max()) if len(tarr) else 'N/A'
     tnow = time.time()
-    for thr in [1, 6, 12, 24, 48, 72, 96]:
-        context['thr_%d' % thr] = len([t for t in times if t > tnow - thr * 60 * 60])
+    context['new_papers'] = [(h, int((tarr > tnow - h * 3600).sum())) for h in (1, 6, 12, 24, 48, 72, 96)]
 
+    # how long pages took over the last day, every worker together (aslite/metrics.py)
+    try:
+        metrics.flush()
+        pages = metrics.summary(tnow - 86400)
+        jobs = db.get_jobs(tnow - db.METRICS_KEEP)
+    except Exception as e:  # statistics only
+        print("reading timings failed: %s" % (e,))
+        pages, jobs = {}, []
+    context['pages'] = [
+        dict(
+            label=STAT_LABELS.get(name, name),
+            n=v['n'],
+            p50=fmt_seconds(v['p50']),
+            p95=fmt_seconds(v['p95']),
+            max=fmt_seconds(v['max']),
+        )
+        for name, v in sorted(pages.items(), key=lambda kv: -kv[1]['n'])
+    ]
+
+    # background work
+    runs = lambda name: [j for j in jobs if j[1] == name]
+    context['computes'] = [
+        dict(
+            ago=fmt_ago(t),
+            took=fmt_seconds(sec),
+            papers=i.get('papers'),
+            embedded=i.get('embedded'),
+            peak=i.get('peak_mb'),
+            phases=', '.join(f"{k} {fmt_seconds(v)}" for k, v in i.get('phases', {}).items()),
+        )
+        for t, _, sec, i in reversed(runs('compute')[-5:])
+    ]
+    context['fetches'] = [
+        dict(ago=fmt_ago(t), took=fmt_seconds(sec), new=i.get('new'), ok=i.get('ok', True))
+        for t, _, sec, i in reversed(runs('arxiv')[-5:])
+    ]
+    embeds = runs('embed')
+    day = [j for j in embeds if j[0] > tnow - 86400]
+    n_day = sum(j[3].get('papers', 0) for j in day)
+    left = embeds[-1][3].get('left') if embeds else None
+    context['embed'] = (
+        dict(
+            sessions=len(day),
+            papers=n_day,
+            busy=fmt_seconds(sum(j[2] for j in day)),
+            per_paper=fmt_seconds(sum(j[2] for j in day) / n_day) if n_day else '',
+            last=fmt_ago(embeds[-1][0]) if embeds else '',
+            left=left,
+            eta=f"{left / n_day:.1f} days" if left and n_day else '',
+        )
+        if embeds
+        else None
+    )
     return render_template('stats.html', **context)
 
 

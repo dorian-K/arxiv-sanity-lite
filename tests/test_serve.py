@@ -492,3 +492,20 @@ def test_search_fixes_typos_unless_asked_not_to(client, corpus, monkeypatch):
     assert ('"corrected": "%s"' % word).encode() in r.data and pid.encode() in r.data
     r = client.get('/?rank=search&exact=yes&q=' + word[0] + word[2:])
     assert b'"corrected": ""' in r.data
+
+
+def test_stats_show_page_speed_and_background_work(client, corpus):
+    from aslite import db
+
+    login(client)
+    vision = [p for p in corpus if corpus[p]['tags'][0]['term'] == 'cs.CV']
+    for p in vision[:3]:
+        client.post(f'/add/{p}/cv')
+    client.get('/?rank=search&q=vision')
+    client.get('/?rank=tags&tags=cv&format=json')
+    db.put_job('embed', 12.0, papers=8, left=400)
+    page = ' '.join(client.get('/stats').data.decode().split())
+    for label in ('Search', 'Vote: save', 'Recommendations, the results after the placeholder', 'Training a model'):
+        assert label in page
+    assert 'Rebuilding the index' in page and 'MB' in page  # conftest's compute.py run
+    assert '400 papers still without an embedding, about 50.0 days' in page

@@ -14,13 +14,62 @@
         </div>
     </section>
     <section class="card">
-        <!-- thresholds are [1, 6, 12, 24, 48, 72, 96] -->
         <h1>New papers</h1>
         <table class="stattable">
-            {% for h in [1, 6, 12, 24, 48, 72, 96] %}
-            <tr><td>last {{ h }} hours</td><td>{{ {1: thr_1, 6: thr_6, 12: thr_12, 24: thr_24, 48: thr_48, 72: thr_72, 96: thr_96}[h] }}</td></tr>
+            {% for h, n in new_papers %}
+            <tr><td>last {{ h }} hours</td><td>{{ n }}</td></tr>
             {% endfor %}
         </table>
+    </section>
+    <section class="card">
+        <h1>Page speed</h1>
+        <p class="muted">The last 24 hours, measured on the server (the network adds to it). Half of
+            the requests were faster than the median, 95% faster than "95%".</p>
+        {% if pages %}
+        <div class="tablescroll"><table class="stattable perftable">
+            <tr><th>Page</th><th>Requests</th><th>Median</th><th>95%</th><th>Slowest</th></tr>
+            {% for p in pages %}
+            <tr><td>{{ p.label }}</td><td>{{ p.n }}</td><td>{{ p.p50 }}</td><td>{{ p.p95 }}</td><td>{{ p.max }}</td></tr>
+            {% endfor %}
+        </table></div>
+        {% else %}
+        <p>Nothing measured yet.</p>
+        {% endif %}
+    </section>
+    <section class="card">
+        <h1>Background work</h1>
+        <h2>Embedding papers</h2>
+        {% if embed %}
+        <p>Last 24 hours: {{ embed.papers }} papers in {{ embed.sessions }} sessions, {{ embed.busy }} of work
+            {% if embed.per_paper %}({{ embed.per_paper }} per paper){% endif %}; last session {{ embed.last }}.
+            {% if embed.left %}{{ embed.left }} papers still without an embedding{% if embed.eta %}, about
+            {{ embed.eta }} at this pace{% endif %}.{% elif embed.left == 0 %}Every paper has an embedding.{% endif %}</p>
+        {% else %}
+        <p class="muted">No embedding session in the last week.</p>
+        {% endif %}
+        <h2>Rebuilding the index</h2>
+        {% if computes %}
+        <div class="tablescroll"><table class="stattable perftable">
+            <tr><th>Finished</th><th>Took</th><th>Papers</th><th>With embedding</th><th>Peak memory</th><th>Steps</th></tr>
+            {% for c in computes %}
+            <tr><td>{{ c.ago }}</td><td>{{ c.took }}</td><td>{{ c.papers }}</td><td>{{ c.embedded }}</td>
+                <td>{{ c.peak }} MB</td><td class="muted">{{ c.phases }}</td></tr>
+            {% endfor %}
+        </table></div>
+        {% else %}
+        <p class="muted">No rebuild in the last week.</p>
+        {% endif %}
+        <h2>Fetching new papers from arXiv</h2>
+        {% if fetches %}
+        <div class="tablescroll"><table class="stattable perftable">
+            <tr><th>Finished</th><th>Took</th><th>New or updated</th></tr>
+            {% for f in fetches %}
+            <tr><td>{{ f.ago }}</td><td>{{ f.took }}</td><td>{{ f.new }}{% if not f.ok %} (arXiv didn't answer){% endif %}</td></tr>
+            {% endfor %}
+        </table></div>
+        {% else %}
+        <p class="muted">No fetch in the last week.</p>
+        {% endif %}
     </section>
 </div>
 {% endblock %}

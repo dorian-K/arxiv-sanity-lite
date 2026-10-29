@@ -45,6 +45,7 @@ EMBEDDINGS_DB_FILE = os.path.join(DATA_DIR, 'embeddings.sqlite')
 FEATURES_DIR = os.path.join(DATA_DIR, 'features')
 MODELS_DB_FILE = os.path.join(DATA_DIR, 'models.sqlite')
 SEARCH_TERMS_FILE = os.path.join(DATA_DIR, 'search_terms.json')  # aslite/spell.py
+METRICS_DB_FILE = os.path.join(DATA_DIR, 'metrics.sqlite')  # timings for /stats, safe to delete
 
 # -----------------------------------------------------------------------------
 # sqlite plumbing
@@ -1079,5 +1080,83 @@ def delete_models(user, tag=None):
                 for (tags,) in con.execute('SELECT DISTINCT tags FROM models WHERE user=?', (user,)).fetchall():
                     if tags == 'all' or tag in tags.split(','):
                         con.execute('DELETE FROM models WHERE user=? AND tags=?', (user, tags))
+    finally:
+        con.close()
+
+
+# -----------------------------------------------------------------------------
+# metrics.sqlite: how long pages and background jobs take, for /stats. no user, ip or query,
+# only the kind of page; a week is kept. safe to delete
+
+METRICS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS timings (
+    t REAL NOT NULL,          -- the minute these requests were counted in (one row per worker)
+    name TEXT NOT NULL,       -- the kind of page, see aslite/metrics.py
+    n INTEGER NOT NULL,
+    total REAL NOT NULL,      -- seconds, summed
+    hist TEXT NOT NULL        -- json {bucket: count}, see metrics.BUCKET
+);
+CREATE INDEX IF NOT EXISTS timings_t ON timings(t);
+CREATE TABLE IF NOT EXISTS jobs (
+    t REAL NOT NULL,          -- when it finished
+    name TEXT NOT NULL,       -- compute, embed, arxiv
+    seconds REAL NOT NULL,
+    info TEXT NOT NULL        -- json: papers, peak memory, ...
+);
+CREATE INDEX IF NOT EXISTS jobs_t ON jobs(t);
+"""
+METRICS_KEEP = 7 * 86400
+
+
+def _metrics_db():
+    return connect(METRICS_DB_FILE, METRICS_SCHEMA)
+
+
+def put_timings(rows):
+    """rows: (minute, name, n, total seconds, {bucket: count})"""
+    con = _metrics_db()
+    try:
+        with con:
+            con.executemany(
+                'INSERT INTO timings (t, name, n, total, hist) VALUES (?, ?, ?, ?, ?)',
+                ((t, name, n, total, json.dumps(hist)) for t, name, n, total, hist in rows),
+            )
+            con.execute('DELETE FROM timings WHERE t < ?', (time.time() - METRICS_KEEP,))
+    finally:
+        con.close()
+
+
+def get_timings(since):
+    con = _metrics_db()
+    try:
+        q = 'SELECT t, name, n, total, hist FROM timings WHERE t >= ?'
+        return [(t, name, n, total, json.loads(h)) for t, name, n, total, h in con.execute(q, (since,))]
+    finally:
+        con.close()
+
+
+def put_job(name, seconds, **info):
+    """a background job finished (compute.py, an embedding session, the arXiv fetch). never raises"""
+    try:
+        con = _metrics_db()
+        try:
+            with con:
+                con.execute(
+                    'INSERT INTO jobs (t, name, seconds, info) VALUES (?, ?, ?, ?)',
+                    (time.time(), name, seconds, json.dumps(info)),
+                )
+                con.execute('DELETE FROM jobs WHERE t < ?', (time.time() - METRICS_KEEP,))
+        finally:
+            con.close()
+    except Exception as e:  # only statistics
+        print("recording job %s failed: %s" % (name, e))
+
+
+def get_jobs(since):
+    """[(finished, name, seconds, info)], oldest first"""
+    con = _metrics_db()
+    try:
+        q = 'SELECT t, name, seconds, info FROM jobs WHERE t >= ? ORDER BY t'
+        return [(t, name, sec, json.loads(i)) for t, name, sec, i in con.execute(q, (since,))]
     finally:
         con.close()

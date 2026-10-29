@@ -32,7 +32,9 @@
             your IP address is held in memory for rate limits and forgotten within minutes, and an
             address entered for the digest is held in memory for a day, to limit confirmation mails. The
             application logs record requests without IP addresses or search terms; the mail server logs record
-            recipient addresses of delivered mail. All logs are rotated (at most 30 MB per service). The
+            recipient addresses of delivered mail. All logs are rotated (at most 30 MB per service). For the
+            statistics page, the server counts how long each kind of page takes to load, per minute, without
+            any user, IP address or search term, and keeps those counts for a week. The
             reverse proxy in front of the site may log IP addresses for a short time as part of its
             standard operation.</li>
         <li><b>Public profile</b>: while your profile is public, anyone with a link to your pages

@@ -90,3 +90,14 @@ def test_old_embedding_layout_is_compacted(corpus):
     assert 'WITHOUT ROWID' not in con.execute("SELECT sql FROM sqlite_master WHERE name='embeddings'").fetchone()[0]
     assert con.execute('PRAGMA page_size').fetchone()[0] == 8192
     assert con.execute('PRAGMA journal_mode').fetchone()[0] == 'wal'
+
+
+def test_search_wants_every_word_then_any(corpus, monkeypatch):
+    a, b, c = sorted(corpus)[:3]
+    with db.get_papers_db() as pdb:
+        for pid, title, v in ((a, 'zebra quokka', 2), (b, 'zebra alone', 2), (c, 'quokka alone', 2)):
+            pdb.upsert([dict(corpus[pid], title=title, _version=v, _time=corpus[pid]['_time'] + 10)])
+        pids, scores = pdb.search('the zebra of a quokka')  # stopwords would match every paper
+        assert pids[0] == a and set(pids) == {a, b, c} and scores == sorted(scores, reverse=True)
+        monkeypatch.setattr(db, 'SEARCH_MIN_ALL', 1)  # enough papers with both words: only those
+        assert pdb.search('zebra quokka')[0] == [a]

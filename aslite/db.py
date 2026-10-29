@@ -126,6 +126,9 @@ CREATE TRIGGER IF NOT EXISTS papers_au AFTER UPDATE OF title, authors, summary O
 END;
 """
 _COLS = 'id, version, time, time_str, published, title, summary, authors, categories, comment, journal_ref, venue'
+# fewer papers that have every word of a query: also show those with any of them
+SEARCH_MIN_ALL = 50
+
 # bm25 weights per column: a word in the title counts for more than one in the abstract
 SEARCH_WEIGHTS = (20.0, 10.0, 1.0)
 
@@ -281,19 +284,35 @@ class PapersDB:
 
     def search(self, q, limit=2000):
         """
-        best matching (pids, scores) for a free-text query. any word may match, words of 3+
-        letters also as prefixes, so 'diffus' finds diffusion
+        best matching (pids, scores) for a free-text query: papers with every word first, then,
+        if those are few, papers with any of them. words of 3+ letters also match as prefixes,
+        so 'diffus' finds diffusion. stopwords are left out (else 'a survey of ...' matches every
+        paper); ranking costs time per matching paper, ~0.5 s per 300k
         """
+        from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS  # only here: a heavy import
+
         words = re.findall(r'\w+', q.lower())
+        words = [w for w in words if w not in ENGLISH_STOP_WORDS] or words
         if not words:
             return [], []
-        match = ' OR '.join(f'"{w}"*' if len(w) >= 3 else f'"{w}"' for w in words)
+        terms = [f'"{w}"*' if len(w) >= 3 else f'"{w}"' for w in words]
         bm25 = 'bm25(papers_fts, %s)' % ', '.join(str(w) for w in SEARCH_WEIGHTS)
-        rows = self.con.execute(
-            f"SELECT p.id, -{bm25} FROM papers_fts JOIN papers p ON p.n = papers_fts.rowid "
-            f"WHERE papers_fts MATCH ? ORDER BY {bm25} LIMIT ?",
-            (match, limit),
-        ).fetchall()
+
+        def run(match, n):
+            # rank inside the index and join only the best: joining every match costs as much again
+            return self.con.execute(
+                f"SELECT p.id, s FROM (SELECT rowid AS r, -{bm25} AS s FROM papers_fts "
+                f"WHERE papers_fts MATCH ? ORDER BY {bm25} LIMIT ?) JOIN papers p ON p.n = r ORDER BY s DESC",
+                (match, n),
+            ).fetchall()
+
+        rows = run(' AND '.join(terms), limit)
+        if len(terms) > 1 and len(rows) < SEARCH_MIN_ALL:
+            seen = {r[0] for r in rows}
+            low = min((r[1] for r in rows), default=0.0)
+            rest = [r for r in run(' OR '.join(terms), limit) if r[0] not in seen]
+            # below every paper that has all the words
+            rows += [(p, min(sc, low) - 1e-6 * (i + 1)) for i, (p, sc) in enumerate(rest)][: limit - len(rows)]
         return [r[0] for r in rows], [float(r[1]) for r in rows]
 
 

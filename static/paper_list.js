@@ -6,15 +6,20 @@
 const canEdit = Boolean(user) && !readonly && !viewing;
 const userTagNames = (typeof tags !== 'undefined' ? tags : []).map(t => t.name).filter(n => n !== 'all');
 
-// calls one of the tag endpoints; resolves on "ok...", otherwise shows the server's message
+// calls one of the tag endpoints; resolves on "ok...", otherwise shows the server's message.
+// one request at a time, in click order: votes show at once (before the server answers), so two
+// quick clicks must not reach the server the other way round
+let tagQueue = Promise.resolve();
 function tagRequest(path) {
-    return fetch(path, { method: 'POST' }).then(r => r.text()).then(t => {
-        if (!t.startsWith('ok')) {
-            alert(t);
-            throw new Error(t);
-        }
-        return t;
-    });
+    const send = () => fetch(path, { method: 'POST' })
+        .catch(() => { throw new Error('Could not reach the server, so this was not saved.'); })
+        .then(r => r.text()).then(t => {
+            if (!t.startsWith('ok')) throw new Error(t);
+            return t;
+        });
+    const req = tagQueue.then(send, send).catch(e => { alert(e.message); throw e; });
+    tagQueue = req.catch(() => {});
+    return req;
 }
 
 // a tag's page: its recommendations, minus the papers already saved (those are its "Saved" tab)
@@ -120,8 +125,10 @@ const VOTES = [
 ];
 const QuickVote = ({ pid, tag, state, onChange, compact }) => {
     const enc = pid + '/' + encodeURIComponent(tag);
-    const click = v => tagRequest((state === v.key ? v.sub : v.add) + enc)
-        .then(() => onChange(state === v.key ? null : v.key)).catch(() => {});
+    const click = v => {  // shown at once, undone if the server says no
+        onChange(state === v.key ? null : v.key);
+        tagRequest((state === v.key ? v.sub : v.add) + enc).catch(() => onChange(state));
+    };
     return html`
         <div class=${compact ? 'quickvote quickvote-compact' : 'quickvote'} title=${'for your tag ' + tag}>
             ${compact ? null : html`<span class="quickvote-tag">${tag}:</span>`}
@@ -146,15 +153,21 @@ const Paper = ({ paper: p, quickTag }) => {
     const withTag = (list, tag) => (list.includes(tag) ? list : [...list, tag]);
 
     const enc = tag => p.id + '/' + encodeURIComponent(tag);
+    // shown at once, undone if the server says no
+    const change = (path, apply) => {
+        const before = [utags, ntags, stags];
+        apply();
+        tagRequest(path).catch(() => { setUtags(before[0]); setNtags(before[1]); setStags(before[2]); });
+    };
     // mirror the server: saving and "not for" one tag exclude each other
-    const save = tag => tagRequest('/add/' + enc(tag)).then(() => {
+    const save = tag => change('/add/' + enc(tag), () => {
         setUtags(u => withTag(u, tag)); setNtags(n => without(n, tag)); setPicker(null);
-    }).catch(() => {});
-    const notFor = tag => tagRequest('/addneg/' + enc(tag)).then(() => {
+    });
+    const notFor = tag => change('/addneg/' + enc(tag), () => {
         setNtags(n => withTag(n, tag)); setUtags(u => without(u, tag)); setPicker(null);
-    }).catch(() => {});
-    const unsave = tag => tagRequest('/sub/' + enc(tag)).then(() => setUtags(u => without(u, tag))).catch(() => {});
-    const undoNeg = tag => tagRequest('/subneg/' + enc(tag)).then(() => setNtags(n => without(n, tag))).catch(() => {});
+    });
+    const unsave = tag => change('/sub/' + enc(tag), () => setUtags(u => without(u, tag)));
+    const undoNeg = tag => change('/subneg/' + enc(tag), () => setNtags(n => without(n, tag)));
     const toggle = mode => setPicker(m => (m === mode ? null : mode));
     // offer the tags this paper isn't in yet; new tags typed here join the list for the next paper
     // (on a tag's own page, that tag has its 👍 / 👎 buttons: the pickers are for the others)

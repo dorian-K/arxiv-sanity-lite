@@ -1,6 +1,8 @@
 
 # Arxiv Resanity
 
+**Try it: [sanity.dorianko.ch](https://sanity.dorianko.ch)**
+
 A fork of Andrej Karpathy's [arxiv-sanity-lite](https://github.com/karpathy/arxiv-sanity-lite). It adds:
 - better recommendations from dense embeddings, tuned on real user ratings (results below);
 - downvotes ("not for this tag");

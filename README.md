@@ -124,7 +124,7 @@ Memory: the features are memory-mapped, so all workers share one copy in the pag
 
 #### Weekly digest
 
-Once a week, every user with an email address on their profile gets the best new papers for each of their tags. The ranking is the same as the tag pages, restricted to the last 7 days and leaving out papers they already rated. The email links to `/digest`, which shows the same papers with one-click 👍 ("more like this") and 👎 ("not for this tag") buttons. Votes go straight into the tag, so the next digest improves. Every email has an unsubscribe link, including the one-click kind Gmail looks for.
+Once a week, every user with an email address on their profile gets the best new papers for each of their tags. The ranking is the same as the tag pages, restricted to the last 7 days and leaving out papers they already rated. A paper shows up only once, under the tag where it ranks highest among all papers. The email links to `/digest`, which shows the same papers with one-click 👍 ("more like this") and 👎 ("not for this tag") buttons. Votes go straight into the tag, so the next digest improves. Every email has an unsubscribe link, including the one-click kind Gmail looks for.
 
 In docker, the updater sends the digest every Sunday at 08:00 German time (`DIGEST_SCHEDULE=sun 08:00 Europe/Berlin`, summer time included). It's off by default; set `DIGEST_ENABLED=1` once sending works (step 5 below). The first digest then goes out at the next Sunday slot, never on the spot. Set `PUBLIC_URL` (your site, for the links) and `MAIL_FROM` in `.env`. To try it without sending anything: `uv run python send_emails.py --dry-run 1 -u <user> --save digest.html`. Without email, users can still open `/digest` and make one on the spot.
 
@@ -258,6 +258,20 @@ uv run python eval.py run --source si --pool rated
 - With tuned C, `logreg` and `svm` are about equal. `auto` picks `logreg` because it trains on 5k papers instead of 20k.
 - The original default C for logreg (1.0) was far too strong a regularizer; the tuned values are in `DEFAULT_C`.
 - `lda` (closed-form linear discriminant analysis, no training loop) trains in about 5 ms instead of about 0.3 s on 465k papers. Tuned on these profiles (`C`, `lda_neg` 0.25, `lda_w` 0.7), it ranks a little worse than `logreg`: about .003 / .008 lower on large profiles and .016 on `auc_rand` with only 5 likes, the case new tags are in. Since models are cached and retrained in the background after each vote, training time rarely shows, so `auto` stays on `logreg`; `lda` is under "Advanced". (Its three settings were tuned on the same 60 profiles they are scored on, like `logreg`'s C, so both rows are slightly optimistic.)
+
+**Check on users the defaults were never tuned on.** Every setting above was tuned on those 60 profiles. To see whether that overfits, 120 other Scholar Inbox users (none of the 60, `prepare-si --exclude data/si_profiles.json`) were scored on the production index: the 5-year corpus of 465k papers with EmbeddingGemma, whose vocabulary and PCA played no part in tuning (`--have data/5y/papers.sqlite --features data/5y/features --pool rated`, 3-fold):
+
+| feats:model | auc_rand | auc_hard | top1pct | 5 likes only: auc_rand | auc_hard | top1pct |
+|---|---|---|---|---|---|---|
+| tfidf:svm (original) | .954 | .769 | .388 | .892 | .698 | .324 |
+| concat:svm | .957 | **.808** | .414 | .908 | .728 | .342 |
+| fusion:svm | **.959** | .797 | .408 | .913 | .725 | .347 |
+| emb:logreg | .951 | .797 | .402 | .915 | **.737** | .323 |
+| **concat:logreg (auto)** | .956 | .803 | **.417** | .920 | .735 | .345 |
+| fusion:logreg | .958 | .790 | .413 | **.923** | .730 | **.349** |
+| concat:lda | .952 | .799 | .412 | .898 | .733 | .329 |
+
+Scores are a little lower for everyone (other users, and a pool of 15k papers instead of 7k), but the conclusions hold. Embeddings beat the original tfidf:svm, by .03–.04 on `auc_hard` and up to .03 with 5 likes. concat:logreg stays among the best rows and the best on `top1pct`. lda stays a little behind logreg, most of all with few likes. Nothing that was tuned looks overfit.
 
 #### Todos
 

@@ -395,3 +395,19 @@ def test_errors_are_pages_of_the_site(client, corpus):
     client.post(f'/add/{pid}/cv')
     page = client.get('/?rank=saved&tags=cv').data.decode()
     assert 'id="deltag"' in page  # deleting a tag is on its page, not on the chips
+
+
+def test_newest_and_random_keep_to_the_time_window(client, corpus):
+    # paper i came out i hours ago (conftest)
+    for rank in ('time', 'random'):
+        ids = [p['id'] for p in client.get(f'/?rank={rank}&time_filter=1&format=json').get_json()['papers']]
+        assert ids and all(int(p.split('.')[1]) < 24 for p in ids), rank
+    ids = [p['id'] for p in client.get('/?rank=time&format=json').get_json()['papers']]
+    assert ids == sorted(ids)[:25]  # newest first
+
+
+def test_static_files_are_versioned_and_cached(client):
+    page = client.get('/about').get_data(as_text=True)
+    assert '/static/common.js?v=' in page
+    assert 'immutable' in client.get('/static/common.js?v=1').headers['Cache-Control']
+    assert 'immutable' not in client.get('/static/common.js').headers.get('Cache-Control', '')

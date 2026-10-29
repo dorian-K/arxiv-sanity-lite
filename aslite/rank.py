@@ -98,6 +98,9 @@ def _rows(features, feats, alpha, rows):
 
 def _decision(features, feats, alpha, coef, intercept):
     """scores of all papers, without materializing the concat matrix (it would be a full copy)"""
+    # in the features' own float32: a float64 coef makes numpy upcast the whole matrix first,
+    # which took 10x longer than the product itself (0.4 s on 465k papers)
+    coef = coef.astype(np.float32)
     if feats == 'tfidf':
         return features['x'] @ coef + intercept
     if feats == 'emb':
@@ -174,22 +177,23 @@ def _top_words(features, coef_tfidf):
     return [{'word': ivocab[ix], 'weight': float(coef_tfidf[ix])} for ix in list(sortix[:40]) + list(sortix[-20:])]
 
 
-def rank(features, pos_pids, neg_pids=(), feats='auto', model='auto', C=None, **kwargs):
+def score(features, pos_pids, neg_pids=(), feats='auto', model='auto', C=None, **kwargs):
     """
-    Returns (pids, scores, words): all papers sorted by score, and the tfidf words
-    with the most positive / negative weight (empty if no tfidf model was trained).
+    Returns (scores, words): the score of every paper, as an array in the order of
+    features['pids'] (None without positives), and the tfidf words with the most
+    positive / negative weight (empty if no tfidf model was trained). Cheaper than rank()
+    when only some papers are wanted: sorting 465k pids into a list takes longer than the fit
     """
     opts = dict(DEFAULTS)
     opts.update({k: v for k, v in kwargs.items() if v is not None})
     feats = resolve_feats(features, feats)
     model = resolve_model(features, model)
 
-    pids = features['pids']
-    ptoi = features.get('ptoi') or {p: i for i, p in enumerate(pids)}
+    ptoi = features.get('ptoi') or {p: i for i, p in enumerate(features['pids'])}
     pos = np.array(sorted({ptoi[p] for p in pos_pids if p in ptoi}), dtype=np.int64)
     neg = np.array(sorted({ptoi[p] for p in neg_pids if p in ptoi} - set(pos.tolist())), dtype=np.int64)
     if len(pos) == 0:
-        return [], [], []
+        return None, []
 
     # deterministic random negatives for a given set of positives, so reloading
     # the page does not reshuffle the ranking
@@ -209,9 +213,20 @@ def rank(features, pos_pids, neg_pids=(), feats='auto', model='auto', C=None, **
         s = 100 * s if model == 'svm' else s  # keep the original svm score scale
         n_vocab = features['x'].shape[1]
         words = _top_words(features, coef[:n_vocab]) if feats in ('tfidf', 'concat') else []
+    return s, words
 
+
+def rank(features, pos_pids, neg_pids=(), feats='auto', model='auto', C=None, **kwargs):
+    """
+    Returns (pids, scores, words): all papers sorted by score, and the tfidf words
+    with the most positive / negative weight (empty if no tfidf model was trained).
+    """
+    s, words = score(features, pos_pids, neg_pids, feats, model, C, **kwargs)
+    if s is None:
+        return [], [], []
+    pids = features['pids']
     sortix = np.argsort(-s)
-    return [pids[ix] for ix in sortix], [float(s[ix]) for ix in sortix], words
+    return [pids[ix] for ix in sortix], s[sortix].tolist(), words
 
 
 def holdout_ranks(features, pos_pids, neg_pids=(), folds=5, **kwargs):
@@ -226,11 +241,10 @@ def holdout_ranks(features, pos_pids, neg_pids=(), folds=5, **kwargs):
     if len(pos) < max(folds, 2):
         return {}
     order = random.Random(zlib.crc32(','.join(pos).encode())).sample(pos, len(pos))
-    n, out = len(features['pids']), {}
+    ptoi, n, out = features['ptoi'], len(features['pids']), {}
     for k in range(folds):
         test = set(order[k::folds])
-        pids, scores, _ = rank(features, [p for p in pos if p not in test], neg_pids, **kwargs)
-        ix = {p: i for i, p in enumerate(pids)}
+        s, _ = score(features, [p for p in pos if p not in test], neg_pids, **kwargs)
         for p in test:
-            out[p] = (ix[p] + 1) / n
+            out[p] = (int((s > s[ptoi[p]]).sum()) + 1) / n  # its place in the ranking, without sorting
     return out

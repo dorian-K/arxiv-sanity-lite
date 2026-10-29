@@ -7,8 +7,10 @@ matches the email, loads without ranking anything, and is where the thumbs up/do
 
 import time
 
+import numpy as np
+
 from aslite import db
-from aslite.rank import rank
+from aslite.rank import score
 
 
 PER_TAG = 3  # papers per tag, unless the user set another number for the tag (0 leaves it out)
@@ -40,14 +42,21 @@ def compute(
     now = now or time.time()
     liked = set().union(*tags.values())
     recent = {p for p, t in times.items() if now - t < days * 86400} - liked
+    pids = features['pids']
+    ptoi = features.get('ptoi') or {p: i for i, p in enumerate(pids)}
     sections = []
     for tag in sorted(tags):
         n = sizes.get(tag, per_tag)
         if not tags[tag] or not recent or n <= 0:
             continue
-        pids, scores, _ = rank(features, tags[tag], neg_tags.get(tag, set()), feats=feats, model=model)
+        s, _ = score(features, tags[tag], neg_tags.get(tag, set()), feats=feats, model=model)
+        if s is None:
+            continue
         rated = neg_tags.get(tag, set()) | seen.get(tag, set())
-        top = [[p, round(s, 4)] for p, s in zip(pids, scores, strict=True) if p in recent and p not in rated][:n]
+        # only the recent papers get sorted, not all of them
+        rows = np.array([ptoi[p] for p in recent - rated if p in ptoi], dtype=np.int64)
+        rows = rows[np.argsort(-s[rows], kind='stable')][:n]
+        top = [[pids[r], round(float(s[r]), 4)] for r in rows]
         if top:
             sections.append({'tag': tag, 'papers': top})
     return sections

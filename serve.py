@@ -14,7 +14,6 @@ import hashlib
 from urllib.parse import urlparse, quote
 import time
 import threading
-from random import shuffle
 from collections import OrderedDict
 from itertools import zip_longest
 
@@ -32,7 +31,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from aslite import db, digest, mail
 from aslite.db import get_papers_db, get_secret_key, load_features, features_exist, PAPERS_DB_FILE
 from aslite.arxiv import find_arxiv_id, fetch_papers_by_id, OLD_ARXIV_ID_RE
-from aslite.rank import rank, holdout_ranks, resolve_feats, resolve_model, has_embeddings, FEATS, MODELS, DEFAULT_C
+from aslite.rank import score, holdout_ranks, resolve_feats, resolve_model, has_embeddings, FEATS, MODELS, DEFAULT_C
 
 # -----------------------------------------------------------------------------
 # inits and globals
@@ -163,13 +162,20 @@ def get_neg_tags():
     return g._neg_tags
 
 
+def get_features():
+    """the features, the same ones for the whole request even if compute.py swaps in new ones meanwhile"""
+    if not hasattr(g, '_features'):
+        g._features = load_features()
+    return g._features
+
+
 def get_papers():
     if not hasattr(g, '_pdb'):
         g._pdb = get_papers_db()
     return g._pdb
 
 
-_times = None  # (mtime, pid -> time, pids newest first), swapped in one piece
+_times = None  # (mtime, pid -> time, pids newest first, their times as an array), swapped in one piece
 _times_lock = threading.Lock()
 
 
@@ -179,12 +185,13 @@ def _load_times():
         times = pdb.times()
     finally:
         pdb.close()
-    return times, sorted(times, key=times.get, reverse=True)
+    pids = sorted(times, key=times.get, reverse=True)
+    return times, pids, np.array([times[p] for p in pids], dtype=np.float64)
 
 
 def get_times():
     """
-    (pid -> time, pids newest first) for all papers. reading every meta takes seconds on a
+    (pid -> time, pids newest first, their times as an array) for all papers. reading every meta takes seconds on a
     big corpus, so each worker keeps them in memory until the papers database changes.
     while one thread re-reads them, the others keep answering from the old ones
     """
@@ -192,13 +199,13 @@ def get_times():
     mtime = db.db_mtime(PAPERS_DB_FILE)
     cached = _times
     if cached and cached[0] == mtime:
-        return cached[1], cached[2]
+        return cached[1:]
     if not _times_lock.acquire(blocking=cached is None):
-        return cached[1], cached[2]
+        return cached[1:]
     try:
         if not (_times and _times[0] == mtime):
             _times = (mtime, *_load_times())
-        return _times[1], _times[2]
+        return _times[1:]
     finally:
         _times_lock.release()
 
@@ -210,9 +217,9 @@ def _warm_caches():
     """
     while True:
         try:
-            if features_exist():
-                load_features()
             get_times()
+            if features_exist():
+                row_times(load_features())
         except Exception as e:  # e.g. a database mid-replace: try again next round
             print("cache warmup failed: %s" % (e,))
         time.sleep(15)
@@ -279,8 +286,23 @@ def before_request():
             g.owner, g.viewing, g.not_shared = None, True, u
 
 
+@app.url_defaults
+def static_version(endpoint, values):
+    """every url_for('static') carries the file's mtime, so browsers can keep it for good (see security_headers)"""
+    if endpoint == 'static' and 'filename' in values:
+        try:
+            values['v'] = int(os.path.getmtime(os.path.join(app.static_folder, values['filename'])))
+        except OSError:
+            pass
+
+
 @app.after_request
 def security_headers(resp):
+    # a versioned static file (or one in a versioned vendor folder) never changes under its
+    # url: no revalidation round trip per file on every page
+    if request.endpoint == 'static' and resp.status_code == 200:
+        if 'v' in request.args or (request.view_args or {}).get('filename', '').startswith('vendor/'):
+            resp.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
     resp.headers.setdefault('X-Content-Type-Options', 'nosniff')
     resp.headers.setdefault('X-Frame-Options', 'DENY')
     resp.headers.setdefault('Referrer-Policy', 'same-origin')
@@ -329,28 +351,40 @@ def render_pid(pid, d=None):
     )
 
 
-def random_rank():
-    pids = list(get_times()[1])
-    shuffle(pids)
-    scores = [0 for _ in pids]
-    return pids, scores
+def _newer_than(opt_time_filter):
+    """how many papers came out in the last opt_time_filter days (all without one); they come first in get_times()"""
+    tarr = get_times()[2]
+    if not opt_time_filter:
+        return len(tarr)
+    # the times are sorted newest first, so their negatives ascend
+    return int(np.searchsorted(-tarr, -(time.time() - int(opt_time_filter) * 86400)))
 
 
-def time_rank():
-    times, pids = get_times()
-    tnow = time.time()
-    scores = [(tnow - times[p]) / 60 / 60 / 24 for p in pids]  # time delta in days
-    return pids, scores
+def random_rank(opt_time_filter=''):
+    """random papers of the time window (enough for the pages that get looked at, not a shuffle of all)"""
+    pids = get_times()[1]
+    rows = np.random.permutation(_newer_than(opt_time_filter))[:RANK_CACHE_RESULTS]
+    return [pids[i] for i in rows], [0] * len(rows)
+
+
+def time_rank(opt_time_filter=''):
+    _, pids, tarr = get_times()
+    n = _newer_than(opt_time_filter)
+    return pids[:n], ((time.time() - tarr[:n]) / 86400).tolist()  # time delta in days
 
 
 def svm_rank(tags: str = '', pid: str = '', C=None, feats='auto', model='auto'):
-
+    """
+    (scores, words, unindexed, n_pos): the score of every paper in the order of the features'
+    rows (None if there is nothing to rank by), see aslite/rank.py score(). _model_ranking
+    turns them into the filtered ranking
+    """
     # tag can be one tag or a few comma-separated tags or 'all' for all tags we have in db
     # pid can be a specific paper id to set as positive for a kind of nearest neighbor search
     if not (tags or pid) or not features_exist():  # no features before compute.py's first run
-        return [], [], [], 0, 0
+        return None, [], 0, 0
 
-    features = load_features()
+    features = get_features()
 
     # construct the positive set, and the negative set from the user's downvotes
     pos, neg = set(), set()
@@ -368,7 +402,39 @@ def svm_rank(tags: str = '', pid: str = '', C=None, feats='auto', model='auto'):
 
     # papers added since the last compute.py run have no features yet, so they can't count
     unindexed = sum(p not in features['ptoi'] for p in pos)
-    return (*rank(features, pos, neg, feats=feats, model=model, C=C), unindexed, len(pos))
+    return (*score(features, pos, neg, feats=feats, model=model, C=C), unindexed, len(pos))
+
+
+_row_times = (None, None, None)  # (features, times, the time of each features row), see row_times
+
+
+def row_times(features):
+    """the time of every paper in the order of the features' rows (0 if unknown), for numpy filters"""
+    global _row_times
+    times = get_times()[0]
+    if _row_times[0] is not features or _row_times[1] is not times:
+        _row_times = (features, times, np.array([times.get(p, 0) for p in features['pids']], dtype=np.float64))
+    return _row_times[2]
+
+
+def _model_ranking(s, opt_time_filter, skip_have, scope=None):
+    """
+    (pids, scores, pct) of the papers that pass the filters (see _filtered), best first, from
+    the scores of svm_rank. pct is where each landed among all papers, before filters ("top
+    0.3%"). in numpy throughout: a python loop over 465k papers took longer than the model
+    """
+    features = get_features()
+    order = np.argsort(-s, kind='stable')
+    ok = np.ones(len(s), dtype=bool)
+    if opt_time_filter:
+        ok &= row_times(features) > time.time() - int(opt_time_filter) * 86400
+    if skip_have:
+        ptoi = features['ptoi']
+        ok[[ptoi[p] for p in _rated(scope) if p in ptoi]] = False
+    at = np.flatnonzero(ok[order])  # places in the full ranking that pass
+    rows = order[at]
+    pids = features['pids']
+    return [pids[r] for r in rows], s[rows].tolist(), ((at + 1) / len(s)).tolist()
 
 
 def saved_rank(tags: str = '', neg=False):
@@ -485,11 +551,11 @@ def _ranked_tags_in_turns(tag_names, opt_time_filter, opt_skip_have, C, opt_feat
     """
     lists, unindexed, n_pos = [], 0, 0
     for t in sorted(tag_names):
-        pids, scores, _, u, n = svm_rank(tags=t, C=C, feats=opt_feats, model=opt_model)
+        s, _, u, n = svm_rank(tags=t, C=C, feats=opt_feats, model=opt_model)
         unindexed, n_pos = unindexed + u, n_pos + n
-        if pids:
-            keep = _filtered(pids, opt_time_filter, opt_skip_have == 'yes', scope={t})
-            lists.append([(pids[i], scores[i], (i + 1) / len(pids), t) for i in keep])
+        if s is not None:
+            pids, scores, pct = _model_ranking(s, opt_time_filter, opt_skip_have == 'yes', scope={t})
+            lists.append([(p, sc, pc, t) for p, sc, pc in zip(pids, scores, pct, strict=True)])
     out, seen = [], set()
     for row in zip_longest(*lists):
         for item in row:
@@ -513,32 +579,47 @@ def _ranked(opt_rank, opt_q, opt_tags, opt_pid, opt_time_filter, opt_skip_have, 
         tag_names = set(get_tags()) if opt_tags == 'all' else {t for t in opt_tags.split(',') if t}
         if len(tag_names) > 1:
             return _ranked_tags_in_turns(tag_names, opt_time_filter, opt_skip_have, C, opt_feats, opt_model)
-    words, unindexed, n_pos = [], 0, 0  # words: only for model rankings
+    if opt_rank in SLOW_RANKS:
+        if opt_rank == 'tags':
+            s, words, unindexed, n_pos = svm_rank(tags=opt_tags, C=C, feats=opt_feats, model=opt_model)
+        else:
+            s, words, unindexed, n_pos = svm_rank(pid=opt_pid, C=C, feats=opt_feats, model=opt_model)
+        scope = {t for t in opt_tags.split(',') if t} if opt_rank == 'tags' and opt_tags != 'all' else None
+        pids, scores, pct = [], [], []
+        if s is not None:
+            pids, scores, pct = _model_ranking(s, opt_time_filter, opt_skip_have == 'yes', scope)
+        return {
+            'pids': pids,
+            'scores': scores,
+            'pct': pct,
+            'for_tag': None,
+            'words': words,
+            'unindexed': unindexed,
+            'n_pos': n_pos,
+        }
     if opt_rank == 'search':
         pids, scores = search_rank(q=opt_q)
-    elif opt_rank == 'tags':
-        pids, scores, words, unindexed, n_pos = svm_rank(tags=opt_tags, C=C, feats=opt_feats, model=opt_model)
-    elif opt_rank == 'pid':
-        pids, scores, words, unindexed, n_pos = svm_rank(pid=opt_pid, C=C, feats=opt_feats, model=opt_model)
     elif opt_rank in ('saved', 'down'):
         pids, scores = saved_rank(tags=opt_tags, neg=opt_rank == 'down')
     elif opt_rank == 'time':
-        pids, scores = time_rank()
+        pids, scores = time_rank(opt_time_filter)
+        opt_time_filter = ''  # done
     else:
-        pids, scores = random_rank()
+        pids, scores = random_rank(opt_time_filter)
+        opt_time_filter = ''
 
-    # where each paper landed among all papers, before filters: shown as "top 0.3%"
-    scope = {t for t in opt_tags.split(',') if t} if opt_rank == 'tags' and opt_tags != 'all' else None
-    keep = _filtered(pids, opt_time_filter, opt_skip_have == 'yes' and opt_rank not in ('saved', 'down'), scope)
-    pct = [(i + 1) / len(pids) for i in keep] if opt_rank in SLOW_RANKS else None
+    skip_have = opt_skip_have == 'yes' and opt_rank not in ('saved', 'down')
+    if opt_time_filter or skip_have:
+        keep = _filtered(pids, opt_time_filter, skip_have)
+        pids, scores = [pids[i] for i in keep], [scores[i] for i in keep]
     return {
-        'pids': [pids[i] for i in keep],
-        'scores': [float(scores[i]) for i in keep],
-        'pct': pct,
+        'pids': pids,
+        'scores': scores,
+        'pct': None,
         'for_tag': None,
-        'words': words,
-        'unindexed': unindexed,
-        'n_pos': n_pos,
+        'words': [],
+        'unindexed': 0,
+        'n_pos': 0,
     }
 
 

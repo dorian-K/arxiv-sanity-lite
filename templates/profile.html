@@ -129,12 +129,6 @@
               <label for="password">Password</label>
               <input class="form-control" type="password" id="password" name="password" autocomplete="current-password">
             </div>
-            {% if allow_signup %}
-            <label class="check" title="Anyone with a link to your pages (it contains your username) can see your tags, saved papers, recommendations and digest, read-only; never your email address. You can make it private any time on your profile">
-                <input type="checkbox" name="public" value="1" checked>
-                <span>Public profile <span class="muted small">(new accounts only: others with a link can view your tags read-only; change it any time on your profile)</span></span>
-            </label>
-            {% endif %}
             <button type="submit" class="btn btn-primary">Log in / sign up</button>
             <p class="muted small">Leave the password empty to view a public profile read-only.
                 How we handle your data: <a href="/privacy">privacy policy</a>.</p>

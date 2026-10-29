@@ -647,6 +647,7 @@ def default_context():
     # whether the user's own pages can be shared by their address (sharing on, see /sharing)
     me = db.get_user(g.user) if g.user and not g.readonly and not g.viewing else None
     context['sharing'] = bool(me and me['public'])
+    context['ask_public'] = bool(me and session.get('ask_public'))
     return context
 
 
@@ -1122,6 +1123,10 @@ def sharing():
     if g.user is None:
         return redirect(url_for('profile'))
     db.set_public(g.user, request.form.get('public') == '1')
+    if session.pop('ask_public', None):  # answered the question after signing up: back where they were
+        nxt = request.form.get('next', '')
+        local = nxt.startswith('/') and not nxt.startswith('//') and '\\' not in nxt  # no open redirect
+        return redirect(nxt if local else url_for('main'))
     return redirect(url_for('profile'))
 
 
@@ -1514,9 +1519,6 @@ def login():
         if len(password) < MIN_PASSWORD:
             return profile(error=f"Choose a password of at least {MIN_PASSWORD} characters."), 400
         db.set_password(username, generate_password_hash(password))
-        # "Public profile" on the signup form, ticked unless the user unticks it (the operator's
-        # choice; see CLAUDE.md about Art. 25(2) GDPR)
-        db.set_public(username, request.form.get('public') == '1')
         print("registered user %s" % (username,))
     elif not check_password_hash(user['pw_hash'], password):
         if rate_limited('login', f'fail:{username}:{request.remote_addr}'):
@@ -1524,6 +1526,10 @@ def login():
         return profile(error="Wrong username or password."), 403
 
     _start_session(db.get_user(username))
+    if user is None:
+        # a new account starts private; the first page asks whether to make it public, with
+        # the box ticked (the operator's choice, see CLAUDE.md about Art. 25(2) GDPR)
+        session['ask_public'] = True
     return redirect(url_for('main'))
 
 

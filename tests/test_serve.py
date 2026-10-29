@@ -460,17 +460,21 @@ def test_old_papers_db_gets_the_new_columns(tmp_path, monkeypatch):
         assert pdb.search('t')[0] == ['2601.00001']
 
 
-def test_signup_makes_a_public_profile_unless_unticked(client):
+def test_signup_asks_about_a_public_profile(client):
     from aslite import db
 
-    page = client.get('/profile').get_data(as_text=True)
-    assert 'name="public" value="1" checked' in page  # ticked on the signup form
-    client.post('/login', data={'username': 'pub', 'password': 'correct horse', 'public': '1'})
+    assert 'name="public"' not in client.get('/profile').get_data(as_text=True)  # not on the login form
+    client.post('/login', data={'username': 'pub', 'password': 'correct horse'})
+    assert db.get_user('pub')['public'] == 0  # private until answered
+    page = client.get('/').get_data(as_text=True)
+    assert 'id="askpublic"' in page and 'name="public" value="1" checked' in page
+    r = client.post('/sharing', data={'public': '1', 'next': '/?rank=time'})
+    assert r.headers['Location'].endswith('/?rank=time') and db.get_user('pub')['public'] == 1
+    assert 'id="askpublic"' not in client.get('/').get_data(as_text=True)  # asked once
     client.post('/logout')
-    client.post('/login', data={'username': 'priv', 'password': 'correct horse'})  # unticked: not sent
-    assert db.get_user('pub')['public'] == 1 and db.get_user('priv')['public'] == 0
+    client.post('/login', data={'username': 'priv', 'password': 'correct horse'})
+    r = client.post('/sharing', data={'next': '//evil.example/'})  # unticked; and no open redirect
+    assert db.get_user('priv')['public'] == 0 and 'evil' not in r.headers['Location']
     client.post('/logout')
-    client.post(
-        '/login', data={'username': 'priv', 'password': 'correct horse', 'public': '1'}
-    )  # a login changes nothing
-    assert db.get_user('priv')['public'] == 0
+    client.post('/login', data={'username': 'priv', 'password': 'correct horse'})  # a login doesn't ask again
+    assert 'id="askpublic"' not in client.get('/').get_data(as_text=True)

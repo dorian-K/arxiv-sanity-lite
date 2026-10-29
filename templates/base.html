@@ -40,6 +40,28 @@ var sharing = {{ sharing | default(false) | tojson }};
     {% if user and not readonly %}To vote or change something, copy a tag to your own account from its page.
     <a href="/?u={{ user }}">Back to your own tags</a>{% else %}<a href="/profile">Log in</a> to copy a tag to your own account.{% endif %}</div>
 {% endif %}
+{% if ask_public %}
+<!-- right after signing up: public profile or not (the account stays private until this is answered) -->
+<dialog id="askpublic" aria-labelledby="askpublic-title">
+    <form action="/sharing" method="post">
+        <input type="hidden" name="next" value="{{ request.full_path }}">
+        <h2 id="askpublic-title">Welcome, {{ user }}!</h2>
+        <label class="check" title="Anyone with a link to your pages (it contains your username) can see your tags, saved papers, recommendations and digest, read-only; never your email address">
+            <input type="checkbox" name="public" value="1" checked>
+            <span><b>Public profile</b><br><span class="muted small">Others with a link can view your tags and saved
+                papers read-only and copy a tag to their account. Never your email. You can change this any time on your profile.</span></span>
+        </label>
+        <button type="submit" class="btn btn-primary">Continue</button>
+    </form>
+</dialog>
+<script>
+    (function () {
+        var d = document.getElementById('askpublic');
+        d.showModal();
+        d.addEventListener('cancel', function (e) { e.preventDefault(); });  // Esc: it has to be answered
+    })();
+</script>
+{% endif %}
 {% block content %}
 {% endblock %}
 </main>

@@ -491,30 +491,29 @@ details.danger form { margin-top: 10px; }
 /* ---------------------------------------------------------------------------
    waiting: results computed in the background, and the next page on its way */
 
-.loading {
-    display: flex;
-    align-items: flex-start;
-    gap: 14px;
-    max-width: 560px;
-    margin: 32px auto;
-    padding: 18px 20px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    box-shadow: var(--shadow);
+/* the blanked list while results load (Skeleton in paper_list.js): grey bars where the text
+   will be, with a light sweeping across them */
+.skel-caption { margin: 4px 0 10px; font-size: 14px; color: var(--muted); }
+.skel { pointer-events: none; }
+.skel .rel_head { align-items: center; }
+.sk {
+    display: block;
+    height: 12px;
+    margin: 8px 0;
+    border-radius: 6px;
+    background: linear-gradient(90deg, var(--surface-2) 0%, var(--border) 50%, var(--surface-2) 100%);
+    background-size: 200% 100%;
+    animation: shimmer 1.4s ease-in-out infinite;
 }
-.loading .muted { margin-top: 4px; font-size: 14px; }
-.spinner {
-    flex: none;
-    width: 22px;
-    height: 22px;
-    margin-top: 1px;
-    border: 3px solid var(--border);
-    border-top-color: var(--accent);
-    border-radius: 50%;
-    animation: spin .8s linear infinite;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
+.sk-title { flex: 1; height: 18px; margin: 4px 0; }
+.sk-score { flex: none; width: 52px; height: 18px; margin: 0 10px 0 0; border-radius: 9px; }
+.sk-small { height: 10px; }
+.sk-pills { display: flex; gap: 8px; margin: 12px 0; }
+.sk-pill { width: 110px; height: 26px; margin: 0; border-radius: 13px; }
+.rel_compact.skel { display: flex; align-items: center; }
+.rel_compact .sk-score { width: 40px; height: 14px; }
+.rel_compact .sk-line { margin: 4px 0; }
+@keyframes shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
 
 .notice {
     margin-bottom: 12px;
@@ -552,7 +551,7 @@ details.danger form { margin-top: 10px; }
     box-shadow: 0 2px 8px rgba(0, 0, 0, .15);
 }
 @media (prefers-reduced-motion: reduce) {
-    .spinner, .busy-bar { animation-duration: 3s; }
+    .sk, .busy-bar { animation-duration: 3s; }
 }
 
 /* ---------------------------------------------------------------------------

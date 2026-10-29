@@ -236,7 +236,7 @@ const Paper = ({ paper: p, quickTag }) => {
 const EMPTY = {
     saved: 'No papers saved here yet. Hit "+ Save" on a paper, or paste links on the add page.',
     down: 'Nothing marked as not for this tag.',
-    tags: 'Nothing new to recommend here. Try a longer time window under "Ranking options", or save a few more papers.',
+    tags: 'Nothing new to recommend here. Try a longer time window, or save a few more papers.',
     search: 'No papers match this search.',
 };
 
@@ -258,7 +258,30 @@ const waitingFor = () => (gvars.rank === 'pid' ? 'Finding similar papers…'
     : gvars.tags === 'all' ? 'Finding the best new papers for you…'
     : 'Ranking papers for "' + gvars.tags + '"…');
 
-// the paper list. slow rankings arrive after the page: until then, a placeholder
+// what the list will look like, blanked, while the results are on their way: cards or lines
+// in the current view, so nothing jumps when they arrive. widths vary like real titles do
+const SKELETON_WIDTHS = [92, 74, 86, 65, 80, 70, 88, 60, 78, 84, 68, 90];
+const Skeleton = () => {
+    const compact = useView() === 'compact';
+    const w = i => ({ width: SKELETON_WIDTHS[i % SKELETON_WIDTHS.length] + '%' });
+    const rows = Array.from({ length: compact ? 12 : 5 }, (_, i) => i);
+    return html`<div class="rel_papers skeleton" role="status" aria-busy="true" aria-live="polite">
+        <div class="skel-caption">${waitingFor()}</div>
+        ${rows.map(i => compact ? html`
+        <div key=${i} class="rel_paper rel_compact skel" aria-hidden="true">
+            <span class="sk sk-score"></span><span class="sk sk-line" style=${w(i)}></span>
+        </div>` : html`
+        <div key=${i} class="rel_paper skel" aria-hidden="true">
+            <div class="rel_head"><span class="sk sk-score"></span><span class="sk sk-title" style=${w(i)}></span></div>
+            <span class="sk sk-line" style=${{ width: '45%' }}></span>
+            <span class="sk sk-line sk-small" style=${{ width: '25%' }}></span>
+            <div class="sk-pills"><span class="sk sk-pill"></span><span class="sk sk-pill"></span></div>
+            <span class="sk sk-line"></span><span class="sk sk-line"></span><span class="sk sk-line" style=${w(i + 3)}></span>
+        </div>`)}
+    </div>`;
+};
+
+// the paper list. slow rankings arrive after the page: until then, a blanked copy of it (Skeleton)
 const Results = () => {
     const [data, setData] = useState(gvars.pending ? null : { papers, notice: gvars.notice });
     const [error, setError] = useState(null);
@@ -279,14 +302,7 @@ const Results = () => {
         return html`<div class="empty"><span class="form-error">${error}</span>
             ${' '}<a href="" onClick=${() => window.location.reload()}>Try again</a></div>`;
     }
-    if (!data) {
-        return html`<div class="loading" role="status">
-            <span class="spinner" aria-hidden="true"></span>
-            <div><b>${waitingFor()}</b>
-            <div class="muted">A model is trained on your saved papers and scores every paper in the database.
-                This takes a few seconds; going back or to the next page is instant afterwards.</div></div>
-        </div>`;
-    }
+    if (!data) return html`<${Skeleton} />`;
     return html`
         ${data.notice ? html`<div class="notice">${data.notice}</div>` : null}
         <${PaperList} papers=${data.papers} />`;

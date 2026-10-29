@@ -5,10 +5,9 @@ abstracts and saves them to disk.
 
 import os
 import argparse
-from random import shuffle
+import random
 
 import numpy as np
-from sklearn.decomposition import PCA
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 from aslite.db import get_papers_db, save_features
@@ -24,8 +23,9 @@ if __name__ == '__main__':
     parser.add_argument(
         '--max_docs',
         type=int,
-        default=-1,
-        help='maximum number of documents to use when training tfidf, or -1 to disable',
+        default=100000,
+        help='learn the vocabulary and idf from a random sample of this many papers (-1: all). '
+        'counting every word pair of all 657k papers takes 5 GB of RAM, a 100k sample a fraction',
     )
     parser.add_argument(
         '--embed_model',
@@ -79,7 +79,7 @@ if __name__ == '__main__':
         if training and args.max_docs > 0 and args.max_docs < len(pids):
             # crop to a random subset of papers
             keys = list(pids)
-            shuffle(keys)
+            random.Random(0).shuffle(keys)  # the same sample every run, so the vocabulary is stable
             keep = set(keys[: args.max_docs])
         else:
             keep = None
@@ -115,21 +115,12 @@ if __name__ == '__main__':
 
     if args.embed_model:
         print("computing embeddings...")
-        x_emb, have = embed_papers(pids, pdb, args.embed_model, batch_size=args.embed_batch, budget=args.embed_budget)
+        x_emb, have = embed_papers(
+            pids, pdb, args.embed_model, batch_size=args.embed_batch, budget=args.embed_budget, dims=args.emb_dims
+        )
         if x_emb is None or have.sum() <= args.emb_dims:
             print("too few papers have embeddings yet, tfidf only for now")
         else:
-            if 0 < args.emb_dims < x_emb.shape[1]:
-                # Scholar Inbox found 256 PCA dims lose ~nothing for recommendation,
-                # while making the per-request classifier faster and the file smaller.
-                # fitted on the papers that have an embedding; the others stay zero
-                pca = PCA(n_components=args.emb_dims, random_state=0)
-                pca.fit(x_emb[have])
-                reduced = np.zeros((len(pids), args.emb_dims), dtype=np.float32)
-                reduced[have] = pca.transform(x_emb[have])
-                reduced[have] /= np.linalg.norm(reduced[have], axis=1, keepdims=True) + 1e-12
-                x_emb = reduced
-                print(f"PCA to {args.emb_dims} dims keeps {pca.explained_variance_ratio_.sum():.1%} of variance")
             features['x_emb'] = x_emb
             features['emb_model'] = args.embed_model
             if not have.all():

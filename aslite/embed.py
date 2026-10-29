@@ -121,10 +121,15 @@ def get_backend(model):
     raise ValueError(f"model must look like 'st:<hf model>' or 'api:<model>', got {model!r}")
 
 
-def embed_papers(pids, pdb, model, batch_size=64, log_every=1000, budget=None):
+def unit(x):
+    return x / (np.linalg.norm(x, axis=1, keepdims=True) + 1e-12)  # zero rows stay zero
+
+
+def embed_papers(pids, pdb, model, batch_size=64, log_every=1000, budget=None, dims=0, pca_sample=50000):
     """
     Returns (x, have): an (len(pids), d) float32 matrix of unit-norm embeddings aligned with
-    pids, and which rows have one. Only papers missing from the cache for this model are
+    pids, and which rows have one. With dims, they are reduced to that many dimensions with a
+    PCA fitted on a random sample of pca_sample papers, chunk by chunk as they are read. Only papers missing from the cache for this model are
     embedded, for at most `budget` seconds (None: all of them, 0: none, use the cache as it
     is; embed_daemon.py fills it slowly). Rows without an embedding are zero; x is None if no
     paper has one yet
@@ -151,7 +156,22 @@ def embed_papers(pids, pdb, model, batch_size=64, log_every=1000, budget=None):
                 if done % log_every < batch_size or done == len(missing):
                     rate = done / max(time.time() - t0, 1e-6)
                     print(f"  embedded {done}/{len(missing)} ({rate:.1f} papers/s)")
-        x, have = cache.matrix(pids, partial=True)
-    if x is not None:
-        x /= np.linalg.norm(x, axis=1, keepdims=True) + 1e-12  # zero rows stay zero
+        transform = unit
+        if dims:
+            # Scholar Inbox found 256 PCA dims lose ~nothing for recommendation, while making
+            # the per-request classifier faster and the file smaller
+            cached = sorted(set(pids) & cache.pids())
+            rng = np.random.default_rng(0)
+            sample = [cached[i] for i in rng.permutation(len(cached))[:pca_sample]]
+            xs = unit(cache.vectors(sample)) if sample else None
+            if xs is not None and len(xs) > dims and dims < xs.shape[1]:
+                from sklearn.decomposition import PCA
+
+                pca = PCA(n_components=dims, random_state=0).fit(xs)
+                print(f"PCA to {dims} dims keeps {pca.explained_variance_ratio_.sum():.1%} of variance")
+
+                def transform(v):
+                    return unit(pca.transform(unit(v)).astype(np.float32))
+
+        x, have = cache.matrix(pids, partial=True, transform=transform)
     return x, have

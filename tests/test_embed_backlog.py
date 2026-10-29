@@ -87,6 +87,28 @@ def test_compute_uses_only_cached_embeddings_with_budget_0(corpus):
     assert not np.asarray(f['x_emb'])[~mask].any()
 
 
+def test_pca_is_applied_while_streaming(corpus, monkeypatch):
+    """the full-size matrix is never built: chunks are reduced as they come, same result"""
+    from sklearn.decomposition import PCA
+
+    from aslite import embed
+
+    pids = sorted(corpus)
+    x = np.random.default_rng(1).normal(size=(50, 12)).astype(np.float32)
+    with db.EmbeddingCache('api:fake') as c:
+        c.put(pids[:50], x)
+        x = c.vectors(pids[:50])  # as stored (float16)
+        assert len(c.vectors(['nope', pids[3]])) == 1
+    real = db.EmbeddingCache.matrix
+    monkeypatch.setattr(db.EmbeddingCache, 'matrix', lambda self, *a, **k: real(self, *a, **k, chunk=7))
+    got, have = embed.embed_papers(pids, None, 'api:fake', budget=0, dims=4)
+    assert got.shape == (len(pids), 4) and have.sum() == 50 and not got[~have].any()
+    pca = PCA(n_components=4, random_state=0).fit(embed.unit(x))  # the sample is all 50 here
+    expect = embed.unit(pca.transform(embed.unit(x)))
+    rows = [pids.index(p) for p in pids[:50]]
+    assert np.allclose(np.abs(got[rows]), np.abs(expect), atol=1e-4)
+
+
 def test_backlog_order_tagged_then_new_then_old(corpus):
     import embed_daemon
 

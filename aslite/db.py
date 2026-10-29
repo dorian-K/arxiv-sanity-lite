@@ -718,22 +718,48 @@ class EmbeddingCache:
                 ((self.model, p, np.asarray(v, dtype=np.float16).tobytes()) for p, v in zip(pids, x, strict=True)),
             )
 
-    def matrix(self, pids, partial=False):
+    def vectors(self, pids):
+        """float32 rows of pids that are cached, in the order given (missing ones are skipped)"""
+        out = []
+        for i in range(0, len(pids), 500):
+            chunk = pids[i : i + 500]
+            q = f"SELECT pid, vec FROM embeddings WHERE model = ? AND pid IN ({','.join('?' * len(chunk))})"
+            got = dict(self.con.execute(q, (self.model, *chunk)))
+            out += [np.frombuffer(got[p], dtype=np.float16) for p in chunk if p in got]
+        return np.array(out, dtype=np.float32)
+
+    def matrix(self, pids, partial=False, transform=None, chunk=20000):
         """
         float32 matrix with the rows of pids, which must all be cached; with partial, also
-        returns which are (the others stay zero), and (None, mask) if none is
+        returns which are (the others stay zero), and (None, mask) if none is. transform maps
+        a block of rows to their final form (e.g. PCA) while they stream in, so the full-size
+        matrix never exists (at 657k papers x 768 dims that alone is 2 GB)
         """
+        transform = transform or (lambda v: v)
         ix = {p: i for i, p in enumerate(pids)}
         x, have = None, np.zeros(len(pids), dtype=bool)
+        rows, buf = [], []
+
+        def flush():
+            nonlocal x
+            out = transform(np.array(buf, dtype=np.float32))
+            if x is None:
+                x = np.zeros((len(pids), out.shape[1]), dtype=np.float32)
+            x[rows] = out
+            rows.clear()
+            buf.clear()
+
         for pid, vec in self.con.execute('SELECT pid, vec FROM embeddings WHERE model = ?', (self.model,)):
             i = ix.get(pid)
             if i is None:
                 continue
-            v = np.frombuffer(vec, dtype=np.float16)
-            if x is None:
-                x = np.zeros((len(pids), len(v)), dtype=np.float32)
-            x[i] = v
+            rows.append(i)
+            buf.append(np.frombuffer(vec, dtype=np.float16))
             have[i] = True
+            if len(buf) >= chunk:
+                flush()
+        if buf:
+            flush()
         if partial:
             return x, have
         if not have.all():

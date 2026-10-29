@@ -244,3 +244,29 @@ def test_references_matched_later(corpus):
         rdb.put_titles([(refs.title_hash('Some physics paper title'), '1901.00002')])  # --titles ran since
         assert enrich_daemon.rematch(rdb, m) == 1
         assert rdb.cited_by(['2601.99999'])[0] == {'1901.00002': {'2601.99999'}}
+
+
+def test_a_refs_db_from_before_the_thumbnails_is_migrated(tmp_path):
+    """the server ran refs_daemon.py's schema (statuses ok/missing, no refs_from/license)"""
+    import sqlite3
+
+    path = str(tmp_path / 'refs.sqlite')
+    con = sqlite3.connect(path)
+    con.executescript(
+        "CREATE TABLE refs (citing TEXT NOT NULL, pos INTEGER NOT NULL, cited TEXT, title TEXT NOT NULL, doi TEXT,"
+        " raw TEXT NOT NULL, PRIMARY KEY (citing, pos));"
+        "CREATE TABLE fetched (pid TEXT PRIMARY KEY, status TEXT NOT NULL, t REAL NOT NULL, tries INTEGER NOT NULL,"
+        " n INTEGER NOT NULL);"
+        "CREATE TABLE titles (h INTEGER PRIMARY KEY, id TEXT NOT NULL);"
+        "INSERT INTO refs VALUES ('2601.00001', 0, '1706.03762', 'Attention is all you need', NULL, 'x');"
+        "INSERT INTO fetched VALUES ('2601.00001', 'ok', 1, 1, 1), ('2601.00002', 'missing', 1, 1, 0);"
+        "INSERT INTO titles VALUES (42, '1706.03762');"
+    )
+    con.commit()
+    con.close()
+    with db.get_refs_db(path) as rdb:
+        assert rdb.fetched() == {}  # processed again: now with thumbnails and the PDF fallback
+        assert rdb.lookup_title(42) == '1706.03762' and rdb.cited_by(['2601.00001'])[0]  # kept
+        rdb.put_refs('2601.00001', 'ok', [(0, '1706.03762', 't', None, 'r')], 'html', True, False, 'by/4.0')
+        rdb.put_licenses([('2601.00001', 'by/4.0')])
+        assert rdb.thumb_license('2601.00001') == 'by/4.0'

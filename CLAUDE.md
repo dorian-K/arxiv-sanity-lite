@@ -19,6 +19,7 @@ The project is **Arxiv Resanity**, a fork of karpathy's arxiv-sanity-lite. Say "
 - Links that leave the site open in a new tab (common.js sets target=_blank on click for every off-site link, so new links are covered automatically).
 - Public profiles (`users.public`, shown as "Public profile", not "sharing"): right after signup, a dialog (base.html, `session['ask_public']`) asks about it with the box ticked; the account stays private until it is answered. That was the user's decision after being told it likely conflicts with Art. 25(2) GDPR (privacy by default) and Planet49 (pre-ticked boxes aren't consent), and asked for a dialog instead of a checkbox on the login form; don't silently flip it back, but don't extend the pattern to other data either.
 - Work and commit directly on `master`; don't create feature branches, even if a pasted prompt asks for one.
+- Every change to a table that may already exist needs a migration for existing databases (`ALTER TABLE ... ADD COLUMN` under `BEGIN IMMEDIATE`, see `PapersDB._add_columns`, `RefsDB._migrate`) and a test that opens an old one, even if you think the earlier version was never deployed: the user may have pulled any commit (the server ran `refs.sqlite` from an intermediate commit, and every page broke on a missing column). `CREATE TABLE IF NOT EXISTS` never changes an existing table. Lookups that only decorate a page (thumbnails, counts on tabs) catch their errors, so a broken side database can't take the page down.
 
 ## Commands
 

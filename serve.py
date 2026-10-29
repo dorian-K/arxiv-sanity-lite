@@ -398,7 +398,11 @@ def _close_refs_db(exc):
 def thumb_info(pid):
     """(url, license label, license url) of the thumbnail a card shows, or ('', '', '')"""
     _, kind = db.thumb_file(pid, THUMB_KINDS)
-    code = _thumb_license(pid) if kind else ''
+    try:
+        code = _thumb_license(pid) if kind else ''
+    except Exception as e:  # refs.sqlite trouble: no thumbnail, but never a broken page
+        print("thumbnail license of %s: %s" % (pid, e))
+        code = ''
     if not code:
         return '', '', ''
     return url_for('thumb', kind=kind, pid=pid), thumbs.license_label(code), thumbs.license_url(code)
@@ -1148,7 +1152,11 @@ def main():
     context['tag_view'] = bool(tag_names) and all(t == 'all' or t in tags for t in tag_names)
     context['n_saved'] = len(saved_rank(opt_tags)[0]) if context['tag_view'] else 0
     context['n_down'] = len(saved_rank(opt_tags, neg=True)[0]) if context['tag_view'] else 0
-    context['n_cited'] = len(cited_rank(opt_tags)[0]) if context['tag_view'] else 0
+    try:
+        context['n_cited'] = len(cited_rank(opt_tags)[0]) if context['tag_view'] else 0
+    except Exception as e:  # refs.sqlite trouble must never break the page itself
+        print("counting cited papers failed: %s" % (e,))
+        context['n_cited'] = 0
     # what the other lists are, as their page's title
     days = f" of the last {opt_time_filter} days" if opt_time_filter else ''
     similar_to = get_papers().get_many([opt_pid]).get(opt_pid) if opt_rank == 'pid' else None

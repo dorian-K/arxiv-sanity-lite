@@ -1201,9 +1201,39 @@ CREATE TABLE IF NOT EXISTS titles (
 """
 
 
+_refs_migrated = set()
+
+
 class RefsDB:
     def __init__(self, path=None):
-        self.con = connect(path or REFS_DB_FILE, REFS_SCHEMA)
+        path = path or REFS_DB_FILE
+        self.con = connect(path, REFS_SCHEMA)
+        key = os.path.abspath(path)
+        if key not in _refs_migrated:
+            self._migrate()
+            _refs_migrated.add(key)
+
+    def _migrate(self):
+        """
+        refs.sqlite from before the thumbnails (refs_daemon.py, statuses ok/missing, no
+        refs_from/figure/page/license): its fetched table is replaced, so those papers are
+        processed again and get thumbnails and the PDF fallback. their references and the
+        titles table stay. under the write lock, so the updater and web workers can't both do it
+        """
+        if 'license' in {r[1] for r in self.con.execute('PRAGMA table_info(fetched)')}:
+            return
+        self.con.execute('BEGIN IMMEDIATE')
+        try:
+            if 'license' not in {r[1] for r in self.con.execute('PRAGMA table_info(fetched)')}:
+                self.con.execute('DROP TABLE fetched')
+                for stmt in REFS_SCHEMA.split(';'):  # creates it anew (the others exist)
+                    if stmt.strip():
+                        self.con.execute(stmt)
+            self.con.execute('COMMIT')
+        except BaseException:
+            if self.con.in_transaction:
+                self.con.execute('ROLLBACK')
+            raise
 
     def __enter__(self):
         return self

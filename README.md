@@ -1,9 +1,16 @@
 
 # Arxiv Resanity
 
-Arxiv Resanity keeps up with arXiv for you. Save papers you like into tags, one per topic you follow, and it ranks every new paper against each tag with a small model trained on the spot (tfidf plus dense embeddings). 👎 on a paper teaches a tag what it isn't about. Once a week it can email a digest of the best new papers per tag, rated with one click.
+A fork of Andrej Karpathy's [arxiv-sanity-lite](https://github.com/karpathy/arxiv-sanity-lite). It adds:
+- better recommendations from dense embeddings, tuned on real user ratings (results below);
+- downvotes ("not for this tag");
+- a weekly email digest with one-click ratings;
+- years of papers from a bulk import, plus adding any paper by link;
+- a "Cited" tab with the papers your saved ones cite, and figure thumbnails;
+- password accounts with read-only sharing;
+- a docker deployment that respects EU privacy law.
 
-A fork of Andrej Karpathy's [arxiv-sanity-lite](https://github.com/karpathy/arxiv-sanity-lite) that adds embeddings (tuned on real user ratings, results below), downvotes, years of papers from a bulk import, password accounts with read-only sharing, the weekly digest, a "Cited" tab with the papers your saved ones cite, and a docker deployment.
+Arxiv Resanity keeps up with arXiv for you. Save papers you like into tags, one per topic you follow, and it ranks every new paper against each tag with a small model trained on the spot (tfidf plus dense embeddings). 👎 on a paper teaches a tag what it isn't about. Once a week it can email a digest of the best new papers per tag, rated with one click.
 
 ![Screenshot](screenshot.jpg)
 

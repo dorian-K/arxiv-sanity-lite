@@ -28,7 +28,7 @@ const tagUrl = (tag, days = FOR_YOU_DAYS) => '/?rank=tags&tags=' + encodeURIComp
     + (days ? '&time_filter=' + days : '') + '&skip_have=yes';
 
 // a chip in the tag row switches the tag and keeps what is shown: the same tab, the same time window
-const chipUrl = tag => (['saved', 'down'].includes(gvars.rank)
+const chipUrl = tag => (['saved', 'down', 'cited'].includes(gvars.rank)
     ? '/?rank=' + gvars.rank + '&tags=' + encodeURIComponent(tag)
     : tagUrl(tag, gvars.rank === 'tags' ? gvars.time_filter : FOR_YOU_DAYS)) + (gvars.published ? '&published=yes' : '');
 
@@ -176,7 +176,9 @@ const Paper = ({ paper: p, quickTag }) => {
     const fit = ho.tag && utags.includes(ho.tag) ? ho.ranks[p.id] : undefined;
     const long = p.summary.length > 360;
     const showScore = SHOW_SCORE.includes(gvars.rank);
-    const score = html`${p.pct !== undefined
+    const score = gvars.rank === 'cited'
+        ? html`<span class="rel_score" title=${'cited by ' + p.weight + ' of the papers you saved here'}>cited ×${p.weight}</span>`
+        : html`${p.pct !== undefined
         ? html`<span class="rel_score" title=${'rank among all papers (model score ' + p.weight.toFixed(2) + ')'}>${fmtPct(p.pct)}</span>`
         : showScore ? html`<span class="rel_score" title="search score">${p.weight.toFixed(2)}</span>` : null}${p.for_tag ? html`
         <a class="rel_for" href=${tagUrl(p.for_tag)} title=${'recommended for your tag ' + p.for_tag}>${p.for_tag}</a>` : null}`;
@@ -339,7 +341,7 @@ document.addEventListener('click', e => {
 });
 
 const Tag = ({ tag: t }) => {
-    const active = ['tags', 'saved', 'down'].includes(gvars.rank) && gvars.tags === t.name;
+    const active = ['tags', 'saved', 'down', 'cited'].includes(gvars.rank) && gvars.tags === t.name;
     return html`
         <span class=${'chip chip-tag chip-count' + (t.name === 'all' ? ' rel_utag_all' : '') + (active ? ' active' : '')}>
             <a href=${chipUrl(t.name)}>${t.name === 'all' ? 'All tags' : t.name}${t.n !== undefined ? html` <small>${t.n}</small>` : null}</a>

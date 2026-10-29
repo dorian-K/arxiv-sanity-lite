@@ -150,6 +150,12 @@ Calibration on the Scholar Inbox ratings:
 
 Splitting such a tag is worth it. In a shared tag, 21% of the side topic's held-out papers made the top 1%; with a model of its own, 34% did. That's why the check suggests a separate tag once three or more papers don't fit.
 
+#### Cited by your saved papers
+
+Each tag has a **Cited** tab: the papers on this site that the papers you saved there cite, the ones most of them cite first. A tag's foundations show up even if they are years old and you never searched for them. The references come from arXiv's HTML version of each paper, where every reference is its own entry and most label their title. On 20 recommended papers that found 962 references, 80% of them to an arXiv paper and 56% to one on this site (from the PDFs: 808 and 38%). No other service is asked, so journal papers that aren't on arXiv stay unknown.
+
+`refs_daemon.py` fetches them in the updater when `REFS_ENABLED=1` (off by default): saved papers first, then the papers in everyone's latest digest, one page every `REFS_PAUSE` seconds (default 20; arxiv.org's robots.txt asks for at least 15). Each paper is fetched once, a paper without an HTML version is remembered, and a failure is retried after a day. References are matched by arXiv id, else by title, best with the titles of every arXiv paper: `docker compose exec arxiv_resanity_updater python import_snapshot.py --titles` stores them from the snapshot (3.2M titles, 91 MB in `refs.sqlite`, 2 minutes, nothing asked from arXiv). Once a day, references that matched nothing are matched again. /stats shows the progress.
+
 #### Add papers by link
 
 Logged-in users get an **add** page (`/import`). Paste arXiv links or ids there, one per line and up to 100 at a time. It understands abs/pdf links, Hugging Face and alphaXiv paper pages, DOIs and bare ids, and can tag the papers in the same step. Papers of any year or category work. The ones that aren't in the database yet are fetched from the arXiv API in one call per 100 ids:

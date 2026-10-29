@@ -682,6 +682,37 @@ def saved_rank(tags: str = '', neg=False):
     return pids, [(tnow - times.get(p, tnow)) / 86400 for p in pids]
 
 
+def cited_rank(tags: str = ''):
+    """
+    (pids, scores, info): the papers on this site that the papers saved to these tags cite, cited
+    by the most of them first (score = how many), newest first among equals; minus the papers
+    already saved or marked not for these tags. info: how many saved papers have known
+    references (refs_daemon.py fetches them), and how many cited papers aren't on this site
+    """
+    tags_db, neg_db = get_tags(), get_neg_tags()
+    names = set(tags_db) | set(neg_db) if tags == 'all' else set(tags.split(','))
+    saved = set().union(*(pids for t, pids in tags_db.items() if t in names))
+    down = set().union(*(pids for t, pids in neg_db.items() if t in names))
+    with db.get_refs_db() as rdb:
+        cited, known = rdb.cited_by(saved)
+    times = get_times()[0]
+    here = {c: by for c, by in cited.items() if c in times and c not in saved and c not in down}
+    pids = sorted(here, key=lambda c: (-len(here[c]), -times[c]))
+    info = {'saved': len(saved), 'known': len(known), 'elsewhere': sum(1 for c in cited if c not in times)}
+    return pids, [len(here[c]) for c in pids], info
+
+
+def _cited_notice(info):
+    if not info['known']:
+        return (
+            "The references of the papers saved here aren't known yet. The server reads them from "
+            "arXiv's HTML version of each paper in the background, a few hundred papers a day (if it "
+            "has that turned on); papers without an HTML version can't be read."
+        )
+    more = f"; {info['elsewhere']} more cited papers aren't on this site" if info['elsewhere'] else ''
+    return f"From the references of {info['known']} of the {info['saved']} papers saved here{more}."
+
+
 def search_rank(q: str = ''):
     if not q:
         return [], []  # no query? no results
@@ -715,7 +746,7 @@ def default_context():
     return context
 
 
-RANKS = ('search', 'tags', 'saved', 'down', 'pid', 'time', 'random')
+RANKS = ('search', 'tags', 'saved', 'down', 'cited', 'pid', 'time', 'random')
 # training a model over every paper takes seconds on a big corpus: the page comes back at
 # once with a placeholder and fetches these results in the background (?format=json)
 SLOW_RANKS = ('tags', 'pid')
@@ -855,8 +886,11 @@ def _ranked(
             'unindexed': unindexed,
             'n_pos': n_pos,
         }
+    cited = None
     if opt_rank == 'search':
         pids, scores = search_rank(q=opt_q)
+    elif opt_rank == 'cited':
+        pids, scores, cited = cited_rank(tags=opt_tags)
     elif opt_rank in ('saved', 'down'):
         pids, scores = saved_rank(tags=opt_tags, neg=opt_rank == 'down')
     elif opt_rank == 'time':
@@ -866,7 +900,7 @@ def _ranked(
         pids, scores = random_rank(opt_time_filter)
         opt_time_filter = ''
 
-    skip_have = opt_skip_have == 'yes' and opt_rank not in ('saved', 'down')
+    skip_have = opt_skip_have == 'yes' and opt_rank not in ('saved', 'down', 'cited')
     if opt_time_filter or skip_have or opt_published:
         keep = _filtered(pids, opt_time_filter, skip_have, published=opt_published)
         pids, scores = [pids[i] for i in keep], [scores[i] for i in keep]
@@ -878,6 +912,7 @@ def _ranked(
         'words': [],
         'unindexed': 0,
         'n_pos': 0,
+        'cited': cited,
     }
 
 
@@ -1023,6 +1058,8 @@ def main():
     # the requested page, rendered to just the information the UI needs
     papers, has_next, words = [], False, []
     notice = _notice(opt_rank, opt_pid, res, features_ok) if res is not None else ''
+    if res is not None and res.get('cited'):
+        notice = _cited_notice(res['cited'])
     if res is not None:
         start_index = (page_number - 1) * RET_NUM
         pids = res['pids'][start_index : start_index + RET_NUM]
@@ -1066,10 +1103,11 @@ def main():
         )
     )
     # the page about one tag (or 'all'): tabs for its recommendations and its saved papers
-    tag_names = [t for t in opt_tags.split(',') if t] if opt_rank in ('tags', 'saved', 'down') else []
+    tag_names = [t for t in opt_tags.split(',') if t] if opt_rank in ('tags', 'saved', 'down', 'cited') else []
     context['tag_view'] = bool(tag_names) and all(t == 'all' or t in tags for t in tag_names)
     context['n_saved'] = len(saved_rank(opt_tags)[0]) if context['tag_view'] else 0
     context['n_down'] = len(saved_rank(opt_tags, neg=True)[0]) if context['tag_view'] else 0
+    context['n_cited'] = len(cited_rank(opt_tags)[0]) if context['tag_view'] else 0
     # what the other lists are, as their page's title
     days = f" of the last {opt_time_filter} days" if opt_time_filter else ''
     similar_to = get_papers().get_many([opt_pid]).get(opt_pid) if opt_rank == 'pid' else None
@@ -1314,6 +1352,24 @@ def stats():
         )
         if embeds
         else None
+    )
+    try:
+        with db.get_refs_db() as rdb:
+            status, n_refs, n_matched = rdb.counts()
+            n_titles = rdb.n_titles()
+    except Exception as e:
+        print("reading refs failed: %s" % (e,))
+        status, n_refs, n_matched, n_titles = {}, 0, 0, 0
+    day_refs = [j for j in runs('refs') if j[0] > tnow - 86400]
+    context['refs'] = dict(
+        ok=status.get('ok', 0),
+        missing=status.get('missing', 0),
+        error=status.get('error', 0),
+        refs=n_refs,
+        matched=n_matched,
+        titles=n_titles,
+        day=sum(j[3].get('papers', 0) for j in day_refs),
+        left=runs('refs')[-1][3].get('left') if runs('refs') else None,
     )
     return render_template('stats.html', **context)
 

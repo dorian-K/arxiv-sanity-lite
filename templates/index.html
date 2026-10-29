@@ -84,6 +84,8 @@ var move_page = function(int_offset) {
                title="the papers you saved{{ where }}">Saved ({{ n_saved }})</a>
             <a href="/?rank=down&tags={{ gvars.tags | urlencode }}{{ '&published=yes' if gvars.published }}" class="{{ 'active' if gvars.rank == 'down' }}"
                title="papers you marked as not for {{ 'a tag' if all else 'this tag' }}">Not for {{ 'a tag' if all else 'this tag' }} ({{ n_down }})</a>
+            <a href="/?rank=cited&tags={{ gvars.tags | urlencode }}{{ '&published=yes' if gvars.published }}" class="{{ 'active' if gvars.rank == 'cited' }}"
+               title="papers that the papers you saved{{ where }} cite, the most cited first">Cited ({{ n_cited }})</a>
         </nav>
         {% if gvars.rank == 'tags' %}
         <label class="window" title="only papers that came out in this time">
@@ -106,6 +108,8 @@ var move_page = function(int_offset) {
         {% else %}
         Ranked by how well they match the {{ n_saved }} papers you saved here.{% if not readonly and not viewing %} 👍 / 👎 teach it what you want.{% endif %}
         {% endif %}
+        {% elif gvars.rank == 'cited' %}
+        Papers that the papers you saved{{ where }} cite, the ones most of them cite first; the ones you saved are left out.
         {% elif gvars.rank == 'down' %}
         Marked as not for {{ 'one of your tags' if all else 'this tag' }}: only that tag learns from them and leaves them out.{% if not readonly and not viewing %} × undoes one.{% endif %}
         {% else %}

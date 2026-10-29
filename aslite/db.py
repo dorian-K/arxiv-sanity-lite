@@ -46,6 +46,7 @@ FEATURES_DIR = os.path.join(DATA_DIR, 'features')
 MODELS_DB_FILE = os.path.join(DATA_DIR, 'models.sqlite')
 SEARCH_TERMS_FILE = os.path.join(DATA_DIR, 'search_terms.json')  # aslite/spell.py
 METRICS_DB_FILE = os.path.join(DATA_DIR, 'metrics.sqlite')  # timings for /stats, safe to delete
+REFS_DB_FILE = os.path.join(DATA_DIR, 'refs.sqlite')  # references of papers (aslite/refs.py)
 
 # -----------------------------------------------------------------------------
 # sqlite plumbing
@@ -1160,3 +1161,132 @@ def get_jobs(since):
         return [(t, name, sec, json.loads(i)) for t, name, sec, i in con.execute(q, (since,))]
     finally:
         con.close()
+
+
+# -----------------------------------------------------------------------------
+# refs.sqlite: the references of papers (aslite/refs.py, refs_daemon.py), and the titles of
+# every arXiv paper to match them by (import_snapshot.py --titles). no user data in it
+
+REFS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS refs (
+    citing TEXT NOT NULL,     -- the paper whose bibliography this is
+    pos INTEGER NOT NULL,     -- its place in that bibliography
+    cited TEXT,               -- the arXiv id it points to, NULL if none was found
+    title TEXT NOT NULL,      -- its title as the bibliography gives it (best guess)
+    doi TEXT,
+    raw TEXT NOT NULL,        -- the whole reference, to match it again later
+    PRIMARY KEY (citing, pos)
+);
+CREATE INDEX IF NOT EXISTS refs_cited ON refs(cited);
+CREATE TABLE IF NOT EXISTS fetched (
+    pid TEXT PRIMARY KEY,
+    status TEXT NOT NULL,     -- ok | missing (no HTML version, or no bibliography in it) | error
+    t REAL NOT NULL,          -- when it was last tried
+    tries INTEGER NOT NULL,
+    n INTEGER NOT NULL        -- references found
+);
+CREATE TABLE IF NOT EXISTS titles (
+    h INTEGER PRIMARY KEY,    -- refs.title_hash() of a normalized title
+    id TEXT NOT NULL          -- the arXiv paper with that title (the oldest, if several)
+);
+"""
+
+
+class RefsDB:
+    def __init__(self, path=None):
+        self.con = connect(path or REFS_DB_FILE, REFS_SCHEMA)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+    def close(self):
+        self.con.close()
+
+    def lookup_title(self, h):
+        row = self.con.execute('SELECT id FROM titles WHERE h = ?', (h,)).fetchone()
+        return row[0] if row else None
+
+    def put_titles(self, pairs):
+        """(title hash, arXiv id) pairs; the first id stored for a title stays"""
+        with self.con:
+            self.con.executemany('INSERT OR IGNORE INTO titles (h, id) VALUES (?, ?)', pairs)
+
+    def n_titles(self):
+        return self.con.execute('SELECT count(*) FROM titles').fetchone()[0]
+
+    def put_refs(self, citing, status, rows=()):
+        """a fetch of citing's references: rows are (pos, cited, title, doi, raw)"""
+        with self.con:
+            if status == 'ok':
+                self.con.execute('DELETE FROM refs WHERE citing = ?', (citing,))
+                self.con.executemany(
+                    'INSERT INTO refs (citing, pos, cited, title, doi, raw) VALUES (?, ?, ?, ?, ?, ?)',
+                    ((citing, *r) for r in rows),
+                )
+            self.con.execute(
+                'INSERT INTO fetched (pid, status, t, tries, n) VALUES (?, ?, ?, 1, ?) ON CONFLICT(pid) DO UPDATE '
+                'SET status = excluded.status, t = excluded.t, tries = fetched.tries + 1, n = excluded.n',
+                (citing, status, time.time(), len(rows)),
+            )
+
+    def fetched(self):
+        """{pid: (status, last try, tries)}"""
+        return {p: (s, t, n) for p, s, t, n in self.con.execute('SELECT pid, status, t, tries FROM fetched')}
+
+    def unmatched(self):
+        """[(citing, pos, title, raw)] of the references no paper was found for"""
+        return self.con.execute('SELECT citing, pos, title, raw FROM refs WHERE cited IS NULL').fetchall()
+
+    def set_cited(self, rows):
+        """(cited, citing, pos) for references matched later"""
+        with self.con:
+            self.con.executemany('UPDATE refs SET cited = ? WHERE citing = ? AND pos = ?', rows)
+
+    def cited_by(self, pids):
+        """{cited arXiv id: set of the pids citing it}, and the papers among pids whose references are known"""
+        pids = list(pids)
+        cited, known = {}, set()
+        for i in range(0, len(pids), 500):
+            chunk = pids[i : i + 500]
+            marks = ','.join('?' * len(chunk))
+            known |= {
+                r[0]
+                for r in self.con.execute(f"SELECT pid FROM fetched WHERE status = 'ok' AND pid IN ({marks})", chunk)
+            }
+            q = f'SELECT cited, citing FROM refs WHERE cited IS NOT NULL AND citing IN ({marks})'
+            for c, p in self.con.execute(q, chunk):
+                cited.setdefault(c, set()).add(p)
+        return cited, known
+
+    def titles_of_cited(self, cited):
+        """{arXiv id: a title some bibliography gives it}, for cited papers that aren't in papers.sqlite"""
+        cited = list(cited)
+        out = {}
+        for i in range(0, len(cited), 500):
+            chunk = cited[i : i + 500]
+            q = f"SELECT cited, title FROM refs WHERE title != '' AND cited IN ({','.join('?' * len(chunk))})"
+            for c, t in self.con.execute(q, chunk):
+                out.setdefault(c, t)
+        return out
+
+    def counts(self):
+        """{status: papers}, and how many references are stored and matched, for /stats"""
+        st = dict(self.con.execute('SELECT status, count(*) FROM fetched GROUP BY status').fetchall())
+        n, m = self.con.execute('SELECT count(*), count(cited) FROM refs').fetchone()
+        return st, n, m
+
+
+def get_refs_db(path=None):
+    return RefsDB(path)
+
+
+def all_digest_pids():
+    """the papers in everyone's latest digest"""
+    out = set()
+    for (sections,) in _query('SELECT sections FROM digests'):
+        for s in json.loads(sections):
+            out.update(p[0] if isinstance(p, list) else p for p in s['papers'])
+    return out

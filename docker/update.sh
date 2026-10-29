@@ -27,6 +27,13 @@ if [ -n "${EMBED_MODEL:-}" ]; then
     (while true; do python embed_daemon.py || echo "embed_daemon.py exited, restarting in 5 min"; sleep 300; done) &
 fi
 
+# references of saved and recommended papers, from arXiv's HTML pages, one per REFS_PAUSE
+# seconds (at least 15, arxiv.org's robots.txt), for "Cited by your saved papers". off unless
+# REFS_ENABLED=1
+if [ "${REFS_ENABLED:-0}" = 1 ]; then
+    (while true; do python refs_daemon.py || echo "refs_daemon.py exited, restarting in 5 min"; sleep 300; done) &
+fi
+
 # the weekly digest emails, when DIGEST_ENABLED=1: send_emails.py --if-due sends at the
 # DIGEST_SCHEDULE slot (default sunday 08:00 Europe/Berlin) and otherwise exits right away.
 # its first run only starts the clock, so turning the digest on never mails everyone on the

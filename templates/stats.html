@@ -59,6 +59,15 @@
         {% else %}
         <p class="muted">No rebuild in the last week.</p>
         {% endif %}
+        <h2>References</h2>
+        {% if refs.ok or refs.missing or refs.error %}
+        <p>{{ refs.ok }} papers read ({{ refs.refs }} references, {{ refs.matched }} of them to a paper on arXiv),
+            {{ refs.missing }} without an HTML version on arXiv{% if refs.error %}, {{ refs.error }} failed{% endif %}.
+            Last 24 hours: {{ refs.day }} papers{% if refs.left %}, {{ refs.left }} waiting{% endif %}.
+            {% if refs.titles %}Matched against {{ refs.titles }} arXiv titles.{% else %}No table of all arXiv titles yet (import_snapshot.py --titles).{% endif %}</p>
+        {% else %}
+        <p class="muted">No references fetched yet (refs_daemon.py, REFS_ENABLED=1).</p>
+        {% endif %}
         <h2>Fetching new papers from arXiv</h2>
         {% if fetches %}
         <div class="tablescroll"><table class="stattable perftable">

@@ -8,6 +8,7 @@ snapshot doesn't have yet.
     uv sync --extra bulk
     ARXIV_SANITY_DATA=data/5y uv run python import_snapshot.py --years 5
     ARXIV_SANITY_DATA=data/5y uv run python import_snapshot.py --years 5 --check data/papers.sqlite
+    uv run python import_snapshot.py --titles   # every arXiv title, to match references by (refs.sqlite)
 
 Verification, before anything is imported:
 - every file is checked against the size and sha256 Hugging Face lists for the pinned
@@ -32,7 +33,8 @@ from collections import Counter
 import pyarrow.parquet as pq
 
 from aslite.arxiv import make_paper, CATEGORIES
-from aslite.db import get_papers_db, request_compute, DATA_DIR
+from aslite.db import get_papers_db, get_refs_db, request_compute, DATA_DIR
+from aslite.refs import norm, title_hash
 
 REPO = 'librarian-bots/arxiv-metadata-snapshot'
 REVISION = 'c428226b689a0e17db2cd55265133b9eca15d97f'  # 2026-10-27; --revision main for the latest
@@ -87,6 +89,12 @@ if __name__ == '__main__':
     parser.add_argument('--revision', default=REVISION, help='dataset revision (commit sha, or main)')
     parser.add_argument('--cache', default='data/arxiv-snapshot', help='where the parquet files are kept')
     parser.add_argument(
+        '--titles',
+        action='store_true',
+        help='instead of importing papers: store the title of every arXiv paper (all categories, '
+        '~3.2M, ~100 MB in refs.sqlite), which references are matched by (refs_daemon.py)',
+    )
+    parser.add_argument(
         '--check', nargs='*', default=[], help='papers.sqlite files fetched from arXiv to check coverage against'
     )
     args = parser.parse_args()
@@ -109,6 +117,22 @@ if __name__ == '__main__':
     if rows != expected_rows:
         sys.exit(f"row count {rows} != {expected_rows} from the dataset card")
     print(f"verified: all sha256 match, {rows} rows as listed")
+
+    if args.titles:
+        t0, n = time.time(), 0
+        with get_refs_db() as rdb:
+            for path in paths:
+                for batch in pq.ParquetFile(path).iter_batches(batch_size=50000, columns=['id', 'title']):
+                    pairs = [
+                        (title_hash(t), i)
+                        for i, t in zip(batch.column('id').to_pylist(), batch.column('title').to_pylist(), strict=True)
+                        if len(norm(t).split()) >= 3
+                    ]
+                    rdb.put_titles(pairs)
+                    n += len(pairs)
+                print(f"  titles of {os.path.basename(path)} stored ({n} so far)", flush=True)
+            print(f"{rdb.n_titles()} distinct titles of {n} papers in refs.sqlite, {time.time() - t0:.0f}s")
+        sys.exit(0)
 
     # import
     since = time.time() - args.years * 365.25 * 86400

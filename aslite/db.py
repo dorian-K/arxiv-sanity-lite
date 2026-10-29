@@ -44,6 +44,7 @@ USERS_DB_FILE = os.path.join(DATA_DIR, 'users.sqlite')
 EMBEDDINGS_DB_FILE = os.path.join(DATA_DIR, 'embeddings.sqlite')
 FEATURES_DIR = os.path.join(DATA_DIR, 'features')
 MODELS_DB_FILE = os.path.join(DATA_DIR, 'models.sqlite')
+SEARCH_TERMS_FILE = os.path.join(DATA_DIR, 'search_terms.json')  # aslite/spell.py
 
 # -----------------------------------------------------------------------------
 # sqlite plumbing
@@ -314,6 +315,37 @@ class PapersDB:
             # below every paper that has all the words
             rows += [(p, min(sc, low) - 1e-6 * (i + 1)) for i, (p, sc) in enumerate(rest)][: limit - len(rows)]
         return [r[0] for r in rows], [float(r[1]) for r in rows]
+
+    def _vocab(self):
+        self.con.execute("CREATE VIRTUAL TABLE IF NOT EXISTS temp.papers_vocab USING fts5vocab(main, papers_fts, row)")
+
+    def terms(self, min_docs):
+        """{word: number of papers} of the search index, for the words in at least min_docs (seconds)"""
+        self._vocab()
+        return dict(self.con.execute('SELECT term, doc FROM temp.papers_vocab WHERE doc >= ?', (min_docs,)))
+
+    def term_docs(self, word):
+        """in how many papers this word is (a few ms)"""
+        self._vocab()
+        row = self.con.execute('SELECT doc FROM temp.papers_vocab WHERE term = ?', (word,)).fetchone()
+        return row[0] if row else 0
+
+
+def save_terms(terms):
+    tmp = SEARCH_TERMS_FILE + '.tmp'
+    with open(tmp, 'w') as f:
+        json.dump(terms, f, separators=(',', ':'))
+    os.replace(tmp, SEARCH_TERMS_FILE)
+
+
+def load_terms():
+    """(the words saved by compute.py, the file's mtime), or (None, None) before its first run"""
+    try:
+        mtime = os.path.getmtime(SEARCH_TERMS_FILE)
+        with open(SEARCH_TERMS_FILE) as f:
+            return json.load(f), mtime
+    except FileNotFoundError:
+        return None, None
 
 
 def get_papers_db(path=None):

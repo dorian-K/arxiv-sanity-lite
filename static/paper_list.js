@@ -318,7 +318,13 @@ const Results = () => {
             ${' '}<a href="" onClick=${() => window.location.reload()}>Try again</a></div>`;
     }
     if (!data) return html`<${Skeleton} />`;
+    // search fixed a typo: say so, with a way back to exactly what was typed
+    const exact = new URLSearchParams(window.location.search);
+    exact.set('exact', 'yes');
+    exact.delete('page_number');
     return html`
+        ${gvars.corrected ? html`<div class="notice">Showing results for <b>${gvars.corrected}</b>.
+            ${' '}<a href=${'/?' + exact.toString()}>Search for “${gvars.search_query}” instead</a></div>` : null}
         ${data.notice ? html`<div class="notice">${data.notice}</div>` : null}
         <${PaperList} papers=${data.papers} />`;
 };

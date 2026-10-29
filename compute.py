@@ -10,7 +10,8 @@ import random
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 
-from aslite.db import get_papers_db, save_features
+from aslite import spell
+from aslite.db import get_papers_db, save_features, save_terms
 from aslite.embed import embed_papers
 
 # -----------------------------------------------------------------------------
@@ -130,3 +131,8 @@ if __name__ == '__main__':
 
     print("saving to features to disk...")
     save_features(features)
+
+    # the words search may correct a typo to (aslite/spell.py)
+    terms = pdb.terms(spell.MIN_DOCS)
+    save_terms(terms)
+    print(f"{len(terms)} words for search typo correction")

@@ -29,6 +29,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import generate_password_hash, check_password_hash
 
 from aslite import db, digest, mail
+from aslite.spell import Speller
 from aslite.db import get_papers_db, get_secret_key, load_features, features_exist, PAPERS_DB_FILE
 from aslite.arxiv import find_arxiv_id, fetch_papers_by_id, OLD_ARXIV_ID_RE
 from aslite.rank import (
@@ -225,6 +226,25 @@ def get_times():
         _times_lock.release()
 
 
+_speller = (None, None)  # (mtime of the words file, Speller), see get_speller
+_speller_lock = threading.Lock()
+
+
+def get_speller():
+    """typo correction for search (aslite/spell.py), None until compute.py wrote its words"""
+    global _speller
+    try:
+        mtime = os.path.getmtime(db.SEARCH_TERMS_FILE)
+    except OSError:
+        return None
+    if _speller[0] != mtime:
+        with _speller_lock:
+            if _speller[0] != mtime:
+                terms, mtime = db.load_terms()
+                _speller = (mtime, Speller(terms) if terms else None)
+    return _speller[1]
+
+
 def _warm_caches():
     """
     keeps this worker's features and paper times loaded, also right after the updater
@@ -235,6 +255,7 @@ def _warm_caches():
             get_times()
             if features_exist():
                 row_times(load_features())
+            get_speller()
         except Exception as e:  # e.g. a database mid-replace: try again next round
             print("cache warmup failed: %s" % (e,))
         time.sleep(15)
@@ -917,6 +938,14 @@ def main():
         if request.args.get('rank') != 'search':
             opt_time_filter, opt_skip_have = '', 'no'
         opt_rank = 'search'
+    # typos fixed ('difusion' -> 'diffusion'), unless the user asked for exactly what they typed
+    corrected = ''
+    if opt_rank == 'search' and opt_q and request.args.get('exact') != 'yes':
+        try:
+            speller = get_speller()
+            corrected = (speller and speller.correct(opt_q, get_papers().term_docs)) or ''
+        except Exception as e:  # only a nicety: search what was typed
+            print("typo correction failed: %s" % (e,))
 
     # C from the url, within sane bounds (0, nan or 1e12 would crash the fit or hold a worker
     # for a long time); None means the tuned per-model default
@@ -949,7 +978,7 @@ def main():
     # rank and filter, from the cache if this user asked the same recently
     query = (
         opt_rank,
-        opt_q,
+        corrected or opt_q,
         opt_tags,
         opt_pid,
         opt_time_filter,
@@ -1034,7 +1063,7 @@ def main():
     context['heading'] = {
         'time': 'Newest papers' + (f" (last {opt_time_filter} days)" if opt_time_filter else ''),
         'random': 'Random papers' + days,
-        'search': f'Search: {opt_q}',
+        'search': f'Search: {corrected or opt_q}',
         'pid': f"Similar to: {similar_to['title']}" if similar_to else 'Similar papers',
     }.get(opt_rank, '')
     context['gvars'] = {}
@@ -1044,6 +1073,7 @@ def main():
     context['gvars']['time_filter'] = opt_time_filter
     context['gvars']['skip_have'] = opt_skip_have
     context['gvars']['search_query'] = opt_q
+    context['gvars']['corrected'] = corrected
     context['gvars']['svm_c'] = '' if C is None else str(C)
     context['gvars']['feats'] = opt_feats
     context['gvars']['model'] = opt_model

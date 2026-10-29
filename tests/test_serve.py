@@ -478,3 +478,17 @@ def test_signup_asks_about_a_public_profile(client):
     client.post('/logout')
     client.post('/login', data={'username': 'priv', 'password': 'correct horse'})  # a login doesn't ask again
     assert 'id="askpublic"' not in client.get('/').get_data(as_text=True)
+
+
+def test_search_fixes_typos_unless_asked_not_to(client, corpus, monkeypatch):
+    import serve
+    from aslite.spell import Speller
+
+    assert serve.get_speller() is not None  # compute.py wrote the words
+    pid, p = next(iter(corpus.items()))
+    word = max(p['title'].lower().split(), key=len)
+    monkeypatch.setattr(serve, 'get_speller', lambda: Speller({word: 100}))
+    r = client.get('/?rank=search&q=' + word[0] + word[2:])  # one letter missing
+    assert ('"corrected": "%s"' % word).encode() in r.data and pid.encode() in r.data
+    r = client.get('/?rank=search&exact=yes&q=' + word[0] + word[2:])
+    assert b'"corrected": ""' in r.data

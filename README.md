@@ -156,7 +156,7 @@ Logged-in users get an **add** page (`/import`). Paste arXiv links or ids there,
 - At most one call every 3.5 s across all server processes.
 - At most `FETCH_LIMIT_USER` (200) fetched papers per user per day, and `FETCH_LIMIT_TOTAL` (2000) for everyone together.
 
-A new paper counts for recommendations once its features are computed. The docker updater does that within `COMPUTE_MIN_INTERVAL` (an hour); without docker, it happens at the next `compute.py` run. Pasting an arXiv link into the search box also shows that paper first.
+A new paper counts for recommendations once its features are computed. The docker updater does that within `COMPUTE_MIN_INTERVAL` (an hour); without docker, it happens at the next `compute.py` run. Pasting an arXiv link into the search box also shows that paper first. Search wants every word of the query (or any of them, when few papers have them all), and fixes typos ("difusion modles" finds diffusion models, with a link to search for exactly what was typed) against the words of the index, written by `compute.py`.
 
 Old-style ids (hep-th/0408218) aren't supported.
 

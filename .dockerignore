@@ -1,7 +1,6 @@
 .git
 .venv
 data
-static/thumb
 secret_key.txt
 .env
 **/__pycache__

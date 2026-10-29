@@ -1,6 +1,7 @@
 # One image for both compose services; EXTRAS picks the optional dependencies:
 #   web:     --extra serve  (gunicorn)
-#   updater: --extra embed --extra bulk  (sentence-transformers with CPU torch; pyarrow for import_snapshot.py)
+#   updater: --extra embed --extra bulk --extra enrich  (sentence-transformers with CPU torch; pyarrow for
+#            import_snapshot.py; pillow and pypdfium2 for enrich_daemon.py)
 FROM python:3.13-slim
 
 COPY --from=ghcr.io/astral-sh/uv:0.12.5 /uv /usr/local/bin/uv

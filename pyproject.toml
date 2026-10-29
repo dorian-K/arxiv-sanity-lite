@@ -19,8 +19,8 @@ dependencies = [
 embed = ["sentence-transformers>=6.0", "torch>=2.6", "torchvision", "pillow"]
 # the same with CUDA torch, for a GPU machine (see gpu_embed.sh); can't be combined with embed
 embed-gpu = ["sentence-transformers>=6.0", "torch>=2.6", "torchvision", "pillow"]
-# thumb_daemon.py (also needs ImageMagick's `convert` on PATH)
-thumbs = ["requests>=2.32"]
+# enrich_daemon.py: thumbnails of figures and PDF pages, references from PDFs
+enrich = ["pillow>=11", "pypdfium2>=4.30"]
 bulk = [
     "pyarrow>=20",
 ]
@@ -28,7 +28,7 @@ bulk = [
 serve = ["gunicorn>=23"]
 
 [dependency-groups]
-dev = ["pytest>=9.0", "ruff>=0.14"]
+dev = ["pytest>=9.0", "ruff>=0.14", "pillow>=11", "pypdfium2>=4.30"]  # pillow, pypdfium2: tests of the enrich extra
 
 [tool.uv]
 # a collection of scripts run from the repo root, not an installable package

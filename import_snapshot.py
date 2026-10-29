@@ -35,6 +35,7 @@ import pyarrow.parquet as pq
 from aslite.arxiv import make_paper, CATEGORIES
 from aslite.db import get_papers_db, get_refs_db, request_compute, DATA_DIR
 from aslite.refs import norm, title_hash
+from aslite.thumbs import license_code
 
 REPO = 'librarian-bots/arxiv-metadata-snapshot'
 REVISION = 'c428226b689a0e17db2cd55265133b9eca15d97f'  # 2026-10-27; --revision main for the latest
@@ -92,7 +93,8 @@ if __name__ == '__main__':
         '--titles',
         action='store_true',
         help='instead of importing papers: store the title of every arXiv paper (all categories, '
-        '~3.2M, ~100 MB in refs.sqlite), which references are matched by (refs_daemon.py)',
+        '~3.2M, ~100 MB in refs.sqlite), which references are matched by, and the license of every '
+        'paper of our categories, which decides whether it may get a thumbnail (enrich_daemon.py)',
     )
     parser.add_argument(
         '--check', nargs='*', default=[], help='papers.sqlite files fetched from arXiv to check coverage against'
@@ -122,7 +124,19 @@ if __name__ == '__main__':
         t0, n = time.time(), 0
         with get_refs_db() as rdb:
             for path in paths:
-                for batch in pq.ParquetFile(path).iter_batches(batch_size=50000, columns=['id', 'title']):
+                for batch in pq.ParquetFile(path).iter_batches(
+                    batch_size=50000, columns=['id', 'title', 'categories', 'license']
+                ):
+                    rdb.put_licenses(
+                        (i, license_code(lic))
+                        for i, cats, lic in zip(
+                            batch.column('id').to_pylist(),
+                            batch.column('categories').to_pylist(),
+                            batch.column('license').to_pylist(),
+                            strict=True,
+                        )
+                        if CATEGORIES & set(cats.split())
+                    )
                     pairs = [
                         (title_hash(t), i)
                         for i, t in zip(batch.column('id').to_pylist(), batch.column('title').to_pylist(), strict=True)

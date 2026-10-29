@@ -1,5 +1,5 @@
 """
-References of papers, from arXiv's HTML version (LaTeXML), for "Cited by your saved papers".
+References of papers, from arXiv's HTML version (LaTeXML), for the Cited tab and the reference graph.
 
 arXiv renders most papers to HTML, where every reference is its own <li class="ltx_bibitem">,
 and bibtex-made bibliographies label their parts (ltx_bib_title, ltx_bib_author, ...). That
@@ -9,8 +9,10 @@ to a paper in the database, all 12 checked by hand right (PDF: 808 and 38%).
 
 A reference is matched by the arXiv id in its links or text, else by its title: the labelled
 one (or the block after the authors), looked up exactly (normalized) in the table of all arXiv
-titles (db.put_titles, built from the Hugging Face snapshot) and in our own papers; else by our
-paper whose whole title appears in the reference. A match is an arXiv id, which may or may not
+titles (RefsDB.put_titles, built from the Hugging Face snapshot) and in our own papers; else by our
+paper whose whole title appears in the reference, or a piece of it that is exactly some arXiv
+title. Papers without an HTML version fall back to their PDF (parse_pdf, numbered lists only;
+enrich_daemon.py fetches it anyway for the page thumbnail). A match is an arXiv id, which may or may not
 be in papers.sqlite (other categories); the page joins at display time, so papers added later
 count too. No other service is asked (no Semantic Scholar, no OpenAlex): the user's choice.
 """
@@ -18,13 +20,9 @@ count too. No other service is asked (no Semantic Scholar, no OpenAlex): the use
 import re
 import hashlib
 import unicodedata
-import urllib.error
-import urllib.request
 from html.parser import HTMLParser
 
 
-PAUSE = 15  # seconds between pages: arxiv.org's robots.txt asks for Crawl-delay 15
-USER_AGENT = 'arxiv-resanity (https://github.com/dorian-K/arxiv-sanity-lite)'
 ARXIV_ID = re.compile(r'(?:arxiv[:\s/.]*|abs/|pdf/|html/)(\d{4}\.\d{4,5})', re.I)
 DOI = re.compile(r'\b(10\.\d{4,9}/[^\s,;"<>]+[^\s,;.)"<>])')
 VOID = {'br', 'img', 'hr', 'input', 'meta', 'wbr', 'col', 'source'}
@@ -99,6 +97,38 @@ def parse(html):
     return p.refs
 
 
+# PDFs (papers without an HTML version): the reference list after its heading, up to an
+# appendix; only numbered lists ([1] ...) are split, author-year ones come out garbled
+PDF_HEAD = re.compile(
+    r'^\s*(?:\d+\.?\s*)?(references|bibliography|references and notes|literature cited)\s*$', re.I | re.M
+)
+PDF_END = re.compile(
+    r'\n\s*(?:appendix|appendices|supplementary material|[A-H]\.?\s+[A-Z][a-z]+(?: [A-Za-z]+){0,6}\s*\n)'
+)
+PDF_NUM = re.compile(r'(?:^|\n)\s*\[(\d{1,3})\]\s+')
+
+
+def parse_pdf(text):
+    """[{raw, links, title, blocks}] of a numbered reference list in a PDF's text, [] if there's none"""
+    heads = list(PDF_HEAD.finditer(text))
+    if not heads:
+        return []
+    t = text[heads[-1].end() :]
+    end = PDF_END.search(t)
+    if end and end.start() > 1500:
+        t = t[: end.start()]
+    parts = PDF_NUM.split(t)
+    if len(parts) < 7:  # fewer than 3 numbered references: not a numbered list
+        return []
+    refs = [' '.join(parts[i + 1].split()) for i in range(1, len(parts) - 1, 2)]
+    return [{'raw': r, 'links': [], 'title': '', 'blocks': []} for r in refs if r]
+
+
+def _pieces(raw):
+    """the sentence-like pieces of a reference, one of which is usually its title"""
+    return [c.strip(' .,') for c in re.split(r'(?<=[.?!])\s+|[“”"]', raw) if len(norm(c).split()) >= 3]
+
+
 def candidate_titles(ref):
     """what the title of a reference probably is: the labelled one, else the blocks after the authors"""
     return [ref['title']] if ref.get('title') else [b for b in ref.get('blocks', [])[1:3] if b]
@@ -126,8 +156,7 @@ class Matcher:
     def _ours_in_text(self, raw):
         """our paper whose whole title appears in the reference (bibliographies without labels)"""
         nraw = norm(raw)
-        chunks = [c for c in re.split(r'(?<=[.?!])\s+|[“”"]', raw) if len(norm(c).split()) >= 3]
-        for c in chunks[:8]:
+        for c in _pieces(raw)[:8]:
             q = 'title : "' + ' '.join(norm(c).split()[:6]) + '"'
             rows = self.pdb.con.execute(
                 'SELECT p.id, p.title FROM papers_fts JOIN papers p ON p.n = papers_fts.rowid '
@@ -150,7 +179,12 @@ class Matcher:
             pid = pid or self._ours_by_title(t)
             if pid:
                 return pid, 'title'
-        pid = self._ours_in_text(ref.get('raw', ''))
+        raw = ref.get('raw', '')
+        for c in _pieces(raw)[:10]:  # a piece of the text that is exactly some arXiv paper's title
+            pid = self.rdb.lookup_title(title_hash(c))
+            if pid:
+                return pid, 'text'
+        pid = self._ours_in_text(raw)
         return (pid, 'text') if pid else (None, None)
 
 
@@ -163,37 +197,3 @@ def rows_for(refs, matcher):
         title = (candidate_titles(r) or [''])[0]
         out.append((i, cited, title[:500], d.group(1) if d else None, r['raw'][:1000]))
     return out
-
-
-class SlowDown(Exception):
-    """arXiv asked us to wait (429/503): retry_after seconds"""
-
-    def __init__(self, retry_after):
-        super().__init__(f"arXiv asked to wait {retry_after}s")
-        self.retry_after = retry_after
-
-
-def fetch_html(pid, timeout=60):
-    """
-    (status, html) of a paper's HTML version: 'ok', or 'missing' (no HTML for it, or no
-    bibliography in it). Raises SlowDown on 429/503, other errors as they are. The caller holds
-    db.arxiv_slot(pause=PAUSE)
-    """
-    req = urllib.request.Request(f'https://arxiv.org/html/{pid}', headers={'User-Agent': USER_AGENT})
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            html = r.read(20_000_000).decode('utf-8', 'replace')
-            final = r.geturl()
-    except urllib.error.HTTPError as e:
-        if e.code in (429, 503):
-            try:
-                wait = int(e.headers.get('Retry-After') or 600)
-            except ValueError:
-                wait = 600
-            raise SlowDown(max(60, wait)) from e
-        if e.code in (404, 410):
-            return 'missing', ''
-        raise
-    if '/html/' not in final or 'ltx_bibitem' not in html:
-        return 'missing', ''
-    return 'ok', html

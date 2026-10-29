@@ -21,14 +21,14 @@ import numpy as np
 
 import click
 from flask import Flask, request, redirect, url_for, abort
-from flask import render_template
+from flask import render_template, send_file
 from flask import g  # global session-level object
 from flask import session
 from itsdangerous import URLSafeSerializer, URLSafeTimedSerializer, BadSignature
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import generate_password_hash, check_password_hash
 
-from aslite import db, digest, mail, metrics
+from aslite import db, digest, mail, metrics, thumbs
 from aslite.spell import Speller
 from aslite.db import get_papers_db, get_secret_key, load_features, features_exist, PAPERS_DB_FILE
 from aslite.arxiv import find_arxiv_id, fetch_papers_by_id, OLD_ARXIV_ID_RE
@@ -374,13 +374,52 @@ def close_connection(error=None):
 # ranking utilities for completing the search/rank/filter requests
 
 
+# which thumbnail paper cards show (enrich_daemon.py makes both): the paper's first figure or
+# its first page; the other one stands in when a paper has only that
+THUMB_KIND = 'page' if os.environ.get('THUMB_KIND') == 'page' else 'figure'
+THUMB_KINDS = (THUMB_KIND, 'page' if THUMB_KIND == 'figure' else 'figure')
+
+
+def _thumb_license(pid):
+    """the open license a paper's thumbnails were made under, '' if they may not be shown"""
+    if 'refs_db' not in g:
+        g.refs_db = db.get_refs_db()
+    code = g.refs_db.thumb_license(pid)
+    return code if thumbs.is_open(code) else ''
+
+
+@app.teardown_appcontext
+def _close_refs_db(exc):
+    rdb = g.pop('refs_db', None)
+    if rdb is not None:
+        rdb.close()
+
+
+def thumb_info(pid):
+    """(url, license label, license url) of the thumbnail a card shows, or ('', '', '')"""
+    _, kind = db.thumb_file(pid, THUMB_KINDS)
+    code = _thumb_license(pid) if kind else ''
+    if not code:
+        return '', '', ''
+    return url_for('thumb', kind=kind, pid=pid), thumbs.license_label(code), thumbs.license_url(code)
+
+
+@app.route('/thumb/<kind>/<path:pid>')
+def thumb(kind, pid):
+    if kind not in ('figure', 'page') or not re.fullmatch(r'[a-zA-Z.\-]*/?\d{4,7}(\.\d{4,5})?', pid):
+        abort(404)  # only arXiv ids (2610.12345, cs/0701001) become file names
+    path, _ = db.thumb_file(pid, (kind,))
+    if path is None or not _thumb_license(pid):
+        abort(404)  # also a thumbnail made before its license was known not to allow it
+    return send_file(os.path.abspath(path), mimetype='image/jpeg', max_age=86400)
+
+
 def render_pid(pid, d=None):
     # render a single paper with just the information we need for the UI
     tags = get_tags()
     neg_tags = get_neg_tags()
-    thumb_path = 'static/thumb/' + pid + '.jpg'
-    thumb_url = thumb_path if os.path.isfile(thumb_path) else ''
     d = d or get_papers()[pid]
+    t_url, t_label, t_license = thumb_info(pid)
     return dict(
         weight=0.0,
         id=d['_id'],
@@ -393,7 +432,9 @@ def render_pid(pid, d=None):
         stags=[t for t, pids in get_seen_tags().items() if pid in pids],
         summary=d['summary'],
         venue=d.get('venue', ''),
-        thumb_url=thumb_url,
+        thumb_url=t_url,
+        thumb_license=t_label,  # the image is the authors' work under this license: credit it
+        thumb_license_url=t_license,
     )
 
 
@@ -687,7 +728,7 @@ def cited_rank(tags: str = ''):
     (pids, scores, info): the papers on this site that the papers saved to these tags cite, cited
     by the most of them first (score = how many), newest first among equals; minus the papers
     already saved or marked not for these tags. info: how many saved papers have known
-    references (refs_daemon.py fetches them), and how many cited papers aren't on this site
+    references (enrich_daemon.py fetches them), and how many cited papers aren't on this site
     """
     tags_db, neg_db = get_tags(), get_neg_tags()
     names = set(tags_db) | set(neg_db) if tags == 'all' else set(tags.split(','))
@@ -1355,22 +1396,16 @@ def stats():
     )
     try:
         with db.get_refs_db() as rdb:
-            status, n_refs, n_matched = rdb.counts()
-            n_titles = rdb.n_titles()
+            enrich = rdb.counts()
+            enrich['titles'] = rdb.n_titles()
     except Exception as e:
         print("reading refs failed: %s" % (e,))
-        status, n_refs, n_matched, n_titles = {}, 0, 0, 0
-    day_refs = [j for j in runs('refs') if j[0] > tnow - 86400]
-    context['refs'] = dict(
-        ok=status.get('ok', 0),
-        missing=status.get('missing', 0),
-        error=status.get('error', 0),
-        refs=n_refs,
-        matched=n_matched,
-        titles=n_titles,
-        day=sum(j[3].get('papers', 0) for j in day_refs),
-        left=runs('refs')[-1][3].get('left') if runs('refs') else None,
-    )
+        enrich = None
+    if enrich is not None:
+        day = [j for j in runs('enrich') if j[0] > tnow - 86400]
+        enrich['day'] = sum(j[3].get('papers', 0) for j in day)
+        enrich['left'] = runs('enrich')[-1][3].get('left') if runs('enrich') else None
+    context['enrich'] = enrich
     return render_template('stats.html', **context)
 
 

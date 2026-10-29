@@ -376,7 +376,9 @@ input:focus, select:focus, .btn:focus-visible, .iconbtn:focus-visible {
 .rel_links { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 8px; font-size: 14px; }
 
 .rel_img { float: right; margin: 0 0 8px 16px; }
-.rel_img img { display: block; max-height: 120px; border-radius: 6px; border: 1px solid var(--border); }
+.rel_img figcaption { font-size: 0.7rem; text-align: right; margin-top: 2px; }
+.rel_img figcaption a { color: var(--muted); }
+.rel_img img { display: block; max-height: 140px; max-width: 220px; object-fit: contain; background: #fff; border-radius: 6px; border: 1px solid var(--border); }
 
 /* KaTeX output should flow with the text */
 .rel_abs .katex, .rel_title .katex { font-size: 1.05em; }

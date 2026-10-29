@@ -71,7 +71,7 @@ services:
     build:
       context: .
       args:
-        EXTRAS: --extra embed --extra bulk  # bulk: pyarrow for import_snapshot.py
+        EXTRAS: --extra embed --extra bulk --extra enrich  # pyarrow for import_snapshot.py; pillow, pypdfium2 for enrich_daemon.py
     image: arxiv_resanity_updater
     container_name: arxiv_resanity_updater
     command: ["sh", "docker/update.sh"]
@@ -90,10 +90,10 @@ services:
       EMBED_DUTY: ${EMBED_DUTY:-0.1}
       EMBED_THREADS: ${EMBED_THREADS:-2}
       EMBED_SESSION: ${EMBED_SESSION:-120}
-      # "Cited by your saved papers": references from arXiv's HTML pages, one page per
-      # REFS_PAUSE seconds (refs_daemon.py). off by default
-      REFS_ENABLED: ${REFS_ENABLED:-0}
-      REFS_PAUSE: ${REFS_PAUSE:-20}
+      # references (the Cited tab) and thumbnails of saved and digest papers, from arXiv's
+      # HTML pages and PDFs, one request per ENRICH_PAUSE seconds (enrich_daemon.py). off by default
+      ENRICH_ENABLED: ${ENRICH_ENABLED:-0}
+      ENRICH_PAUSE: ${ENRICH_PAUSE:-20}
       HF_TOKEN: ${HF_TOKEN:-}  # only for gated models; embeddinggemma-2 downloads without one
       COMPUTE_ARGS: ${COMPUTE_ARGS:---max_docs 100000}
       DAEMON_NUM: ${DAEMON_NUM:-2000}

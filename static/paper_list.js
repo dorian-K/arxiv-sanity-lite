@@ -206,7 +206,8 @@ const Paper = ({ paper: p, quickTag }) => {
 
     return html`
     <article class="rel_paper">
-        ${p.thumb_url ? html`<div class="rel_img"><img src=${p.thumb_url} alt="" loading="lazy" /></div>` : null}
+        ${p.thumb_url ? html`<figure class="rel_img"><img src=${p.thumb_url} alt="" loading="lazy" />
+            <figcaption><a href=${p.thumb_license_url} title="this image is from the paper, under this license">${p.thumb_license}</a></figcaption></figure>` : null}
         <div class="rel_head">
             ${compactView ? html`<button class="rel_expand" aria-expanded="true" title="back to one line"
                     aria-label="hide details" onClick=${() => setExpanded(false)}>▾</button>` : null}

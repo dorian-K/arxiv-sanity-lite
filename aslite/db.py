@@ -47,6 +47,7 @@ MODELS_DB_FILE = os.path.join(DATA_DIR, 'models.sqlite')
 SEARCH_TERMS_FILE = os.path.join(DATA_DIR, 'search_terms.json')  # aslite/spell.py
 METRICS_DB_FILE = os.path.join(DATA_DIR, 'metrics.sqlite')  # timings for /stats, safe to delete
 REFS_DB_FILE = os.path.join(DATA_DIR, 'refs.sqlite')  # references of papers (aslite/refs.py)
+THUMBS_DIR = os.path.join(DATA_DIR, 'thumbs')  # aslite/thumbs.py: <pid>.figure.jpg, <pid>.page.jpg
 
 # -----------------------------------------------------------------------------
 # sqlite plumbing
@@ -1164,7 +1165,7 @@ def get_jobs(since):
 
 
 # -----------------------------------------------------------------------------
-# refs.sqlite: the references of papers (aslite/refs.py, refs_daemon.py), and the titles of
+# refs.sqlite: the references of papers (aslite/refs.py, enrich_daemon.py), and the titles of
 # every arXiv paper to match them by (import_snapshot.py --titles). no user data in it
 
 REFS_SCHEMA = """
@@ -1179,12 +1180,20 @@ CREATE TABLE IF NOT EXISTS refs (
 );
 CREATE INDEX IF NOT EXISTS refs_cited ON refs(cited);
 CREATE TABLE IF NOT EXISTS fetched (
-    pid TEXT PRIMARY KEY,
-    status TEXT NOT NULL,     -- ok | missing (no HTML version, or no bibliography in it) | error
+    pid TEXT PRIMARY KEY,     -- a paper enrich_daemon.py has processed
+    status TEXT NOT NULL,     -- ok (done, whatever it found) | error (tried again later)
     t REAL NOT NULL,          -- when it was last tried
     tries INTEGER NOT NULL,
-    n INTEGER NOT NULL        -- references found
+    n INTEGER NOT NULL,       -- references found
+    refs_from TEXT NOT NULL DEFAULT '',  -- html | pdf | '' (none could be read)
+    figure INTEGER NOT NULL DEFAULT 0,   -- thumbnails made (only for open licenses)
+    page INTEGER NOT NULL DEFAULT 0,
+    license TEXT NOT NULL DEFAULT ''     -- thumbs.license_code(): what the thumbnails may be shown under
 );
+CREATE TABLE IF NOT EXISTS licenses (
+    id TEXT PRIMARY KEY,      -- an arXiv paper of our categories (import_snapshot.py --titles)
+    license TEXT NOT NULL     -- thumbs.license_code()
+) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS titles (
     h INTEGER PRIMARY KEY,    -- refs.title_hash() of a normalized title
     id TEXT NOT NULL          -- the arXiv paper with that title (the oldest, if several)
@@ -1217,8 +1226,26 @@ class RefsDB:
     def n_titles(self):
         return self.con.execute('SELECT count(*) FROM titles').fetchone()[0]
 
-    def put_refs(self, citing, status, rows=()):
-        """a fetch of citing's references: rows are (pos, cited, title, doi, raw)"""
+    def put_licenses(self, pairs):
+        """(arXiv id, license code) pairs"""
+        with self.con:
+            self.con.executemany('INSERT OR REPLACE INTO licenses (id, license) VALUES (?, ?)', pairs)
+
+    def license_of(self, pid):
+        """the license code of a paper, or None if it isn't known (not in the snapshot)"""
+        row = self.con.execute('SELECT license FROM licenses WHERE id = ?', (pid,)).fetchone()
+        return row[0] if row else None
+
+    def thumb_license(self, pid):
+        """the license code the paper's thumbnails were made under, '' if none"""
+        row = self.con.execute('SELECT license FROM fetched WHERE pid = ?', (pid,)).fetchone()
+        return row[0] if row else ''
+
+    def put_refs(self, citing, status, rows=(), refs_from='', figure=False, page=False, license=''):
+        """
+        what processing citing found: rows are its references (pos, cited, title, doi, raw);
+        status 'error' keeps whatever an earlier run stored and counts a try
+        """
         with self.con:
             if status == 'ok':
                 self.con.execute('DELETE FROM refs WHERE citing = ?', (citing,))
@@ -1227,9 +1254,11 @@ class RefsDB:
                     ((citing, *r) for r in rows),
                 )
             self.con.execute(
-                'INSERT INTO fetched (pid, status, t, tries, n) VALUES (?, ?, ?, 1, ?) ON CONFLICT(pid) DO UPDATE '
-                'SET status = excluded.status, t = excluded.t, tries = fetched.tries + 1, n = excluded.n',
-                (citing, status, time.time(), len(rows)),
+                'INSERT INTO fetched (pid, status, t, tries, n, refs_from, figure, page, license) '
+                'VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?) ON CONFLICT(pid) DO UPDATE SET status = excluded.status, '
+                't = excluded.t, tries = fetched.tries + 1, n = excluded.n, refs_from = excluded.refs_from, '
+                'figure = excluded.figure, page = excluded.page, license = excluded.license',
+                (citing, status, time.time(), len(rows), refs_from, int(figure), int(page), license),
             )
 
     def fetched(self):
@@ -1252,10 +1281,8 @@ class RefsDB:
         for i in range(0, len(pids), 500):
             chunk = pids[i : i + 500]
             marks = ','.join('?' * len(chunk))
-            known |= {
-                r[0]
-                for r in self.con.execute(f"SELECT pid FROM fetched WHERE status = 'ok' AND pid IN ({marks})", chunk)
-            }
+            q = f"SELECT pid FROM fetched WHERE status = 'ok' AND refs_from != '' AND pid IN ({marks})"
+            known |= {r[0] for r in self.con.execute(q, chunk)}
             q = f'SELECT cited, citing FROM refs WHERE cited IS NOT NULL AND citing IN ({marks})'
             for c, p in self.con.execute(q, chunk):
                 cited.setdefault(c, set()).add(p)
@@ -1273,14 +1300,42 @@ class RefsDB:
         return out
 
     def counts(self):
-        """{status: papers}, and how many references are stored and matched, for /stats"""
-        st = dict(self.con.execute('SELECT status, count(*) FROM fetched GROUP BY status').fetchall())
-        n, m = self.con.execute('SELECT count(*), count(cited) FROM refs').fetchone()
-        return st, n, m
+        """for /stats: papers done and failed, where their references came from, thumbnails made,
+        and references stored and matched"""
+        row = self.con.execute(
+            "SELECT count(*) FILTER (WHERE status = 'ok'), count(*) FILTER (WHERE status = 'error'), "
+            "count(*) FILTER (WHERE refs_from = 'html'), count(*) FILTER (WHERE refs_from = 'pdf'), "
+            'coalesce(sum(figure), 0), coalesce(sum(page), 0) FROM fetched'
+        ).fetchone()
+        c = dict(zip(('done', 'error', 'html', 'pdf', 'figure', 'page'), row, strict=True))
+        c['refs'], c['matched'] = self.con.execute('SELECT count(*), count(cited) FROM refs').fetchone()
+        return c
 
 
 def get_refs_db(path=None):
     return RefsDB(path)
+
+
+def _thumb_file(pid, kind):
+    return os.path.join(THUMBS_DIR, f"{pid.replace('/', '_')}.{kind}.jpg")  # old ids: cs/0701001
+
+
+def save_thumb(pid, kind, data):
+    """a thumbnail (JPEG bytes) of kind 'figure' or 'page', written atomically"""
+    os.makedirs(THUMBS_DIR, exist_ok=True)
+    path = _thumb_file(pid, kind)
+    with open(path + '.tmp', 'wb') as f:
+        f.write(data)
+    os.replace(path + '.tmp', path)
+
+
+def thumb_file(pid, kinds):
+    """(path, kind) of the first of these kinds this paper has a thumbnail of, else (None, None)"""
+    for kind in kinds:
+        path = _thumb_file(pid, kind)
+        if os.path.isfile(path):
+            return path, kind
+    return None, None
 
 
 def all_digest_pids():

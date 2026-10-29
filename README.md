@@ -150,11 +150,11 @@ Calibration on the Scholar Inbox ratings:
 
 Splitting such a tag is worth it. In a shared tag, 21% of the side topic's held-out papers made the top 1%; with a model of its own, 34% did. That's why the check suggests a separate tag once three or more papers don't fit.
 
-#### Cited by your saved papers
+#### Cited by your saved papers, and thumbnails
 
 Each tag has a **Cited** tab: the papers on this site that the papers you saved there cite, the ones most of them cite first. A tag's foundations show up even if they are years old and you never searched for them. The references come from arXiv's HTML version of each paper, where every reference is its own entry and most label their title. On 20 recommended papers that found 962 references, 80% of them to an arXiv paper and 56% to one on this site (from the PDFs: 808 and 38%). No other service is asked, so journal papers that aren't on arXiv stay unknown.
 
-`refs_daemon.py` fetches them in the updater when `REFS_ENABLED=1` (off by default): saved papers first, then the papers in everyone's latest digest, one page every `REFS_PAUSE` seconds (default 20; arxiv.org's robots.txt asks for at least 15). Each paper is fetched once, a paper without an HTML version is remembered, and a failure is retried after a day. References are matched by arXiv id, else by title, best with the titles of every arXiv paper: `docker compose exec arxiv_resanity_updater python import_snapshot.py --titles` stores them from the snapshot (3.2M titles, 91 MB in `refs.sqlite`, 2 minutes, nothing asked from arXiv). Once a day, references that matched nothing are matched again. /stats shows the progress.
+`enrich_daemon.py` fetches them in the updater when `ENRICH_ENABLED=1` (off by default), together with two thumbnails per paper: the paper's first real figure (from the HTML version; grids of small panels are skipped) and its first page (from the PDF). Paper cards show the one `THUMB_KIND` names (`figure`, the default, or `page`) and fall back to the other, with the paper's license under it. Thumbnails are only made for papers under a Creative Commons license (about half of them): a thumbnail is a copy of the authors' work, which German copyright law (no fair use) allows only with permission, however small. Papers under arXiv's default license get no thumbnail, and their figures and pages aren't downloaded. The licenses come from the snapshot (`import_snapshot.py --titles`), for newer papers from their abstract page. Papers without an HTML version, or whose bibliography didn't convert, get their references from the PDF, if the list is numbered ([1], [2], ...): on 20 PDFs, 11 had one, and 76% of those 504 references matched. Saved papers come first, then the papers in everyone's latest digest, up to four requests per paper (abstract page for a license the snapshot doesn't have, HTML, figure, PDF), one every `ENRICH_PAUSE` seconds (default 20; arxiv.org's robots.txt asks for at least 15). A paper is processed once; network trouble is retried after a day, at most three times. References are matched by arXiv id, else by title, best with the titles of every arXiv paper: `docker compose exec arxiv_resanity_updater python import_snapshot.py --titles` stores them from the snapshot (3.2M titles and the licenses of our 658k papers, 110 MB in `refs.sqlite`, 2 minutes, nothing asked from arXiv). Once a day, references that matched nothing are matched again. /stats shows the progress. Thumbnails are in `data/thumbs/` (~30 KB each).
 
 #### Add papers by link
 
@@ -182,7 +182,7 @@ Dependencies are managed with [uv](https://docs.astral.sh/uv/). This creates `.v
 ```bash
 uv sync                              # core + dev tools (pytest)
 uv sync --extra embed                # + sentence-transformers for local embeddings
-uv sync --extra thumbs               # + thumb_daemon.py deps
+uv sync --extra enrich               # + enrich_daemon.py deps (references, thumbnails)
 uv run pytest                        # smoke tests on a synthetic corpus, no network needed
 ```
 

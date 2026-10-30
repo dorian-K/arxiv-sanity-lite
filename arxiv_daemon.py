@@ -11,7 +11,7 @@ import logging
 import argparse
 import urllib.error
 
-from aslite.arxiv import get_response, parse_response
+from aslite.arxiv import get_response, parse_response, CATEGORIES
 from aslite.db import get_papers_db, arxiv_slot, put_job
 
 MAX_TRIES = 5  # per page; then this run gives up, and the next one tries again
@@ -70,7 +70,7 @@ if __name__ == '__main__':
     """
 
     # query string of papers to look for
-    q = 'cat:cs.CV+OR+cat:cs.LG+OR+cat:cs.CL+OR+cat:cs.AI+OR+cat:cs.NE+OR+cat:cs.RO'
+    q = '+OR+'.join('cat:' + c for c in sorted(CATEGORIES))
 
     pdb = get_papers_db()
     prevn = len(pdb)

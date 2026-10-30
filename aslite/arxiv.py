@@ -164,8 +164,26 @@ def venue(comment='', journal_ref=''):
     return ''
 
 
-# daemon categories; the bulk importers (harvest_papers.py, import_snapshot.py) filter on these too
-CATEGORIES = {'cs.CV', 'cs.LG', 'cs.CL', 'cs.AI', 'cs.NE', 'cs.RO'}
+# daemon categories, with what to call them; the bulk importers (harvest_papers.py,
+# import_snapshot.py) filter on these too, and the about page, /agents and the agents'
+# instructions list them (categories_text)
+CATEGORY_NAMES = {
+    'cs.LG': 'machine learning',
+    'cs.CV': 'computer vision',
+    'cs.CL': 'language',
+    'cs.AI': 'AI',
+    'cs.NE': 'neural computing',
+    'cs.RO': 'robotics',
+    'cs.SD': 'sound',
+    'eess.AS': 'audio and speech',
+}
+CATEGORIES = set(CATEGORY_NAMES)
+
+
+def categories_text():
+    """'machine learning (cs.LG), computer vision (cs.CV), ... and audio and speech (eess.AS)'"""
+    parts = [f'{name} ({c})' for c, name in CATEGORY_NAMES.items()]
+    return ', '.join(parts[:-1]) + ' and ' + parts[-1]
 
 
 def make_paper(pid, version_dates, title, abstract, authors, categories, comments='', journal_ref=''):

@@ -27,7 +27,7 @@ from urllib.parse import urlencode, urlparse
 from flask import Blueprint, g, jsonify, redirect, render_template, request, url_for
 
 from aslite import db
-from aslite.arxiv import find_arxiv_id
+from aslite.arxiv import categories_text, find_arxiv_id
 
 bp = Blueprint('agents', __name__)
 site = None  # the serve module, set by register()
@@ -338,7 +338,7 @@ def cited_by(id, limit=20, offset=0, abstracts=False):
 
 @tool(
     """The user's tags with how many papers each has saved, marked "not for" it, and not
-    marked read yet ('all' counts every tag together).""",
+    marked read yet ('all' counts the user's own tags together, without the agent:... ones).""",
     access='user',
 )
 def list_tags():
@@ -347,7 +347,7 @@ def list_tags():
     for t in sorted(set(tags) | set(neg)):
         s = tags.get(t, set())
         out.append({'name': t, 'saved': len(s), 'not_for': len(neg.get(t, ())), 'to_read': len(s - reads)})
-    saved = set().union(*tags.values())
+    saved = set().union(*(tags[t] for t in site.own_tags(tags)))
     return {
         'user': g.user,
         'access': SCOPE_LABELS[g.scope],
@@ -655,9 +655,8 @@ def instructions():
         else "You aren't signed in: the research tools work; a user's tags and lists need their access "
         "token (made on the site's /agents page, sent as Authorization: Bearer)."
     )
-    return f"""Arxiv Resanity ({site.PUBLIC_URL or request.host_url.rstrip('/')}) indexes arXiv papers in machine
-learning, computer vision, language, AI, neural computing and robotics (cs.LG, cs.CV, cs.CL, cs.AI, cs.NE,
-cs.RO) from the last years, and ranks them with small models trained on example papers.
+    return f"""Arxiv Resanity ({site.PUBLIC_URL or request.host_url.rstrip('/')}) indexes arXiv papers in
+{categories_text()} from the last years, and ranks them with small models trained on example papers.
 
 To find related work, use rank_like: give it 1-10 papers you know are relevant (arXiv ids or links), get
 every paper on the site ranked by them, then add the best hits to `like` (and off-topic ones to `unlike`)
@@ -820,7 +819,7 @@ def llms_txt():
     lines = [
         '# Arxiv Resanity',
         '',
-        '> arXiv papers (ML, vision, language, AI, robotics) ranked by small models trained on example papers,',
+        f'> arXiv papers ({categories_text()}) ranked by small models trained on example papers,',
         '> with personal tags, reading lists and weekly digests. Agents use it through MCP or a JSON API.',
         '',
         f'- MCP (streamable HTTP, stateless): {base}/mcp',
@@ -861,6 +860,7 @@ def agents_page(new_token='', error=''):
         base=site.PUBLIC_URL or request.host_url.rstrip('/'),
         tools=[(n, t['access'], t['description']) for n, t in TOOLS.items()],
         scope_labels=SCOPE_LABELS,
+        categories=categories_text(),
         fmt=lambda t: time.strftime('%b %d %Y', time.localtime(t)) if t else 'never',
     )
     return render_template('agents.html', **context)

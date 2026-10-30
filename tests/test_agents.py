@@ -420,3 +420,31 @@ def test_an_app_on_another_machine_gets_the_callback_to_open_there(client, corpu
         'code_verifier': verifier,
     }
     assert client.post('/oauth/token', data=req).get_json()['scope'] == 'read'
+
+
+def test_all_tags_leaves_out_the_agent_tags(client, corpus):
+    import serve
+
+    vision, language = vision_and_language(corpus)
+    login(client)
+    for p in vision[:3]:
+        client.post(f'/add/{p}/cv')
+    client.post('/logout')
+    token = make_token(client, 'agent')
+    call(client, 'save_papers', token, ids=language[:4], tag='nlp')
+    assert set(db.get_tags('alice')) == {'cv', 'agent:nlp'}
+    login(client)
+
+    def ids(url):
+        return {p['id'] for p in client.get(url + '&format=json').get_json()['papers']}
+
+    assert ids('/?rank=saved&tags=all') == set(vision[:3]) and ids('/?rank=unread&tags=all') == set(vision[:3])
+    assert ids('/?rank=saved&tags=agent:nlp') == set(language[:4])  # the agent's tag itself works as usual
+    assert 'Saved (3)' in client.get('/?rank=saved&tags=all').data.decode()
+    # the All tags model trains on the user's own tags only
+    pos, _ = serve.training_set(db.get_tags('alice'), db.get_tags('alice', neg=True), 'all')
+    assert pos == set(vision[:3])
+    # and the agent's picks aren't hidden as already rated: the user hasn't seen them
+    found = ids('/?rank=search&q=language&skip_have=yes')
+    assert set(language[:4]) & found and not set(vision[:3]) & ids('/?rank=search&q=vision&skip_have=yes')
+    assert call(client, 'list_tags', token)[0]['all']['saved'] == 3

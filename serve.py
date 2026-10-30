@@ -32,7 +32,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from aslite import db, digest, mail, metrics, thumbs
 from aslite.spell import Speller
 from aslite.db import get_papers_db, get_secret_key, load_features, features_exist, PAPERS_DB_FILE
-from aslite.arxiv import find_arxiv_id, fetch_papers_by_id, OLD_ARXIV_ID_RE
+from aslite.arxiv import find_arxiv_id, fetch_papers_by_id, OLD_ARXIV_ID_RE, categories_text
 from aslite.rank import (
     fit,
     usable,
@@ -526,9 +526,18 @@ def time_rank(opt_time_filter=''):
     return pids[:n], ((time.time() - tarr[:n]) / 86400).tolist()  # time delta in days
 
 
+def own_tags(*tag_dbs):
+    """
+    the tags 'all' stands for: the user's own, without the agent:... ones that agents fill
+    (agents.py), so an agent's picks never shape the user's All tags page, its reading list or
+    what it hides
+    """
+    return {t for d in tag_dbs for t in d if not t.startswith(db.AGENT_TAG_PREFIX)}
+
+
 def training_set(tags_db, neg_db, tags):
-    """(liked, downvoted) papers of these tags: one, several (a,b) or 'all'"""
-    names = set(tags_db) | set(neg_db) if tags == 'all' else set(tags.split(','))
+    """(liked, downvoted) papers of these tags: one, several (a,b) or 'all' (own_tags)"""
+    names = own_tags(tags_db, neg_db) if tags == 'all' else set(tags.split(','))
     pos = set().union(*(pids for t, pids in tags_db.items() if t in names))
     neg = set().union(*(pids for t, pids in neg_db.items() if t in names))
     return pos, neg
@@ -567,7 +576,7 @@ def models_ready(tags, mix, C, feats, model):
     """
     features = get_features()
     tags_db, neg_db = get_tags(), get_neg_tags()
-    names = (set(tags_db) if tags == 'all' else {t for t in tags.split(',') if t}) if mix == 'turns' else set()
+    names = (own_tags(tags_db) if tags == 'all' else {t for t in tags.split(',') if t}) if mix == 'turns' else set()
     if len(names) < 2:  # as in _ranked: turns need two tags
         names = {tags}
     for t in names:
@@ -779,9 +788,9 @@ def _model_ranking(m, opt_time_filter, skip_have, scope=None, limit=None, publis
 
 
 def saved_rank(tags: str = '', neg=False):
-    """the papers saved to these tags ('all' = every tag), newest first; neg: the ones marked not for them"""
+    """the papers saved to these tags ('all': own_tags), newest first; neg: the ones marked not for them"""
     tags_db = get_neg_tags() if neg else get_tags()
-    names = set(tags_db) if tags == 'all' else set(tags.split(','))
+    names = own_tags(tags_db) if tags == 'all' else set(tags.split(','))
     pos = set().union(*(pids for t, pids in tags_db.items() if t in names))
     times = get_times()[0]
     pids = sorted(pos, key=lambda p: times.get(p, 0), reverse=True)
@@ -805,7 +814,7 @@ def cited_rank(tags: str = ''):
     references (enrich_daemon.py fetches them), and how many cited papers aren't on this site
     """
     tags_db, neg_db = get_tags(), get_neg_tags()
-    names = set(tags_db) | set(neg_db) if tags == 'all' else set(tags.split(','))
+    names = own_tags(tags_db, neg_db) if tags == 'all' else set(tags.split(','))
     saved = set().union(*(pids for t, pids in tags_db.items() if t in names))
     down = set().union(*(pids for t, pids in neg_db.items() if t in names))
     with db.get_refs_db() as rdb:
@@ -900,13 +909,15 @@ def _tags_fingerprint():
 
 def _rated(scope=None):
     """
-    papers to hide as already rated: saved to any tag, or marked not for / neutral for one
-    of the tags in scope (None: any). a paper marked "not for" one tag can still be right
-    for another, so it only disappears where it was rated
+    papers to hide as already rated: saved to any of the user's own tags (or to one in scope),
+    or marked not for / neutral for one of the tags in scope (None: the own ones). a paper
+    marked "not for" one tag can still be right for another, so it only disappears where it
+    was rated; and what an agent saved to its agent: tags the user hasn't seen
     """
-    neg, seen = get_neg_tags(), get_seen_tags()
-    names = set(neg) | set(seen) if scope is None else scope
-    return set().union(*get_tags().values(), *(neg.get(t, ()) for t in names), *(seen.get(t, ()) for t in names))
+    tags, neg, seen = get_tags(), get_neg_tags(), get_seen_tags()
+    names = own_tags(tags, neg, seen) if scope is None else scope
+    saved = (pids for t, pids in tags.items() if t in names or not t.startswith(db.AGENT_TAG_PREFIX))
+    return set().union(*saved, *(neg.get(t, ()) for t in names), *(seen.get(t, ()) for t in names))
 
 
 def _filtered(pids, opt_time_filter, skip_have, scope=None, published=False):
@@ -978,7 +989,7 @@ def _ranked(
 ):
     """the ranked and filtered results of a query (model rankings: the best `limit`), see main()"""
     if opt_rank == 'tags' and opt_mix == 'turns':
-        tag_names = set(get_tags()) if opt_tags == 'all' else {t for t in opt_tags.split(',') if t}
+        tag_names = own_tags(get_tags()) if opt_tags == 'all' else {t for t in opt_tags.split(',') if t}
         if len(tag_names) > 1:
             return _ranked_tags_in_turns(
                 tag_names, opt_time_filter, opt_skip_have, C, opt_feats, opt_model, limit, opt_published
@@ -1504,7 +1515,7 @@ def stats():
 @app.route('/about')
 def about():
     context = default_context()
-    return render_template('about.html', **context)
+    return render_template('about.html', categories=categories_text(), **context)
 
 
 # -----------------------------------------------------------------------------

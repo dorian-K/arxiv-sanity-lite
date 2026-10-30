@@ -18,32 +18,62 @@
     </section>
     {% endif %}
     <section class="card prose">
-        <h1>Use the site from an AI agent</h1>
+        <h1>Use Arxiv Resanity with AI agents</h1>
         <div>
-            AI agents such as Claude Code can search this site, find related work and, with your
-            permission, read and organize your tags. They connect over MCP at <code>{{ base }}/mcp</code>,
-            or use the same tools as JSON at <code>{{ base }}/api</code> (<a href="/llms.txt">llms.txt</a>
-            describes everything).
+            An AI agent such as Claude can use this site for you: search it, find related work from a few
+            example papers, and, if you let it, read and organize your tags, reading list and notes. You
+            ask in plain language; the agent calls the site's tools and reports back.
         </div>
         <div>
-            The best tool for research is <b>rank_like</b>: give it a few papers you know are relevant and
-            it ranks every paper here by them, the way your tags rank new papers. Searching and ranking
-            work without an account:
+            Its strongest tool is <b>rank_like</b>. Give it a few papers you know are relevant, and it
+            ranks every paper here by them, the way your tags rank new papers. That finds work that shares
+            no keywords with what you would have searched for. The agent can repeat it, adding good hits
+            and steering away from off-topic ones.
         </div>
+
+        <h2>Connect</h2>
+        <p><b>claude.ai and the Claude apps.</b> Settings → Connectors → Add custom connector, with the address</p>
+        <pre class="codeblock">{{ base }}/mcp/me</pre>
+        <p>Claude sends you to this site to log in and choose what it may do (read only, or also make
+            changes). The connection then appears under <a href="#tokens">access tokens</a> below, where you
+            can end it any time.</p>
+        <p><b>Claude Code.</b> For searching and ranking, no account is needed:</p>
         <pre class="codeblock">claude mcp add --transport http resanity {{ base }}/mcp</pre>
-        <div>
-            <b>In claude.ai</b> (and the Claude apps): Settings → Connectors → Add custom connector, with the
-            address <code>{{ base }}/mcp/me</code>. Claude then sends you here to log in and decide what it
-            may do; it shows up below as a token you can revoke.
-        </div>
-        <div>
-            For your own tags, reading list, recommendations and notes, the agent needs an <b>access
-            token</b>. It acts as you: read-only, unless you allow changes. Anyone with the token can do
-            what it allows, so keep it like a password and revoke it when it's no longer needed. What an
-            agent reads goes to whoever runs the agent (for example Anthropic, for Claude).
-        </div>
+        <p>For your own tags, make an access token below and add it as a header; the page then shows the
+            exact command.</p>
+        <p><b>Other agents and scripts.</b> Any MCP client can use <code>{{ base }}/mcp</code> (streamable
+            HTTP) with the header <code>Authorization: Bearer &lt;token&gt;</code>. Without MCP, the same tools
+            are plain JSON under <code>{{ base }}/api</code>, and <a href="/llms.txt">llms.txt</a> describes
+            them for agents. For example:</p>
+        <pre class="codeblock">curl "{{ base }}/api/rank_like?like=2006.11239,2112.10752&amp;days=90&amp;limit=5&amp;abstracts=false"</pre>
+
+        <h2>Things to ask</h2>
+        <ul>
+            <li>"These papers are what I'm working on: 2006.11239, 2011.13456, 2112.10752. Find the most
+                relevant papers of the last three months and tell me what's new in them."</li>
+            <li>"Go through my reading list for the tag <i>diffusion</i>, pick the five that matter most for
+                my project, and write a note on each saying why."</li>
+            <li>"Look at this week's recommendations and save the ones about video generation to a new tag
+                <i>video</i>."</li>
+            <li>"Which papers do my saved papers in <i>robotics</i> cite most that I haven't saved yet?"</li>
+            <li>"I've read 2401.12345 and 2402.23456, mark them as read."</li>
+        </ul>
+
+        <h2>Good to know</h2>
+        <ul>
+            <li>A token acts as you. It is read-only unless you allow changes, and even then it can never
+                delete a tag. Keep it like a password, and revoke it when you no longer need it.</li>
+            <li>What the agent reads (your tags, notes, the papers) goes to whoever runs it, for Claude that
+                is Anthropic (<a href="/privacy">privacy</a>).</li>
+            <li>The site covers machine learning, vision, language, AI and robotics papers (cs.LG, cs.CV,
+                cs.CL, cs.AI, cs.NE, cs.RO). With changes allowed, an agent can add any other arXiv paper by id.</li>
+            <li>References and "cited by" are only known for papers this site has processed: the ones its
+                users saved.</li>
+            <li>Agents have rate limits like everyone; without an account, they can rank by example papers
+                30 times a minute.</li>
+        </ul>
     </section>
-    <section class="card">
+    <section class="card" id="tokens">
         <h1>Access tokens</h1>
         {% if error %}<p class="form-error">{{ error }}</p>{% endif %}
         {% if not can_make %}

@@ -373,6 +373,8 @@ input:focus, select:focus, .btn:focus-visible, .iconbtn:focus-visible {
     overflow: hidden;
     cursor: pointer;
 }
+.rel_read { display: inline-flex; align-items: center; gap: 4px; flex: none; font-size: 13px; color: var(--muted); cursor: pointer; white-space: nowrap; }
+.rel_read input { margin: 0; cursor: pointer; }
 .rel_links { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 8px; font-size: 14px; }
 
 .rel_img { float: right; margin: 0 0 8px 16px; }

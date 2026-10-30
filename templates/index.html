@@ -82,6 +82,8 @@ var move_page = function(int_offset) {
                title="new papers that match {{ 'your tags' if all else 'this tag' }}, best first">Recommended</a>
             <a href="/?rank=saved&tags={{ gvars.tags | urlencode }}{{ '&published=yes' if gvars.published }}" class="{{ 'active' if gvars.rank == 'saved' }}"
                title="the papers you saved{{ where }}">Saved ({{ n_saved }})</a>
+            <a href="/?rank=unread&tags={{ gvars.tags | urlencode }}{{ '&published=yes' if gvars.published }}" class="{{ 'active' if gvars.rank == 'unread' }}"
+               title="the papers you saved{{ where }} that you haven't marked as read">To read ({{ n_unread }})</a>
             <a href="/?rank=down&tags={{ gvars.tags | urlencode }}{{ '&published=yes' if gvars.published }}" class="{{ 'active' if gvars.rank == 'down' }}"
                title="papers you marked as not for {{ 'a tag' if all else 'this tag' }}">Not for {{ 'a tag' if all else 'this tag' }} ({{ n_down }})</a>
             <a href="/?rank=cited&tags={{ gvars.tags | urlencode }}{{ '&published=yes' if gvars.published }}" class="{{ 'active' if gvars.rank == 'cited' }}"
@@ -108,6 +110,8 @@ var move_page = function(int_offset) {
         {% else %}
         Ranked by how well they match the {{ n_saved }} papers you saved here.{% if not readonly and not viewing %} 👍 / 👎 teach it what you want.{% endif %}
         {% endif %}
+        {% elif gvars.rank == 'unread' %}
+        Saved papers you haven't read yet, newest first.{% if not readonly and not viewing %} Tick "read" on one when you have; it stays until you reload.{% endif %}
         {% elif gvars.rank == 'cited' %}
         Papers that the papers you saved{{ where }} cite, the ones most of them cite first; the ones you saved are left out.
         {% elif gvars.rank == 'down' %}

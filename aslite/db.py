@@ -391,6 +391,13 @@ CREATE TABLE IF NOT EXISTS digests (
     days INTEGER NOT NULL,
     sections TEXT NOT NULL
 ) WITHOUT ROWID;
+-- papers the user has read (the "read" box on a card), for the "To read" tab
+CREATE TABLE IF NOT EXISTS reads (
+    user TEXT NOT NULL,
+    pid TEXT NOT NULL,
+    time REAL NOT NULL,
+    PRIMARY KEY (user, pid)
+) WITHOUT ROWID;
 -- papers per tag in the digest, where the user changed it (0 = leave the tag out)
 CREATE TABLE IF NOT EXISTS digest_sizes (
     user TEXT NOT NULL,
@@ -504,6 +511,7 @@ def delete_user(name):
                 ('digests', 'user'),
                 ('digest_sizes', 'user'),
                 ('fetches', 'user'),
+                ('reads', 'user'),
                 ('users', 'name'),
             ):
                 con.execute(f'DELETE FROM {table} WHERE {col} = ?', (name,))
@@ -527,6 +535,10 @@ def export_user(name):
         'last_active': u.get('last_active'),
         'shares_tags_read_only': bool(u.get('public')),
         'tags': tags,
+        'read': [
+            {'pid': p, 'time': t}
+            for p, t in _query('SELECT pid, time FROM reads WHERE user = ? ORDER BY time', (name,))
+        ],
         'latest_digest': get_digest(name),
         'digest_papers_per_tag': get_digest_sizes(name),
         'arxiv_fetches_last_two_days': [
@@ -580,6 +592,18 @@ def delete_tag(user, tag):
     existed = _run('DELETE FROM tags WHERE user = ? AND tag = ?', (user, tag)) > 0
     delete_models(user, tag)
     return existed
+
+
+def get_reads(user):
+    """the papers the user marked as read"""
+    return {r[0] for r in _query('SELECT pid FROM reads WHERE user = ?', (user,))}
+
+
+def set_read(user, pid, read=True):
+    if read:
+        _run('INSERT OR IGNORE INTO reads (user, pid, time) VALUES (?, ?, ?)', (user, pid, time.time()))
+    else:
+        _run('DELETE FROM reads WHERE user = ? AND pid = ?', (user, pid))
 
 
 def get_digest_sizes(user):

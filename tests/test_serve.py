@@ -509,3 +509,48 @@ def test_stats_show_page_speed_and_background_work(client, corpus):
         assert label in page
     assert 'Rebuilding the index' in page and 'MB' in page  # conftest's compute.py run
     assert '400 papers still without an embedding, about 50.0 days' in page
+
+
+def test_read_marks_and_the_to_read_tab(client, corpus):
+    pids = sorted(corpus)[:3]
+    login(client)
+    for p in pids:
+        client.post(f'/add/{p}/cv')
+    client.post(f'/add/{pids[2]}/nlp')
+    assert client.post(f'/read/{pids[0]}').data == b'ok'
+
+    def to_read(tags):
+        return {p['id'] for p in client.get(f'/?rank=unread&tags={tags}&format=json').get_json()['papers']}
+
+    assert to_read('cv') == set(pids[1:]) and to_read('nlp') == {pids[2]} and to_read('all') == set(pids[1:])
+    page = client.get('/?rank=saved&tags=cv').data.decode()
+    assert 'To read (2)' in page and 'Saved (3)' in page
+    marks = {p['id']: p['read'] for p in client.get('/?rank=saved&tags=cv&format=json').get_json()['papers']}
+    assert marks == {pids[0]: True, pids[1]: False, pids[2]: False}
+    client.post(f'/read/{pids[2]}')
+    assert to_read('all') == {pids[1]}
+    client.post(f'/unread/{pids[0]}')
+    assert to_read('cv') == {pids[0], pids[1]}
+    assert client.post('/read/9999.99999').data.startswith(b'error')
+    assert [r['pid'] for r in client.get('/export').get_json()['read']] == [pids[2]]
+    client.post('/logout')
+    assert client.post(f'/read/{pids[1]}').data.startswith(b'error, not logged in')
+
+
+def test_old_users_db_gets_the_reads_table(tmp_path, monkeypatch):
+    """a users.sqlite from before read marks: the table appears, the old tags stay"""
+    import sqlite3
+
+    from aslite import db
+
+    path = str(tmp_path / 'users.sqlite')
+    con = sqlite3.connect(path)
+    con.executescript(db.USERS_SCHEMA + 'DROP TABLE reads;')
+    assert 'reads' not in {r[0] for r in con.execute("SELECT name FROM sqlite_master")}
+    con.execute("INSERT INTO tags (user, tag, pid, neg) VALUES ('alice', 'cv', '2601.00001', 0)")
+    con.commit()
+    con.close()
+    monkeypatch.setattr(db, 'USERS_DB_FILE', path)
+    assert db.get_reads('alice') == set()
+    db.set_read('alice', '2601.00001')
+    assert db.get_reads('alice') == {'2601.00001'} and db.get_tags('alice') == {'cv': {'2601.00001'}}

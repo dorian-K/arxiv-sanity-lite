@@ -30,7 +30,7 @@ const tagUrl = (tag, days = FOR_YOU_DAYS) => '/?rank=tags&tags=' + encodeURIComp
     + (days ? '&time_filter=' + days : '') + '&skip_have=yes';
 
 // a chip in the tag row switches the tag and keeps what is shown: the same tab, the same time window
-const chipUrl = tag => (['saved', 'down', 'cited'].includes(gvars.rank)
+const chipUrl = tag => (['saved', 'unread', 'down', 'cited'].includes(gvars.rank)
     ? '/?rank=' + gvars.rank + '&tags=' + encodeURIComponent(tag)
     : tagUrl(tag, gvars.rank === 'tags' ? gvars.time_filter : FOR_YOU_DAYS)) + (gvars.published ? '&published=yes' : '');
 
@@ -171,6 +171,7 @@ const Paper = ({ paper: p, quickTag }) => {
     const [utags, setUtags] = useState(p.utags);
     const [ntags, setNtags] = useState(p.ntags);
     const [stags, setStags] = useState(p.stags || []);
+    const [read, setRead] = useState(Boolean(p.read));
     const [picker, setPicker] = useState(null); // null | 'add' | 'neg'
     const [open, setOpen] = useState(false);
     const [expanded, setExpanded] = useState(false); // one paper opened in the compact view
@@ -193,6 +194,16 @@ const Paper = ({ paper: p, quickTag }) => {
     const notFor = tag => change('/addneg/' + enc(tag), () => {
         setNtags(n => withTag(n, tag)); setUtags(u => without(u, tag)); setPicker(null);
     });
+    // shown at once, undone if the server says no
+    const toggleRead = () => {
+        const was = read;
+        setRead(!was);
+        tagRequest((was ? '/unread/' : '/read/') + p.id).catch(() => setRead(was));
+    };
+    // on saved papers (and any already marked): the To read tab is made of saved ones
+    const readBox = canEdit && (utags.length || read) ? html`
+        <label class="rel_read" title="tick it once you've read the paper: it leaves your To read list">
+            <input type="checkbox" checked=${read} onChange=${toggleRead} /> read</label>` : null;
     const unsave = tag => change('/sub/' + enc(tag), () => setUtags(u => without(u, tag)));
     const undoNeg = tag => change('/subneg/' + enc(tag), () => setNtags(n => without(n, tag)));
     const toggle = mode => setPicker(m => (m === mode ? null : mode));
@@ -227,6 +238,7 @@ const Paper = ({ paper: p, quickTag }) => {
             ${utags.length ? html`<span class="rel_saved" title=${'saved to ' + utags.join(', ')}>★</span>` : null}
             ${p.venue ? html`<span class="rel_venue_c" title=${p.venue + ' (' + VENUE_NOTE + ')'}>✓</span>` : null}
             <span class="rel_time">${p.time}</span>
+            ${readBox}
             ${canEdit && quickTag ? html`<${QuickVote} pid=${p.id} tag=${quickTag} state=${state} onChange=${onVote} compact />` : null}
         </article>`;
     }
@@ -274,6 +286,7 @@ const Paper = ({ paper: p, quickTag }) => {
             ${long ? html`<button class="linkbtn" onClick=${() => setOpen(o => !o)}>${open ? 'show less' : 'show more'}</button>` : null}
             <a href=${'https://arxiv.org/pdf/' + p.id}>pdf</a>
             <a class="rel_more" href=${'/?rank=pid&pid=' + p.id}>similar</a>
+            ${readBox}
             ${open || !long ? html`<a class="rel_inspect" href=${'/inspect?pid=' + p.id} title="the words this paper is indexed by">words</a>` : null}
         </div>
     </article>`;
@@ -370,7 +383,7 @@ document.addEventListener('click', e => {
 });
 
 const Tag = ({ tag: t }) => {
-    const active = ['tags', 'saved', 'down', 'cited'].includes(gvars.rank) && gvars.tags === t.name;
+    const active = ['tags', 'saved', 'unread', 'down', 'cited'].includes(gvars.rank) && gvars.tags === t.name;
     return html`
         <span class=${'chip chip-tag chip-count' + (t.name === 'all' ? ' rel_utag_all' : '') + (active ? ' active' : '')}>
             <a href=${chipUrl(t.name)}>${t.name === 'all' ? 'All tags' : t.name}${t.n !== undefined ? html` <small>${t.n}</small>` : null}</a>

@@ -176,6 +176,14 @@ def get_neg_tags():
     return g._neg_tags
 
 
+def get_reads():
+    if g.owner is None:
+        return set()
+    if not hasattr(g, '_reads'):
+        g._reads = db.get_reads(g.owner)
+    return g._reads
+
+
 def get_features():
     """the features, the same ones for the whole request even if compute.py swaps in new ones meanwhile"""
     if not hasattr(g, '_features'):
@@ -436,6 +444,7 @@ def render_pid(pid, d=None):
         stags=[t for t, pids in get_seen_tags().items() if pid in pids],
         summary=d['summary'],
         venue=d.get('venue', ''),
+        read=pid in get_reads(),
         thumb_url=t_url,
         thumb_license=t_label,  # the image is the authors' work under this license: credit it
         thumb_license_url=t_license,
@@ -727,6 +736,14 @@ def saved_rank(tags: str = '', neg=False):
     return pids, [(tnow - times.get(p, tnow)) / 86400 for p in pids]
 
 
+def unread_rank(tags: str = ''):
+    """the papers saved to these tags that aren't marked as read, newest first"""
+    pids, scores = saved_rank(tags)
+    reads = get_reads()
+    keep = [i for i, p in enumerate(pids) if p not in reads]
+    return [pids[i] for i in keep], [scores[i] for i in keep]
+
+
 def cited_rank(tags: str = ''):
     """
     (pids, scores, info): the papers on this site that the papers saved to these tags cite, cited
@@ -791,7 +808,7 @@ def default_context():
     return context
 
 
-RANKS = ('search', 'tags', 'saved', 'down', 'cited', 'pid', 'time', 'random')
+RANKS = ('search', 'tags', 'saved', 'unread', 'down', 'cited', 'pid', 'time', 'random')
 # training a model over every paper takes seconds on a big corpus: the page comes back at
 # once with a placeholder and fetches these results in the background (?format=json)
 SLOW_RANKS = ('tags', 'pid')
@@ -938,6 +955,8 @@ def _ranked(
         pids, scores, cited = cited_rank(tags=opt_tags)
     elif opt_rank in ('saved', 'down'):
         pids, scores = saved_rank(tags=opt_tags, neg=opt_rank == 'down')
+    elif opt_rank == 'unread':
+        pids, scores = unread_rank(tags=opt_tags)
     elif opt_rank == 'time':
         pids, scores = time_rank(opt_time_filter)
         opt_time_filter = ''  # done
@@ -945,7 +964,7 @@ def _ranked(
         pids, scores = random_rank(opt_time_filter)
         opt_time_filter = ''
 
-    skip_have = opt_skip_have == 'yes' and opt_rank not in ('saved', 'down', 'cited')
+    skip_have = opt_skip_have == 'yes' and opt_rank not in ('saved', 'unread', 'down', 'cited')
     if opt_time_filter or skip_have or opt_published:
         keep = _filtered(pids, opt_time_filter, skip_have, published=opt_published)
         pids, scores = [pids[i] for i in keep], [scores[i] for i in keep]
@@ -1148,10 +1167,13 @@ def main():
         )
     )
     # the page about one tag (or 'all'): tabs for its recommendations and its saved papers
-    tag_names = [t for t in opt_tags.split(',') if t] if opt_rank in ('tags', 'saved', 'down', 'cited') else []
+    tag_names = (
+        [t for t in opt_tags.split(',') if t] if opt_rank in ('tags', 'saved', 'unread', 'down', 'cited') else []
+    )
     context['tag_view'] = bool(tag_names) and all(t == 'all' or t in tags for t in tag_names)
     context['n_saved'] = len(saved_rank(opt_tags)[0]) if context['tag_view'] else 0
     context['n_down'] = len(saved_rank(opt_tags, neg=True)[0]) if context['tag_view'] else 0
+    context['n_unread'] = len(unread_rank(opt_tags)[0]) if context['tag_view'] else 0
     try:
         context['n_cited'] = len(cited_rank(opt_tags)[0]) if context['tag_view'] else 0
     except Exception as e:  # refs.sqlite trouble must never break the page itself
@@ -1487,6 +1509,25 @@ def subneg(pid=None, tag=None):
         return "user hasn't downvoted paper %s for tag %s" % (pid, tag)
     prefit_later(g.user, tag, 'all')
     return "ok removed downvote of pid %s for tag %s" % (pid, tag)
+
+
+@app.route('/read/<pid>', methods=['POST'])
+def read(pid=None):
+    """the user has read this paper: it leaves the To read tab"""
+    if g.user is None:
+        return "error, not logged in"
+    if pid not in get_papers():
+        return "error, unknown paper %s" % (pid,)
+    db.set_read(g.user, pid)
+    return "ok"
+
+
+@app.route('/unread/<pid>', methods=['POST'])
+def unread(pid=None):
+    if g.user is None:
+        return "error, not logged in"
+    db.set_read(g.user, pid, False)
+    return "ok"
 
 
 @app.route('/seen/<pid>/<tag>', methods=['POST'])

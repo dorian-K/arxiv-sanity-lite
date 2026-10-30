@@ -176,6 +176,12 @@ CATEGORY_NAMES = {
     'cs.RO': 'robotics',
     'cs.SD': 'sound',
     'eess.AS': 'audio and speech',
+    'eess.IV': 'image and video processing',
+    'cs.IR': 'information retrieval',
+    'cs.GR': 'graphics',
+    'cs.MA': 'multi-agent systems',
+    'stat.ML': 'statistical machine learning',
+    'q-bio.NC': 'computational neuroscience',
 }
 CATEGORIES = set(CATEGORY_NAMES)
 

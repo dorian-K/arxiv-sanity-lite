@@ -100,6 +100,32 @@ const openImage = (p, e) => {
     imageView.showModal();
 };
 
+// the user's note on a paper: shown under the abstract, edited in place (agents can write them too)
+const NoteBox = ({ pid, note, setNote, editing, setEditing }) => {
+    const [text, setText] = useState(note);
+    const [busy, setBusy] = useState(false);
+    if (!editing) {
+        return note ? html`<div class="rel_note" title="your note (only you see it)" onClick=${() => { setText(note); setEditing(true); }}>${note}</div>` : null;
+    }
+    const save = () => {
+        setBusy(true);
+        const body = new URLSearchParams({ text });
+        fetch('/note/' + pid, { method: 'POST', body })
+            .then(r => r.text()).then(t => {
+                if (!t.startsWith('ok')) throw new Error(t);
+                setNote(text.trim()); setEditing(false);
+            })
+            .catch(e => alert(e.message || 'Could not reach the server, so the note was not saved.'))
+            .finally(() => setBusy(false));
+    };
+    return html`<div class="rel_note_edit">
+        <textarea class="form-control" rows="3" maxlength="5000" placeholder="Why you saved it, what to remember… (only you see it)"
+                  value=${text} onInput=${e => setText(e.target.value)} />
+        <div><button class="btn btn-small btn-primary" disabled=${busy} onClick=${save}>Save note</button>
+            <button class="btn btn-small" onClick=${() => setEditing(false)}>Cancel</button></div>
+    </div>`;
+};
+
 const SHOW_SCORE = ['tags', 'pid']; // (search scores are raw text-match numbers, meaningless to read)
 
 // a rank fraction as people read it: 0.0031 -> "top 0.3%"
@@ -172,6 +198,8 @@ const Paper = ({ paper: p, quickTag }) => {
     const [ntags, setNtags] = useState(p.ntags);
     const [stags, setStags] = useState(p.stags || []);
     const [read, setRead] = useState(Boolean(p.read));
+    const [note, setNote] = useState(p.note || '');
+    const [editingNote, setEditingNote] = useState(false);
     const [picker, setPicker] = useState(null); // null | 'add' | 'neg'
     const [open, setOpen] = useState(false);
     const [expanded, setExpanded] = useState(false); // one paper opened in the compact view
@@ -236,6 +264,7 @@ const Paper = ({ paper: p, quickTag }) => {
             ${score}
             <a class="rel_title_c" href=${'https://arxiv.org/abs/' + p.id}><${MathText} text=${p.title} /></a>
             ${utags.length ? html`<span class="rel_saved" title=${'saved to ' + utags.join(', ')}>★</span>` : null}
+            ${note ? html`<span class="rel_note_c" title=${'your note: ' + note}>✎</span>` : null}
             ${p.venue ? html`<span class="rel_venue_c" title=${p.venue + ' (' + VENUE_NOTE + ')'}>✓</span>` : null}
             <span class="rel_time">${p.time}</span>
             ${readBox}
@@ -282,10 +311,14 @@ const Paper = ({ paper: p, quickTag }) => {
         <div class=${'rel_abs' + (long && !open ? ' clamped' : '')} onClick=${() => long && !open && setOpen(true)}>
             <${MathText} text=${p.summary} />
         </div>
+        ${canEdit || note ? html`<${NoteBox} pid=${p.id} note=${note} setNote=${setNote}
+            editing=${canEdit && editingNote} setEditing=${setEditingNote} />` : null}
         <div class="rel_links">
             ${long ? html`<button class="linkbtn" onClick=${() => setOpen(o => !o)}>${open ? 'show less' : 'show more'}</button>` : null}
             <a href=${'https://arxiv.org/pdf/' + p.id}>pdf</a>
             <a class="rel_more" href=${'/?rank=pid&pid=' + p.id}>similar</a>
+            ${canEdit && !note && !editingNote ? html`<button class="linkbtn" title="a note for yourself on this paper (only you see it)"
+                onClick=${() => setEditingNote(true)}>+ note</button>` : null}
             ${readBox}
             ${open || !long ? html`<a class="rel_inspect" href=${'/inspect?pid=' + p.id} title="the words this paper is indexed by">words</a>` : null}
         </div>

@@ -8,6 +8,7 @@ ideas:
 """
 
 import os
+import sys
 import re
 import json
 import hashlib
@@ -97,6 +98,9 @@ RATE_LIMITS = {
     'check': (30, 3600),  # a tag check trains 5 models
     'copy': (30, 3600),  # copying someone's shared tag into one's own
     'confirm': (5, 86400),  # confirmation mails, so the email form can't be used to mail people
+    'agent': (300, 60),  # every call of an agent tool (agents.py), on top of its own kind
+    'agent_rank': (30, 60),  # rank_like without a token: a model fit per call, per ip
+    'agent_write': (120, 60),
 }
 RATE_LIMITS_ON = os.environ.get('RATE_LIMITS', '1') != '0'
 _buckets = {}
@@ -182,6 +186,19 @@ def get_reads():
     if not hasattr(g, '_reads'):
         g._reads = db.get_reads(g.owner)
     return g._reads
+
+
+def own_page():
+    """whether the page shows the user's own data to themselves (or their agent): notes are only shown then"""
+    return bool(g.user) and g.owner == g.user and (g.token or not g.readonly)
+
+
+def get_notes():
+    if not own_page():
+        return {}
+    if not hasattr(g, '_notes'):
+        g._notes = db.get_notes(g.user)
+    return g._notes
 
 
 def get_features():
@@ -287,6 +304,11 @@ def _start_session(user, readonly=False):
 
 
 SHAREABLE = ('main', 'digest_page', 'tag_check')  # pages a ?u= link can show for another user
+AGENT_ENDPOINTS = (
+    'agents.mcp',
+    'agents.api',
+    'agents.api_index',
+)  # agents.py: access tokens only, never the session cookie
 
 
 @app.before_request
@@ -299,8 +321,21 @@ def before_request():
 
     g.user = session.get('user', None)
     g.readonly = bool(session.get('readonly'))
+    g.token = False
 
-    if g.user:
+    # agents (agents.py) send an access token instead of a cookie: it acts as its user, read-only
+    # unless it was made with write access. their endpoints ignore the cookie, so a browser
+    # can't be made to call them as its logged-in user
+    auth = request.headers.get('Authorization', '')
+    if auth[:7].lower() == 'bearer ':
+        found = db.check_token(auth[7:].strip())
+        if found is None:
+            return {'error': 'invalid or revoked access token'}, 401, {'WWW-Authenticate': 'Bearer'}
+        g.user, g.readonly, g.token = found[0], not found[1], True
+    elif request.endpoint in AGENT_ENDPOINTS:
+        g.user, g.readonly = None, False
+
+    if g.user and not g.token:
         # a session is only as good as the account it was made for: deleting the account,
         # changing its password or a new account under the same name ends it
         u = db.get_user(g.user)
@@ -311,7 +346,15 @@ def before_request():
     if g.user and g.readonly:
         # a read-only view of someone's tags (login without password, if they allow it):
         # ends as soon as they stop sharing, and can't change anything
-        if request.method == 'POST' and request.endpoint not in ('login', 'logout', 'confirm_email', 'unsubscribe'):
+        if request.method == 'POST' and request.endpoint not in (
+            'login',
+            'logout',
+            'confirm_email',
+            'unsubscribe',
+            *AGENT_ENDPOINTS,  # they check the token's scope per call
+        ):
+            if g.token:
+                return "error, this access token is read-only", 403
             return "error, this is a read-only view: log in with the password to make changes", 403
     elif g.user:
         # record activity on this user so we can reserve periodic
@@ -445,6 +488,7 @@ def render_pid(pid, d=None):
         summary=d['summary'],
         venue=d.get('venue', ''),
         read=pid in get_reads(),
+        note=get_notes().get(pid, ''),
         thumb_url=t_url,
         thumb_license=t_label,  # the image is the authors' work under this license: credit it
         thumb_license_url=t_license,
@@ -1332,6 +1376,11 @@ STAT_LABELS = {
     'list:random': 'Random',
     'list:saved': 'Saved papers of a tag',
     'list:down': 'Not for this tag',
+    'list:unread': 'To read',
+    'agent:search': 'Agent: search',
+    'agent:rank_like': 'Agent: rank like these papers',
+    'agent:recommend': 'Agent: recommendations',
+    'agents.mcp': 'Agent: MCP requests (all)',
     'model training': 'Training a model (after a vote, or while a page waits)',
     'add': 'Vote: save',
     'sub': 'Vote: unsave',
@@ -1522,6 +1571,17 @@ def read(pid=None):
     return "ok"
 
 
+@app.route('/note/<pid>', methods=['POST'])
+def note(pid=None):
+    """the user's note on a paper (empty deletes it)"""
+    if g.user is None:
+        return "error, not logged in"
+    if pid not in get_papers():
+        return "error, unknown paper %s" % (pid,)
+    db.set_note(g.user, pid, request.form.get('text', ''))
+    return "ok"
+
+
 @app.route('/unread/<pid>', methods=['POST'])
 def unread(pid=None):
     if g.user is None:
@@ -1590,6 +1650,37 @@ def copy_tag():
     return redirect('/?rank=tags&tags=%s&skip_have=yes' % quote(new, safe=''))
 
 
+def fetch_missing(wanted):
+    """
+    fetches the papers of `wanted` (arXiv ids) that aren't here from the arXiv API, within the
+    user's and everyone's daily limits (one call per 100 ids, through db.arxiv_slot). returns
+    sets: (were here, fetched now, over the limit, arXiv not reached); the rest weren't found
+    """
+    pdb = get_papers()
+    have = set(pdb.get_many(wanted))
+    missing = [p for p in wanted if p not in have]
+    day_ago = time.time() - 86400
+    budget = min(FETCH_LIMIT_USER - db.count_fetches(day_ago, g.user), FETCH_LIMIT_TOTAL - db.count_fetches(day_ago))
+    to_fetch, over = missing[: max(0, budget)], set(missing[max(0, budget) :])
+    fetched, failed = set(), set()
+    for i in range(0, len(to_fetch), 100):
+        batch = to_fetch[i : i + 100]
+        try:
+            with db.arxiv_slot():
+                found = fetch_papers_by_id(batch)
+        except Exception as e:  # arXiv down or rate limiting us: report it, don't retry here
+            print("arxiv fetch failed: %s" % (e,))
+            failed |= set(batch)
+            continue
+        pdb.upsert(found.values())
+        for pid in batch:
+            db.log_fetch(g.user, pid)  # misses count too: each one was a request
+        fetched |= set(found)
+    if fetched:
+        db.request_compute()
+    return have, fetched, over, failed
+
+
 @app.route('/import', methods=['GET', 'POST'])
 def import_papers():
     """add papers by arXiv url or id, one per line, fetching the ones we don't have"""
@@ -1628,27 +1719,7 @@ def import_papers():
     wanted = list(dict.fromkeys(wanted))
 
     pdb = get_papers()
-    have = set(pdb.get_many(wanted))
-    missing = [p for p in wanted if p not in have]
-    day_ago = time.time() - 86400
-    budget = min(FETCH_LIMIT_USER - db.count_fetches(day_ago, g.user), FETCH_LIMIT_TOTAL - db.count_fetches(day_ago))
-    to_fetch, over = missing[: max(0, budget)], set(missing[max(0, budget) :])
-    fetched, failed = set(), set()
-    for i in range(0, len(to_fetch), 100):
-        batch = to_fetch[i : i + 100]
-        try:
-            with db.arxiv_slot():
-                found = fetch_papers_by_id(batch)
-        except Exception as e:  # arXiv down or rate limiting us: report it, don't retry here
-            print("arxiv fetch failed: %s" % (e,))
-            failed |= set(batch)
-            continue
-        pdb.upsert(found.values())
-        for pid in batch:
-            db.log_fetch(g.user, pid)  # misses count too: each one was a request
-        fetched |= set(found)
-    if fetched:
-        db.request_compute()
+    have, fetched, over, failed = fetch_missing(wanted)
 
     for r in results:
         pid = r[1]
@@ -1953,3 +2024,9 @@ def privacy():
 @app.route('/imprint')
 def imprint():
     return render_template('imprint.html', operator=OPERATOR, **default_context())
+
+
+# the tools for AI agents (/mcp, /api, /llms.txt, /agents): registers its routes on app
+import agents  # noqa: E402
+
+agents.register(sys.modules[__name__])

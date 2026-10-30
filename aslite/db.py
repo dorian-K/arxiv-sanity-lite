@@ -21,6 +21,7 @@ import re
 import json
 import time
 import pickle
+import hashlib
 import fcntl
 import shutil
 import sqlite3
@@ -409,6 +410,23 @@ CREATE TABLE IF NOT EXISTS reads (
     time REAL NOT NULL,
     PRIMARY KEY (user, pid)
 ) WITHOUT ROWID;
+-- the user's own notes on papers ("why I saved this", a summary), by them or their agents
+CREATE TABLE IF NOT EXISTS notes (
+    user TEXT NOT NULL,
+    pid TEXT NOT NULL,
+    text TEXT NOT NULL,
+    time REAL NOT NULL,
+    PRIMARY KEY (user, pid)
+) WITHOUT ROWID;
+-- access tokens for agents (/mcp, /api): only the sha256 of the token is stored
+CREATE TABLE IF NOT EXISTS tokens (
+    hash TEXT PRIMARY KEY,
+    user TEXT NOT NULL,
+    name TEXT NOT NULL,
+    write INTEGER NOT NULL,  -- 1: may change tags, read marks and notes; 0: read only
+    created REAL NOT NULL,
+    last_used REAL NOT NULL DEFAULT 0
+) WITHOUT ROWID;
 -- papers per tag in the digest, where the user changed it (0 = leave the tag out)
 CREATE TABLE IF NOT EXISTS digest_sizes (
     user TEXT NOT NULL,
@@ -523,6 +541,8 @@ def delete_user(name):
                 ('digest_sizes', 'user'),
                 ('fetches', 'user'),
                 ('reads', 'user'),
+                ('notes', 'user'),
+                ('tokens', 'user'),
                 ('users', 'name'),
             ):
                 con.execute(f'DELETE FROM {table} WHERE {col} = ?', (name,))
@@ -546,6 +566,14 @@ def export_user(name):
         'last_active': u.get('last_active'),
         'shares_tags_read_only': bool(u.get('public')),
         'tags': tags,
+        'notes': [
+            {'pid': p, 'text': t, 'time': w}
+            for p, t, w in _query('SELECT pid, text, time FROM notes WHERE user = ? ORDER BY time', (name,))
+        ],
+        'agent_tokens': [
+            {'name': n, 'write': bool(w), 'created': c, 'last_used': u or None}
+            for n, w, c, u in _query('SELECT name, write, created, last_used FROM tokens WHERE user = ?', (name,))
+        ],
         'read': [
             {'pid': p, 'time': t}
             for p, t in _query('SELECT pid, time FROM reads WHERE user = ? ORDER BY time', (name,))
@@ -615,6 +643,79 @@ def set_read(user, pid, read=True):
         _run('INSERT OR IGNORE INTO reads (user, pid, time) VALUES (?, ?, ?)', (user, pid, time.time()))
     else:
         _run('DELETE FROM reads WHERE user = ? AND pid = ?', (user, pid))
+
+
+NOTE_MAX = 5000
+
+
+def get_notes(user, pids=None):
+    """{pid: note} of the user (of these papers)"""
+    if pids is None:
+        return dict(_query('SELECT pid, text FROM notes WHERE user = ?', (user,)))
+    pids, out = list(pids), {}
+    for i in range(0, len(pids), 500):
+        chunk = pids[i : i + 500]
+        q = f"SELECT pid, text FROM notes WHERE user = ? AND pid IN ({','.join('?' * len(chunk))})"
+        out.update(_query(q, (user, *chunk)))
+    return out
+
+
+def set_note(user, pid, text):
+    """the user's note on a paper; empty deletes it"""
+    text = (text or '').strip()[:NOTE_MAX]
+    if text:
+        _run(
+            'INSERT INTO notes (user, pid, text, time) VALUES (?, ?, ?, ?) '
+            'ON CONFLICT DO UPDATE SET text = excluded.text, time = excluded.time',
+            (user, pid, text, time.time()),
+        )
+    else:
+        _run('DELETE FROM notes WHERE user = ? AND pid = ?', (user, pid))
+
+
+TOKEN_PREFIX = 'asr_'
+TOKENS_MAX = 20  # per user
+
+
+def _token_hash(token):
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def create_token(user, name, write=False):
+    """a new access token for an agent; only its hash is kept, so this is the one time it is seen"""
+    token = TOKEN_PREFIX + secrets.token_urlsafe(32)
+    _run(
+        'INSERT INTO tokens (hash, user, name, write, created) VALUES (?, ?, ?, ?, ?)',
+        (_token_hash(token), user, name, int(bool(write)), time.time()),
+    )
+    return token
+
+
+def list_tokens(user):
+    """[{id, name, write, created, last_used}], newest first; id is the hash (not the token)"""
+    rows = _query(
+        'SELECT hash, name, write, created, last_used FROM tokens WHERE user = ? ORDER BY created DESC', (user,)
+    )
+    return [dict(zip(('id', 'name', 'write', 'created', 'last_used'), r, strict=True)) for r in rows]
+
+
+def revoke_token(user, token_id):
+    return _run('DELETE FROM tokens WHERE user = ? AND hash = ?', (user, token_id)) > 0
+
+
+def check_token(token, touch_every=300):
+    """(user, write) of a valid token, else None"""
+    if not token.startswith(TOKEN_PREFIX):
+        return None
+    h = _token_hash(token)
+    r = _query('SELECT user, write, last_used FROM tokens WHERE hash = ?', (h,))
+    if not r:
+        return None
+    user, write, last = r[0]
+    now = time.time()
+    if now - last > touch_every:
+        _run('UPDATE tokens SET last_used = ? WHERE hash = ?', (now, h))
+    return user, bool(write)
 
 
 def get_digest_sizes(user):
@@ -1363,6 +1464,20 @@ class RefsDB:
             for c, p in self.con.execute(q, chunk):
                 cited.setdefault(c, set()).add(p)
         return cited, known
+
+    def references_of(self, pid):
+        """(status, where from, [(pos, cited arXiv id or None, title, doi, raw)]) of one paper's
+        bibliography; status None if enrich_daemon.py hasn't processed it"""
+        r = self.con.execute('SELECT status, refs_from FROM fetched WHERE pid = ?', (pid,)).fetchone()
+        rows = self.con.execute('SELECT pos, cited, title, doi, raw FROM refs WHERE citing = ? ORDER BY pos', (pid,))
+        return (r[0] if r else None), (r[1] if r else ''), rows.fetchall()
+
+    def citing(self, pid):
+        """the processed papers whose references include this arXiv id"""
+        return [r[0] for r in self.con.execute('SELECT DISTINCT citing FROM refs WHERE cited = ?', (pid,))]
+
+    def n_processed(self):
+        return self.con.execute("SELECT count(*) FROM fetched WHERE status = 'ok'").fetchone()[0]
 
     def titles_of_cited(self, cited):
         """{arXiv id: a title some bibliography gives it}, for cited papers that aren't in papers.sqlite"""

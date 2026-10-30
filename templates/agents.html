@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+
+{% block variables %}
+{% endblock %}
+
+{% block content %}
+<div id="agentswrap" class="page">
+    {% if new_token %}
+    <section class="card" id="newtoken">
+        <h1>Your new token</h1>
+        <p class="form-ok">Copy it now: it is shown only this once (only a hash of it is stored).</p>
+        <pre class="codeblock">{{ new_token }}</pre>
+        <p>For Claude Code:</p>
+        <pre class="codeblock">claude mcp add --transport http resanity {{ base }}/mcp --header "Authorization: Bearer {{ new_token }}"</pre>
+        <p>Other MCP clients: the server is <code>{{ base }}/mcp</code> (streamable HTTP), with the header
+            <code>Authorization: Bearer {{ new_token }}</code>. Or without MCP:</p>
+        <pre class="codeblock">curl -H "Authorization: Bearer {{ new_token }}" "{{ base }}/api/recommend?days=7&amp;limit=5&amp;abstracts=false"</pre>
+    </section>
+    {% endif %}
+    <section class="card prose">
+        <h1>Use the site from an AI agent</h1>
+        <div>
+            AI agents such as Claude Code can search this site, find related work and, with your
+            permission, read and organize your tags. They connect over MCP at <code>{{ base }}/mcp</code>,
+            or use the same tools as JSON at <code>{{ base }}/api</code> (<a href="/llms.txt">llms.txt</a>
+            describes everything).
+        </div>
+        <div>
+            The best tool for research is <b>rank_like</b>: give it a few papers you know are relevant and
+            it ranks every paper here by them, the way your tags rank new papers. Searching and ranking
+            work without an account:
+        </div>
+        <pre class="codeblock">claude mcp add --transport http resanity {{ base }}/mcp</pre>
+        <div>
+            For your own tags, reading list, recommendations and notes, the agent needs an <b>access
+            token</b>. It acts as you: read-only, unless you allow changes. Anyone with the token can do
+            what it allows, so keep it like a password and revoke it when it's no longer needed. What an
+            agent reads goes to whoever runs the agent (for example Anthropic, for Claude).
+        </div>
+    </section>
+    <section class="card">
+        <h1>Access tokens</h1>
+        {% if error %}<p class="form-error">{{ error }}</p>{% endif %}
+        {% if not can_make %}
+        <p class="muted"><a href="/profile">Log in</a> to make a token for your account.</p>
+        {% else %}
+        {% if tokens %}
+        <div class="tablescroll">
+        <table class="perftable">
+            <tr><th>Name</th><th>Access</th><th>Made</th><th>Last used</th><th></th></tr>
+            {% for t in tokens %}
+            <tr>
+                <td>{{ t.name }}</td>
+                <td>{{ 'read and write' if t.write else 'read-only' }}</td>
+                <td>{{ fmt(t.created) }}</td>
+                <td>{{ fmt(t.last_used) }}</td>
+                <td><form action="/agents/revoke" method="post">
+                    <input type="hidden" name="id" value="{{ t.id }}">
+                    <button type="submit" class="btn btn-small" title="the token stops working at once">Revoke</button>
+                </form></td>
+            </tr>
+            {% endfor %}
+        </table>
+        </div>
+        {% else %}
+        <p class="muted">No tokens yet.</p>
+        {% endif %}
+        <form action="/agents/token" method="post" class="tokenform">
+            <div class="form-group">
+                <label for="token-name">Name, to tell your tokens apart</label>
+                <input class="form-control" id="token-name" name="name" maxlength="60" placeholder="Claude Code on my laptop">
+            </div>
+            <label class="check" title="lets the agent save papers to tags, mark them as not for a tag or read, and write notes; it can never delete a tag">
+                <input type="checkbox" name="write" value="1">
+                <span>Allow changes: save papers, mark them read or "not for" a tag, write notes (never deletes a tag)</span>
+            </label>
+            <button type="submit" class="btn btn-primary">Make a token</button>
+        </form>
+        {% endif %}
+    </section>
+    <section class="card">
+        <h1>Tools</h1>
+        <div class="tablescroll">
+        <table class="perftable">
+            <tr><th>Tool</th><th>Needs</th><th>What it does</th></tr>
+            {% for name, access, desc in tools %}
+            <tr>
+                <td><code>{{ name }}</code></td>
+                <td>{{ {'public': 'nothing', 'user': 'a token', 'write': 'a token that allows changes'}[access] }}</td>
+                <td>{{ desc }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+        </div>
+    </section>
+</div>
+{% endblock %}
+
+{% block elements %}
+{% endblock %}

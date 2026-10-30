@@ -15,7 +15,8 @@
     <h2>What is stored, and why</h2>
     <ul>
         <li><b>Your account</b>: username, password (only as a salted hash), the papers you save, mark as
-            "not for this tag" or neutral, per tag, which papers you marked as read and when, your latest digest and how many papers per tag it should have,
+            "not for this tag" or neutral, per tag, which papers you marked as read and when, your notes on papers, the access tokens you made for
+            AI agents (only a hash of each, its name, and when it was made and last used), your latest digest and how many papers per tag it should have,
             and when you were last active. So that recommendations load fast, the model trained on a
             tag's papers (numbers computed from them, nothing else) is kept too; it is replaced when the tag
             changes and erased with the tag.
@@ -28,6 +29,11 @@
         <li><b>Papers you add by link</b>: if a paper isn't here yet, this server asks arXiv for it. The
             request contains only the paper's id, nothing about you. We keep a log of who added which
             paper for two days, to enforce daily limits.</li>
+        <li><b>AI agents</b>: if you make an access token, whoever holds it can read (and, if you allowed
+            it, change) your tags, read marks and notes through this site's agent interface (/mcp, /api).
+            What an agent reads goes to whoever runs it (for example the provider of the AI model); that is
+            your choice and outside our control. Revoking the token ends its access at once. Agents without a
+            token can only search and rank papers; like everyone, they are subject to the rate limits below.</li>
         <li><b>References and thumbnails</b>: to show which papers your saved papers cite, and a picture of
             each paper, the server downloads the public HTML version and PDF of saved and recommended papers
             from arXiv and keeps their reference lists, and, for papers under a Creative Commons license, a small

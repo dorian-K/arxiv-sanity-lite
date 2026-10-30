@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_access.html" import access_choice %}
 
 {% block variables %}
 {% endblock %}
@@ -6,7 +7,16 @@
 {% block content %}
 <div id="authorizewrap" class="page">
     <section class="card">
-        {% if error %}
+        {% if done %}
+        <h1>Allowed</h1>
+        <p>Last step: hand the answer to the app.</p>
+        <p><b>The app runs on this computer:</b> <a class="btn btn-primary" href="{{ done }}">Back to the app</a></p>
+        <p><b>It runs on another computer</b> (for example Claude Code over ssh): run this there, in a
+            terminal, within 10 minutes:</p>
+        <pre class="codeblock">curl -s '{{ done }}'</pre>
+        <p class="muted">Or, if the app asks for a code or a URL, paste this address into it. It works once,
+            and only for the app that asked.</p>
+        {% elif error %}
         <h1>Can't connect this app</h1>
         <p class="form-error">{{ error }}</p>
         <p class="muted">Nothing was shared. Try connecting again from the app.</p>
@@ -27,17 +37,15 @@
         {% else %}
         <h1>Connect {{ req.client.name }}?</h1>
         <p>An app calling itself <b>{{ req.client.name }}</b> wants to use your account <b>{{ user }}</b>.
-            After you answer, you go back to <b>{{ req.host }}</b>; only allow it if that is where you
-            started (for Claude: <b>claude.ai</b>).</p>
+            {% if req.host in ('localhost', '127.0.0.1', '::1') %}After you answer, the app on your own
+            computer gets the answer (Claude Code, a desktop app); only allow it if you just started this there.
+            {% else %}After you answer, you go back to <b>{{ req.host }}</b>; only allow it if that is where you
+            started (for Claude: <b>claude.ai</b>).{% endif %}</p>
         <p>It will be able to see your tags, saved papers, reading list, notes, recommendations and
             digest, and search and rank papers for you. What it reads goes to whoever runs the app.</p>
         <form action="/oauth/authorize" method="post" class="tokenform">
             {% for k, v in params %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
-            <label class="check" title="lets the app save papers to tags, mark them as not for a tag or as read, and write notes; it can never delete a tag">
-                <input type="checkbox" name="write" value="1">
-                <span>Also allow changes: save papers, mark them read or "not for" a tag, write notes
-                    (never deletes a tag){% if req.wants_write %}. The app asked for this.{% endif %}</span>
-            </label>
+            {{ access_choice(req.wants) }}
             <div class="authorize-buttons">
                 <button type="submit" name="decision" value="allow" class="btn btn-primary">Allow</button>
                 <button type="submit" name="decision" value="deny" class="btn">Deny</button>

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_access.html" import access_choice %}
 
 {% block variables %}
 {% endblock %}
@@ -34,8 +35,8 @@
         <h2>Connect</h2>
         <p><b>claude.ai and the Claude apps.</b> Settings → Connectors → Add custom connector, with the address</p>
         <pre class="codeblock">{{ base }}/mcp/me</pre>
-        <p>Claude sends you to this site to log in and choose what it may do (read only, or also make
-            changes). The connection then appears under <a href="#tokens">access tokens</a> below, where you
+        <p>Claude sends you to this site to log in and choose what it may do (read only, only its own <code>agent:</code> tags,
+            or everything). The connection then appears under <a href="#tokens">access tokens</a> below, where you
             can end it any time.</p>
         <p><b>Claude Code.</b> For searching and ranking, no account is needed:</p>
         <pre class="codeblock">claude mcp add --transport http resanity {{ base }}/mcp</pre>
@@ -61,7 +62,8 @@
 
         <h2>Good to know</h2>
         <ul>
-            <li>A token acts as you. It is read-only unless you allow changes, and even then it can never
+            <li>A token acts as you. It is read-only unless you allow changes: either only to tags named
+                <code>agent:…</code> (your own tags stay yours), or to everything; even then it can never
                 delete a tag. Keep it like a password, and revoke it when you no longer need it.</li>
             <li>What the agent reads (your tags, notes, the papers) goes to whoever runs it, for Claude that
                 is Anthropic (<a href="/privacy">privacy</a>).</li>
@@ -86,7 +88,7 @@
             {% for t in tokens %}
             <tr>
                 <td>{{ t.name }}</td>
-                <td>{{ 'read and write' if t.write else 'read-only' }}</td>
+                <td>{{ scope_labels[t.scope] }}</td>
                 <td>{{ fmt(t.created) }}</td>
                 <td>{{ fmt(t.last_used) }}</td>
                 <td><form action="/agents/revoke" method="post">
@@ -105,10 +107,7 @@
                 <label for="token-name">Name, to tell your tokens apart</label>
                 <input class="form-control" id="token-name" name="name" maxlength="60" placeholder="Claude Code on my laptop">
             </div>
-            <label class="check" title="lets the agent save papers to tags, mark them as not for a tag or read, and write notes; it can never delete a tag">
-                <input type="checkbox" name="write" value="1">
-                <span>Allow changes: save papers, mark them read or "not for" a tag, write notes (never deletes a tag)</span>
-            </label>
+            {{ access_choice() }}
             <button type="submit" class="btn btn-primary">Make a token</button>
         </form>
         {% endif %}
@@ -121,7 +120,7 @@
             {% for name, access, desc in tools %}
             <tr>
                 <td><code>{{ name }}</code></td>
-                <td>{{ {'public': 'nothing', 'user': 'a token', 'write': 'a token that allows changes'}[access] }}</td>
+                <td>{{ {'public': 'nothing', 'user': 'a token', 'agent': 'a token that may change its own tags (or everything)', 'write': 'a token that may change everything'}[access] }}</td>
                 <td>{{ desc }}</td>
             </tr>
             {% endfor %}

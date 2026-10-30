@@ -423,7 +423,7 @@ CREATE TABLE IF NOT EXISTS tokens (
     hash TEXT PRIMARY KEY,
     user TEXT NOT NULL,
     name TEXT NOT NULL,
-    write INTEGER NOT NULL,  -- 1: may change tags, read marks and notes; 0: read only
+    write INTEGER NOT NULL,  -- what it may change, see TOKEN_SCOPES: 0 nothing, 1 everything, 2 only agent: tags
     created REAL NOT NULL,
     last_used REAL NOT NULL DEFAULT 0,
     client TEXT NOT NULL DEFAULT ''  -- the OAuth client it was issued to ('': made by hand on /agents)
@@ -443,7 +443,7 @@ CREATE TABLE IF NOT EXISTS oauth_codes (
     user TEXT NOT NULL,
     redirect_uri TEXT NOT NULL,
     challenge TEXT NOT NULL,  -- PKCE S256
-    write INTEGER NOT NULL,
+    write INTEGER NOT NULL,  -- the scope granted, as in tokens
     expires REAL NOT NULL
 ) WITHOUT ROWID;
 -- papers per tag in the digest, where the user changed it (0 = leave the tag out)
@@ -601,7 +601,7 @@ def export_user(name):
             for p, t, w in _query('SELECT pid, text, time FROM notes WHERE user = ? ORDER BY time', (name,))
         ],
         'agent_tokens': [
-            {'name': n, 'write': bool(w), 'created': c, 'last_used': u or None}
+            {'name': n, 'access': TOKEN_SCOPE_NAMES.get(w, 'read'), 'created': c, 'last_used': u or None}
             for n, w, c, u in _query('SELECT name, write, created, last_used FROM tokens WHERE user = ?', (name,))
         ],
         'read': [
@@ -704,6 +704,11 @@ def set_note(user, pid, text):
 
 
 TOKEN_PREFIX = 'asr_'
+# what a token may change: read (nothing), agent (only tags named AGENT_TAG_PREFIX..., so the
+# user's own tags stay theirs), write (everything an agent tool can change). stored as 0/2/1
+TOKEN_SCOPES = {'read': 0, 'write': 1, 'agent': 2}
+TOKEN_SCOPE_NAMES = {v: k for k, v in TOKEN_SCOPES.items()}
+AGENT_TAG_PREFIX = 'agent:'
 TOKENS_MAX = 20  # per user
 
 
@@ -711,7 +716,7 @@ def _token_hash(token):
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def create_token(user, name, write=False, client=''):
+def create_token(user, name, scope='read', client=''):
     """
     a new access token for an agent; only its hash is kept, so this is the one time it is seen.
     client: the OAuth client it is for, whose earlier tokens for this user it replaces
@@ -724,14 +729,14 @@ def create_token(user, name, write=False, client=''):
                 con.execute('DELETE FROM tokens WHERE user = ? AND client = ?', (user, client))
             con.execute(
                 'INSERT INTO tokens (hash, user, name, write, created, client) VALUES (?, ?, ?, ?, ?, ?)',
-                (_token_hash(token), user, name, int(bool(write)), time.time(), client),
+                (_token_hash(token), user, name, TOKEN_SCOPES[scope], time.time(), client),
             )
     finally:
         con.close()
     return token
 
 
-OAUTH_CODE_SECONDS = 300
+OAUTH_CODE_SECONDS = 600  # time to copy it to another machine, too
 
 
 def register_client(name, redirect_uris):
@@ -761,7 +766,7 @@ def get_client(cid):
     return {'id': r[0][0], 'name': r[0][1], 'redirect_uris': json.loads(r[0][2])} if r else None
 
 
-def put_code(code, client_id, user, redirect_uri, challenge, write):
+def put_code(code, client_id, user, redirect_uri, challenge, scope):
     now = time.time()
     con = users_db()
     try:
@@ -776,7 +781,7 @@ def put_code(code, client_id, user, redirect_uri, challenge, write):
                     user,
                     redirect_uri,
                     challenge,
-                    int(bool(write)),
+                    TOKEN_SCOPES[scope],
                     now + OAUTH_CODE_SECONDS,
                 ),
             )
@@ -796,16 +801,23 @@ def take_code(code):
             ).fetchone()
     finally:
         con.close()
-    keys = ('client_id', 'user', 'redirect_uri', 'challenge', 'write')
-    return dict(zip(keys, r, strict=True)) if r else None
+    keys = ('client_id', 'user', 'redirect_uri', 'challenge', 'scope')
+    if not r:
+        return None
+    out = dict(zip(keys, r, strict=True))
+    out['scope'] = TOKEN_SCOPE_NAMES.get(out['scope'], 'read')
+    return out
 
 
 def list_tokens(user):
-    """[{id, name, write, created, last_used}], newest first; id is the hash (not the token)"""
+    """[{id, name, scope, created, last_used}], newest first; id is the hash (not the token)"""
     rows = _query(
         'SELECT hash, name, write, created, last_used FROM tokens WHERE user = ? ORDER BY created DESC', (user,)
     )
-    return [dict(zip(('id', 'name', 'write', 'created', 'last_used'), r, strict=True)) for r in rows]
+    out = [dict(zip(('id', 'name', 'scope', 'created', 'last_used'), r, strict=True)) for r in rows]
+    for t in out:
+        t['scope'] = TOKEN_SCOPE_NAMES.get(t['scope'], 'read')
+    return out
 
 
 def revoke_token(user, token_id):
@@ -813,7 +825,7 @@ def revoke_token(user, token_id):
 
 
 def check_token(token, touch_every=300):
-    """(user, write) of a valid token, else None"""
+    """(user, scope: read | agent | write) of a valid token, else None"""
     if not token.startswith(TOKEN_PREFIX):
         return None
     h = _token_hash(token)
@@ -824,7 +836,7 @@ def check_token(token, touch_every=300):
     now = time.time()
     if now - last > touch_every:
         _run('UPDATE tokens SET last_used = ? WHERE hash = ?', (now, h))
-    return user, bool(write)
+    return user, TOKEN_SCOPE_NAMES.get(write, 'read')
 
 
 def get_digest_sizes(user):

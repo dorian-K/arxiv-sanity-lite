@@ -325,7 +325,7 @@ def before_request():
 
     g.user = session.get('user', None)
     g.readonly = bool(session.get('readonly'))
-    g.token = False
+    g.token, g.scope = False, None
 
     # agents (agents.py) send an access token instead of a cookie: it acts as its user, read-only
     # unless it was made with write access. their endpoints ignore the cookie, so a browser
@@ -335,7 +335,10 @@ def before_request():
         found = db.check_token(auth[7:].strip())
         if found is None:
             return {'error': 'invalid or revoked access token'}, 401, {'WWW-Authenticate': agents.www_authenticate()}
-        g.user, g.readonly, g.token = found[0], not found[1], True
+        # only a token with full write access may use the site's own endpoints (/add, ...): an
+        # agent-tags token changes things through the agent tools alone, which check its tags
+        g.user, g.token, g.scope = found[0], True, found[1]
+        g.readonly = g.scope != 'write'
     elif request.endpoint in AGENT_ENDPOINTS:
         g.user, g.readonly = None, False
 

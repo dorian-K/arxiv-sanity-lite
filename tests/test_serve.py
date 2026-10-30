@@ -554,3 +554,19 @@ def test_old_users_db_gets_the_reads_table(tmp_path, monkeypatch):
     assert db.get_reads('alice') == set()
     db.set_read('alice', '2601.00001')
     assert db.get_reads('alice') == {'2601.00001'} and db.get_tags('alice') == {'cv': {'2601.00001'}}
+
+
+def test_removing_a_tags_last_saved_paper_deletes_the_tag(client, corpus):
+    from aslite import db
+
+    pids = sorted(corpus)
+    login(client)
+    client.post(f'/add/{pids[0]}/foo')
+    client.post(f'/add/{pids[1]}/foo')
+    client.post(f'/addneg/{pids[2]}/foo')
+    db.set_digest_size('alice', 'foo', 3)
+    client.post(f'/sub/{pids[0]}/foo')
+    assert db.get_tags('alice') == {'foo': {pids[1]}}  # one left: still there
+    client.post(f'/sub/{pids[1]}/foo')
+    assert db.get_tags('alice') == {} and db.get_tags('alice', neg=True) == {} and db.get_digest_sizes('alice') == {}
+    assert b'<option value="foo">' not in client.get('/import').data

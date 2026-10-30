@@ -651,8 +651,21 @@ def tag_paper(user, pid, tag, neg=False):
 
 
 def untag_paper(user, pid, tag, neg=False):
-    """removes a like (or downvote); returns whether there was one"""
-    return _run('DELETE FROM tags WHERE user = ? AND tag = ? AND pid = ? AND neg = ?', (user, tag, pid, int(neg))) > 0
+    """
+    removes a like (or downvote); returns whether there was one. removing a tag's last saved
+    paper deletes the tag, with its downvotes and settings (delete_tag): an emptied tag is gone,
+    instead of lingering in the tag pickers on downvotes alone
+    """
+    removed = (
+        _run('DELETE FROM tags WHERE user = ? AND tag = ? AND pid = ? AND neg = ?', (user, tag, pid, int(neg))) > 0
+    )
+    if (
+        removed
+        and not neg
+        and not _query('SELECT 1 FROM tags WHERE user = ? AND tag = ? AND neg = 0 LIMIT 1', (user, tag))
+    ):
+        delete_tag(user, tag)
+    return removed
 
 
 def delete_tag(user, tag):

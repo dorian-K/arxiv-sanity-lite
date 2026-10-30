@@ -86,8 +86,19 @@ def snapshot(src, dst):
 
 
 def db_mtime(path):
-    """changes whenever anything is written to the database, WAL included"""
-    return tuple(os.path.getmtime(p) if os.path.exists(p) else 0 for p in (path, path + '-wal'))
+    """
+    changes whenever anything is written to the database, WAL included. an empty WAL doesn't
+    count: SQLite creates it when the first connection opens and deletes it when the last one
+    closes, so on a quiet server every request would look like a change (and reload ~2 s of
+    paper times in serve.py)
+    """
+    out = [os.path.getmtime(path) if os.path.exists(path) else 0]
+    try:
+        st = os.stat(path + '-wal')
+        out.append(st.st_mtime if st.st_size else 0)
+    except OSError:
+        out.append(0)
+    return tuple(out)
 
 
 # -----------------------------------------------------------------------------

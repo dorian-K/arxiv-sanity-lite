@@ -101,3 +101,19 @@ def test_search_wants_every_word_then_any(corpus, monkeypatch):
         assert pids[0] == a and set(pids) == {a, b, c} and scores == sorted(scores, reverse=True)
         monkeypatch.setattr(db, 'SEARCH_MIN_ALL', 1)  # enough papers with both words: only those
         assert pdb.search('zebra quokka')[0] == [a]
+
+
+def test_opening_the_database_is_not_a_change(corpus):
+    """SQLite creates an empty WAL on open and deletes it on close: that mustn't look like new papers"""
+    from aslite import db
+
+    path = db.PAPERS_DB_FILE
+    before = db.db_mtime(path)
+    with db.get_papers_db() as pdb:
+        pdb.times()
+        assert db.db_mtime(path) == before
+    assert db.db_mtime(path) == before
+    with db.get_papers_db() as pdb:
+        p = next(iter(corpus.values()))
+        pdb.upsert([{**p, 'title': 'changed', '_version': 2}])
+    assert db.db_mtime(path) != before

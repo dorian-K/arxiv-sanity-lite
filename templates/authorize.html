@@ -9,13 +9,22 @@
     <section class="card">
         {% if done %}
         <h1>Allowed</h1>
-        <p>Last step: hand the answer to the app.</p>
-        <p><b>The app runs on this computer:</b> <a class="btn btn-primary" href="{{ done }}">Back to the app</a></p>
-        <p><b>It runs on another computer</b> (for example Claude Code over ssh): run this there, in a
-            terminal, within 10 minutes:</p>
+        <p><b>Claude Code (or another app) asks you to paste a URL?</b> Paste this one:</p>
+        <pre class="codeblock" id="callback">{{ done }}</pre>
+        <p><button type="button" class="btn btn-primary" id="copy-callback" title="copy the address to paste into the app">Copy</button>
+            <span class="muted" id="copied" hidden>Copied.</span></p>
+        <p><b>The app runs on this computer and didn't ask?</b> <a href="{{ done }}">Back to the app</a>.</p>
+        <p><b>It runs on another computer and didn't ask?</b> Run this there, in a terminal:</p>
         <pre class="codeblock">curl -s '{{ done }}'</pre>
-        <p class="muted">Or, if the app asks for a code or a URL, paste this address into it. It works once,
-            and only for the app that asked.</p>
+        <p class="muted">Within 10 minutes. The address works once, and only for the app that asked, so
+            showing it here is safe.</p>
+        <script>
+        document.getElementById('copy-callback').addEventListener('click', () => {
+            navigator.clipboard.writeText(document.getElementById('callback').textContent.trim())
+                .then(() => { document.getElementById('copied').hidden = false; })
+                .catch(() => { window.getSelection().selectAllChildren(document.getElementById('callback')); });
+        });
+        </script>
         {% elif error %}
         <h1>Can't connect this app</h1>
         <p class="form-error">{{ error }}</p>

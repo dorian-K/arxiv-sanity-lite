@@ -406,8 +406,10 @@ def test_an_app_on_another_machine_gets_the_callback_to_open_there(client, corpu
     r = client.post('/oauth/authorize', data=q | {'decision': 'allow', 'access': 'read'})
     page = r.data.decode()
     assert r.status_code == 200 and 'Back to the app' in page and "curl -s '" in page
+    shown = html.unescape(re.search(r'<pre class="codeblock" id="callback">([^<]+)</pre>', page).group(1))
     callback = html.unescape(re.search(r"curl -s '([^']+)'", page).group(1))
     assert callback.startswith(local + '?')
+    assert shown == callback  # the address to paste where Claude Code asks for it
     back = parse_qs(urlparse(callback).query)
     assert back['state'] == ['s1']
     req = {

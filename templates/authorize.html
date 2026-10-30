@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+
+{% block variables %}
+{% endblock %}
+
+{% block content %}
+<div id="authorizewrap" class="page">
+    <section class="card">
+        {% if error %}
+        <h1>Can't connect this app</h1>
+        <p class="form-error">{{ error }}</p>
+        <p class="muted">Nothing was shared. Try connecting again from the app.</p>
+        {% elif not user %}
+        <h1>Connect an app</h1>
+        <p>An app calling itself <b>{{ req.client.name }}</b> (at <b>{{ req.host }}</b>) wants to use your
+            Arxiv Resanity account. Log in first, then you decide what it may do.</p>
+        <form action="/login" method="POST">
+            <input type="hidden" name="next" value="{{ here }}">
+            <div class="form-group">
+                <input class="form-control" name="username" placeholder="Username" autocomplete="username" required>
+            </div>
+            <div class="form-group">
+                <input class="form-control" type="password" name="password" placeholder="Password" autocomplete="current-password" required>
+            </div>
+            <button type="submit" class="btn btn-primary">Log in</button>
+        </form>
+        {% else %}
+        <h1>Connect {{ req.client.name }}?</h1>
+        <p>An app calling itself <b>{{ req.client.name }}</b> wants to use your account <b>{{ user }}</b>.
+            After you answer, you go back to <b>{{ req.host }}</b>; only allow it if that is where you
+            started (for Claude: <b>claude.ai</b>).</p>
+        <p>It will be able to see your tags, saved papers, reading list, notes, recommendations and
+            digest, and search and rank papers for you. What it reads goes to whoever runs the app.</p>
+        <form action="/oauth/authorize" method="post" class="tokenform">
+            {% for k, v in params %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+            <label class="check" title="lets the app save papers to tags, mark them as not for a tag or as read, and write notes; it can never delete a tag">
+                <input type="checkbox" name="write" value="1">
+                <span>Also allow changes: save papers, mark them read or "not for" a tag, write notes
+                    (never deletes a tag){% if req.wants_write %}. The app asked for this.{% endif %}</span>
+            </label>
+            <div class="authorize-buttons">
+                <button type="submit" name="decision" value="allow" class="btn btn-primary">Allow</button>
+                <button type="submit" name="decision" value="deny" class="btn">Deny</button>
+            </div>
+        </form>
+        <p class="muted">You can disconnect it any time under <a href="/agents">access tokens</a>.</p>
+        {% endif %}
+    </section>
+</div>
+{% endblock %}
+
+{% block elements %}
+{% endblock %}

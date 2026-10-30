@@ -32,6 +32,11 @@
         </div>
         <pre class="codeblock">claude mcp add --transport http resanity {{ base }}/mcp</pre>
         <div>
+            <b>In claude.ai</b> (and the Claude apps): Settings → Connectors → Add custom connector, with the
+            address <code>{{ base }}/mcp/me</code>. Claude then sends you here to log in and decide what it
+            may do; it shows up below as a token you can revoke.
+        </div>
+        <div>
             For your own tags, reading list, recommendations and notes, the agent needs an <b>access
             token</b>. It acts as you: read-only, unless you allow changes. Anyone with the token can do
             what it allows, so keep it like a password and revoke it when it's no longer needed. What an

@@ -67,7 +67,7 @@ Left to you: a data processing agreement with your VPS provider, short nginx log
 - **Tag check:** ranks each saved paper with a model trained without it, and lists the ones that don't fit.
 - **Cited tab:** built from the references in arXiv's HTML version of each saved paper, with the PDF as a fallback. They're matched to arXiv papers by id or title, and no other service is asked.
 - **Thumbnails:** only for papers under a Creative Commons license, because German copyright has no fair use.
-- **AI agents:** an MCP server at `/mcp` and the same tools as JSON at `/api` (`/llms.txt` describes them). `rank_like` ranks every paper by a few example papers, the best way to find related work. Searching and ranking need no account; a user's tags, reading list and notes need an access token they make on `/agents`, read-only unless they allow changes.
+- **AI agents:** an MCP server at `/mcp` and the same tools as JSON at `/api` (`/llms.txt` describes them). `rank_like` ranks every paper by a few example papers, the best way to find related work. Searching and ranking need no account; a user's tags, reading list and notes need an access token they make on `/agents`, read-only unless they allow changes. In claude.ai, add `/mcp/me` as a custom connector: it logs in with OAuth.
 - **arXiv politeness:** API calls at most one per 3.5 s across all processes; arxiv.org pages one per 15 s or more, as its robots.txt asks.
 
 ## Does it rank better?

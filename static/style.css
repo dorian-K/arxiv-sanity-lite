@@ -414,6 +414,7 @@ input:focus, select:focus, .btn:focus-visible, .iconbtn:focus-visible {
 #profile-login-form, #email-form { max-width: 420px; margin-top: 16px; }
 #profile-login-form label { font-size: 14px; color: var(--muted); }
 .codeblock { white-space: pre-wrap; word-break: break-all; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 13px; }
+.authorize-buttons { display: flex; gap: 8px; }
 .tokenform { margin-top: 14px; display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
 .form-error { color: var(--neg); font-weight: 600; }
 textarea.form-control {

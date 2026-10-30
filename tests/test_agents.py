@@ -170,3 +170,173 @@ def test_deleting_the_account_deletes_tokens_and_notes(client, corpus):
     client.post('/delete_account', data={'password': 'correct horse'})
     assert db.get_notes('alice') == {} and db.list_tokens('alice') == []
     assert client.get('/api/list_tags', headers={'Authorization': 'Bearer ' + token}).status_code == 401
+
+
+CALLBACK = 'https://claude.ai/api/mcp/auth_callback'
+
+
+def pkce():
+    import base64
+    import hashlib
+    import secrets
+
+    verifier = secrets.token_urlsafe(48)
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b'=').decode()
+    return verifier, challenge
+
+
+def authorize_url(cid, challenge, **more):
+    from urllib.parse import urlencode
+
+    q = {
+        'response_type': 'code',
+        'client_id': cid,
+        'redirect_uri': CALLBACK,
+        'code_challenge': challenge,
+        'code_challenge_method': 'S256',
+        'state': 'xyz',
+        'scope': 'read write',
+        **more,
+    }
+    return '/oauth/authorize?' + urlencode(q)
+
+
+def grant(client, cid, write=True, decision='allow'):
+    """(verifier, the redirect back to the app) after the user answers the consent page"""
+    from urllib.parse import parse_qs, urlparse
+
+    verifier, challenge = pkce()
+    url = authorize_url(cid, challenge)
+    form = dict(parse_qs(urlparse(url).query, keep_blank_values=True))
+    form = {k: v[0] for k, v in form.items()} | {'decision': decision, **({'write': '1'} if write else {})}
+    r = client.post('/oauth/authorize', data=form)
+    assert r.status_code == 302
+    return verifier, urlparse(r.headers['Location'])
+
+
+def test_claude_ai_connects_with_oauth(client, corpus):
+    from urllib.parse import parse_qs
+
+    vision, _ = vision_and_language(corpus)
+    # 1. the connector finds out where to log in
+    r = client.post('/mcp/me', json={'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {}})
+    assert r.status_code == 401 and 'resource_metadata="' in r.headers['WWW-Authenticate']
+    meta = client.get('/.well-known/oauth-protected-resource/mcp/me').get_json()
+    assert meta['resource'].endswith('/mcp/me')
+    server = client.get('/.well-known/oauth-authorization-server').get_json()
+    assert server['code_challenge_methods_supported'] == ['S256'] and server['registration_endpoint'].endswith(
+        '/oauth/register'
+    )
+    # 2. registers
+    r = client.post('/oauth/register', json={'client_name': 'Claude', 'redirect_uris': [CALLBACK]})
+    assert r.status_code == 201
+    cid = r.get_json()['client_id']
+    for bad in (['http://evil.example/cb'], ['https://claude.ai/cb#x'], [], ['x'] * 6):
+        assert client.post('/oauth/register', json={'redirect_uris': bad}).status_code == 400
+    # 3. the user logs in on the consent page and comes back to it
+    _, challenge = pkce()
+    page = client.get(authorize_url(cid, challenge)).data.decode()
+    assert 'Log in' in page and 'claude.ai' in page
+    r = client.post(
+        '/login', data={'username': 'alice', 'password': 'correct horse', 'next': authorize_url(cid, challenge)}
+    )
+    assert r.headers['Location'].startswith('/oauth/authorize?')
+    r = client.get(r.headers['Location'])
+    assert 'Allow' in r.data.decode() and "form-action 'self' https://claude.ai" in r.headers['Content-Security-Policy']
+    # 4. allows, gets a code back at its callback, swaps it for a token
+    verifier, back = grant(client, cid)
+    q = parse_qs(back.query)
+    assert back.netloc == 'claude.ai' and q['state'] == ['xyz'] and 'iss' in q
+    code = q['code'][0]
+    token_req = {
+        'grant_type': 'authorization_code',
+        'code': code,
+        'client_id': cid,
+        'redirect_uri': CALLBACK,
+        'code_verifier': verifier,
+    }
+    client.post('/logout')
+    r = client.post('/oauth/token', data=token_req)
+    assert r.status_code == 200 and r.headers['Cache-Control'] == 'no-store'
+    token = r.get_json()['access_token']
+    assert r.get_json()['scope'] == 'read write'
+    assert client.post('/oauth/token', data=token_req).get_json()['error'] == 'invalid_grant'  # single use
+    # 5. and works as the user
+    auth = {'Authorization': 'Bearer ' + token}
+    r = client.post('/mcp/me', json={'jsonrpc': '2.0', 'id': 1, 'method': 'tools/list'}, headers=auth)
+    assert 'save_papers' in {t['name'] for t in r.get_json()['result']['tools']}
+    assert call(client, 'save_papers', token, ids=[vision[0]], tag='cv')[0]['status'] == {vision[0]: 'saved'}
+    # connecting again replaces the app's token; /agents lists it
+    login(client)
+    verifier, back = grant(client, cid, write=False)
+    r = client.post(
+        '/oauth/token', data=token_req | {'code': parse_qs(back.query)['code'][0], 'code_verifier': verifier}
+    )
+    assert r.get_json()['scope'] == 'read'
+    assert [t['name'] for t in db.list_tokens('alice')] == ['Claude (connected)']
+    assert client.post('/mcp/me', json={'jsonrpc': '2.0', 'id': 1, 'method': 'ping'}, headers=auth).status_code == 401
+
+
+def test_oauth_refuses_what_it_must(client, corpus, monkeypatch):
+    from urllib.parse import parse_qs
+
+    cid = client.post('/oauth/register', json={'client_name': 'x', 'redirect_uris': [CALLBACK]}).get_json()['client_id']
+    login(client)
+    _, challenge = pkce()
+    # never redirect to an address the app didn't register, nor for an unknown app
+    for url in (
+        authorize_url(cid, challenge, redirect_uri='https://evil.example/cb'),
+        authorize_url('nope', challenge),
+        authorize_url(cid, challenge, code_challenge_method='plain'),
+    ):
+        r = client.get(url)
+        assert r.status_code == 400 and "Can't connect" in r.data.decode()
+    # deny: back to the app with an error, no code
+    _, back = grant(client, cid, decision='deny')
+    assert parse_qs(back.query)['error'] == ['access_denied'] and 'code' not in parse_qs(back.query)
+    # a wrong verifier (a stolen code) uses the code up
+    verifier, back = grant(client, cid)
+    req = {
+        'grant_type': 'authorization_code',
+        'code': parse_qs(back.query)['code'][0],
+        'client_id': cid,
+        'redirect_uri': CALLBACK,
+        'code_verifier': 'wrong' * 10,
+    }
+    assert client.post('/oauth/token', data=req).get_json()['error'] == 'invalid_grant'
+    assert client.post('/oauth/token', data=req | {'code_verifier': verifier}).get_json()['error'] == 'invalid_grant'
+    # another client, or another redirect, can't use a code
+    verifier, back = grant(client, cid)
+    req = req | {'code': parse_qs(back.query)['code'][0], 'code_verifier': verifier, 'redirect_uri': CALLBACK + 'x'}
+    assert client.post('/oauth/token', data=req).get_json()['error'] == 'invalid_grant'
+    # expired codes are gone
+    monkeypatch.setattr(db, 'OAUTH_CODE_SECONDS', -1)
+    verifier, back = grant(client, cid)
+    req = req | {'code': parse_qs(back.query)['code'][0], 'code_verifier': verifier, 'redirect_uri': CALLBACK}
+    assert client.post('/oauth/token', data=req).get_json()['error'] == 'invalid_grant'
+    assert db.list_tokens('alice') == []
+    # a login's next never leads off the site
+    client.post('/logout')
+    r = client.post('/login', data={'username': 'alice', 'password': 'correct horse', 'next': '//evil.example/x'})
+    assert r.headers['Location'] in ('/', 'http://localhost/')
+
+
+def test_old_users_db_gets_the_token_client_column(tmp_path, monkeypatch):
+    import sqlite3
+
+    path = str(tmp_path / 'users.sqlite')
+    con = sqlite3.connect(path)
+    con.executescript(
+        db.USERS_SCHEMA.replace(
+            ",\n    client TEXT NOT NULL DEFAULT ''  -- the OAuth client it was issued to ('': made by hand on /agents)",
+            '',
+        )
+    )
+    assert 'client' not in {r[1] for r in con.execute('PRAGMA table_info(tokens)')}
+    con.execute("INSERT INTO tokens (hash, user, name, write, created) VALUES ('h', 'alice', 'old', 0, 0)")
+    con.commit()
+    con.close()
+    monkeypatch.setattr(db, 'USERS_DB_FILE', path)
+    assert db.list_tokens('alice')[0]['name'] == 'old'
+    db.create_token('alice', 'new', client='c1')
+    assert {t['name'] for t in db.list_tokens('alice')} == {'old', 'new'}

@@ -425,7 +425,26 @@ CREATE TABLE IF NOT EXISTS tokens (
     name TEXT NOT NULL,
     write INTEGER NOT NULL,  -- 1: may change tags, read marks and notes; 0: read only
     created REAL NOT NULL,
-    last_used REAL NOT NULL DEFAULT 0
+    last_used REAL NOT NULL DEFAULT 0,
+    client TEXT NOT NULL DEFAULT ''  -- the OAuth client it was issued to ('': made by hand on /agents)
+) WITHOUT ROWID;
+-- apps that registered for OAuth (claude.ai's connectors, RFC 7591): anyone can register one,
+-- it only gets to ask a logged-in user for access
+CREATE TABLE IF NOT EXISTS oauth_clients (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    redirect_uris TEXT NOT NULL,  -- json list, matched exactly
+    created REAL NOT NULL
+) WITHOUT ROWID;
+-- OAuth authorization codes: single use, minutes long, sha256 only
+CREATE TABLE IF NOT EXISTS oauth_codes (
+    hash TEXT PRIMARY KEY,
+    client_id TEXT NOT NULL,
+    user TEXT NOT NULL,
+    redirect_uri TEXT NOT NULL,
+    challenge TEXT NOT NULL,  -- PKCE S256
+    write INTEGER NOT NULL,
+    expires REAL NOT NULL
 ) WITHOUT ROWID;
 -- papers per tag in the digest, where the user changed it (0 = leave the tag out)
 CREATE TABLE IF NOT EXISTS digest_sizes (
@@ -445,16 +464,26 @@ def users_db():
     key = os.path.abspath(USERS_DB_FILE)
     if key not in _users_columns_done:
         # columns added after the table first shipped; CREATE TABLE IF NOT EXISTS won't add them
-        cols = {r[1] for r in con.execute('PRAGMA table_info(users)')}
         added = {
-            'public': 'INTEGER NOT NULL DEFAULT 0',
-            'pending_email': "TEXT NOT NULL DEFAULT ''",
-            'email_confirmed': 'REAL',
+            'users': {
+                'public': 'INTEGER NOT NULL DEFAULT 0',
+                'pending_email': "TEXT NOT NULL DEFAULT ''",
+                'email_confirmed': 'REAL',
+            },
+            'tokens': {'client': "TEXT NOT NULL DEFAULT ''"},
         }
-        with con:
-            for col, decl in added.items():
-                if col not in cols:
-                    con.execute(f'ALTER TABLE users ADD COLUMN {col} {decl}')
+        con.execute('BEGIN IMMEDIATE')  # two processes starting at once: one adds, the other sees it
+        try:
+            for table, new in added.items():
+                cols = {r[1] for r in con.execute(f'PRAGMA table_info({table})')}
+                for col, decl in new.items():
+                    if col not in cols:
+                        con.execute(f'ALTER TABLE {table} ADD COLUMN {col} {decl}')
+            con.execute('COMMIT')
+        except BaseException:
+            if con.in_transaction:
+                con.execute('ROLLBACK')
+            raise
         _users_columns_done.add(key)
     return con
 
@@ -543,6 +572,7 @@ def delete_user(name):
                 ('reads', 'user'),
                 ('notes', 'user'),
                 ('tokens', 'user'),
+                ('oauth_codes', 'user'),
                 ('users', 'name'),
             ):
                 con.execute(f'DELETE FROM {table} WHERE {col} = ?', (name,))
@@ -681,14 +711,93 @@ def _token_hash(token):
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def create_token(user, name, write=False):
-    """a new access token for an agent; only its hash is kept, so this is the one time it is seen"""
+def create_token(user, name, write=False, client=''):
+    """
+    a new access token for an agent; only its hash is kept, so this is the one time it is seen.
+    client: the OAuth client it is for, whose earlier tokens for this user it replaces
+    """
     token = TOKEN_PREFIX + secrets.token_urlsafe(32)
-    _run(
-        'INSERT INTO tokens (hash, user, name, write, created) VALUES (?, ?, ?, ?, ?)',
-        (_token_hash(token), user, name, int(bool(write)), time.time()),
-    )
+    con = users_db()
+    try:
+        with con:
+            if client:
+                con.execute('DELETE FROM tokens WHERE user = ? AND client = ?', (user, client))
+            con.execute(
+                'INSERT INTO tokens (hash, user, name, write, created, client) VALUES (?, ?, ?, ?, ?, ?)',
+                (_token_hash(token), user, name, int(bool(write)), time.time(), client),
+            )
+    finally:
+        con.close()
     return token
+
+
+OAUTH_CODE_SECONDS = 300
+
+
+def register_client(name, redirect_uris):
+    """a new OAuth client (RFC 7591 dynamic registration); returns its id"""
+    cid = secrets.token_urlsafe(16)
+    now = time.time()
+    con = users_db()
+    try:
+        with con:
+            # registrations that never led to a token are forgotten after a month
+            con.execute(
+                'DELETE FROM oauth_clients WHERE created < ? AND id NOT IN (SELECT client FROM tokens)',
+                (now - 30 * 86400,),
+            )
+            con.execute(
+                'INSERT INTO oauth_clients (id, name, redirect_uris, created) VALUES (?, ?, ?, ?)',
+                (cid, name, json.dumps(redirect_uris), now),
+            )
+    finally:
+        con.close()
+    return cid
+
+
+def get_client(cid):
+    """{'id', 'name', 'redirect_uris'} or None"""
+    r = _query('SELECT id, name, redirect_uris FROM oauth_clients WHERE id = ?', (cid,))
+    return {'id': r[0][0], 'name': r[0][1], 'redirect_uris': json.loads(r[0][2])} if r else None
+
+
+def put_code(code, client_id, user, redirect_uri, challenge, write):
+    now = time.time()
+    con = users_db()
+    try:
+        with con:
+            con.execute('DELETE FROM oauth_codes WHERE expires < ?', (now,))
+            con.execute(
+                'INSERT INTO oauth_codes (hash, client_id, user, redirect_uri, challenge, write, expires) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?)',
+                (
+                    _token_hash(code),
+                    client_id,
+                    user,
+                    redirect_uri,
+                    challenge,
+                    int(bool(write)),
+                    now + OAUTH_CODE_SECONDS,
+                ),
+            )
+    finally:
+        con.close()
+
+
+def take_code(code):
+    """the code's grant {client_id, user, redirect_uri, challenge, write}, used up: a second try finds nothing"""
+    con = users_db()
+    try:
+        with con:
+            r = con.execute(
+                'DELETE FROM oauth_codes WHERE hash = ? AND expires >= ? '
+                'RETURNING client_id, user, redirect_uri, challenge, write',
+                (_token_hash(code), time.time()),
+            ).fetchone()
+    finally:
+        con.close()
+    keys = ('client_id', 'user', 'redirect_uri', 'challenge', 'write')
+    return dict(zip(keys, r, strict=True)) if r else None
 
 
 def list_tokens(user):

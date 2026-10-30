@@ -101,6 +101,7 @@ RATE_LIMITS = {
     'agent': (300, 60),  # every call of an agent tool (agents.py), on top of its own kind
     'agent_rank': (30, 60),  # rank_like without a token: a model fit per call, per ip
     'agent_write': (120, 60),
+    'oauth_register': (20, 3600),  # apps registering for OAuth (claude.ai does once per connector)
 }
 RATE_LIMITS_ON = os.environ.get('RATE_LIMITS', '1') != '0'
 _buckets = {}
@@ -306,8 +307,11 @@ def _start_session(user, readonly=False):
 SHAREABLE = ('main', 'digest_page', 'tag_check')  # pages a ?u= link can show for another user
 AGENT_ENDPOINTS = (
     'agents.mcp',
+    'agents.mcp_me',
     'agents.api',
     'agents.api_index',
+    'agents.oauth_token',
+    'agents.oauth_register',
 )  # agents.py: access tokens only, never the session cookie
 
 
@@ -330,7 +334,7 @@ def before_request():
     if auth[:7].lower() == 'bearer ':
         found = db.check_token(auth[7:].strip())
         if found is None:
-            return {'error': 'invalid or revoked access token'}, 401, {'WWW-Authenticate': 'Bearer'}
+            return {'error': 'invalid or revoked access token'}, 401, {'WWW-Authenticate': agents.www_authenticate()}
         g.user, g.readonly, g.token = found[0], not found[1], True
     elif request.endpoint in AGENT_ENDPOINTS:
         g.user, g.readonly = None, False
@@ -392,6 +396,16 @@ def record_timing(resp):
     return resp
 
 
+# everything comes from this server: no third party ever sees a visitor's ip (GDPR), and the
+# browser enforces it. inline scripts/styles: the templates pass data in <script> blocks and
+# KaTeX positions math with inline styles
+CSP = (
+    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'self'; "
+    "frame-ancestors 'none'; base-uri 'self'"
+)
+
+
 @app.after_request
 def security_headers(resp):
     # a versioned static file (or one in a versioned vendor folder) never changes under its
@@ -402,15 +416,7 @@ def security_headers(resp):
     resp.headers.setdefault('X-Content-Type-Options', 'nosniff')
     resp.headers.setdefault('X-Frame-Options', 'DENY')
     resp.headers.setdefault('Referrer-Policy', 'same-origin')
-    # everything comes from this server: no third party ever sees a visitor's ip (GDPR), and
-    # the browser enforces it. inline scripts/styles: the templates pass data in <script>
-    # blocks and KaTeX positions math with inline styles
-    resp.headers.setdefault(
-        'Content-Security-Policy',
-        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
-        "img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'self'; "
-        "frame-ancestors 'none'; base-uri 'self'",
-    )
+    resp.headers.setdefault('Content-Security-Policy', CSP)  # a page may widen it for itself (oauth_authorize)
     return resp
 
 
@@ -1350,6 +1356,11 @@ def digest_sizes():
     return redirect(url_for('profile', saved=1, _anchor='digest-sizes'))
 
 
+def _local_url(url):
+    """a path on this site, so redirecting there can't send anyone elsewhere (no open redirect)"""
+    return url.startswith('/') and not url.startswith('//') and '\\' not in url
+
+
 @app.route('/sharing', methods=['POST'])
 def sharing():
     """the user's choice whether others may view their tags read-only, without the password"""
@@ -1358,8 +1369,7 @@ def sharing():
     db.set_public(g.user, request.form.get('public') == '1')
     if session.pop('ask_public', None):  # answered the question after signing up: back where they were
         nxt = request.form.get('next', '')
-        local = nxt.startswith('/') and not nxt.startswith('//') and '\\' not in nxt  # no open redirect
-        return redirect(nxt if local else url_for('main'))
+        return redirect(nxt if _local_url(nxt) else url_for('main'))
     return redirect(url_for('profile'))
 
 
@@ -1878,6 +1888,8 @@ def login():
         return profile(error="Usernames are 1-40 letters, digits, '.', '_' or '-'."), 400
 
     user = db.get_user(username)
+    nxt = request.form.get('next', '')
+    nxt = nxt if _local_url(nxt) else ''  # e.g. back to an app's request for access (/oauth/authorize)
     if password == '':
         # no password: a read-only view, if this user's profile is public
         if user and user['public']:
@@ -1907,7 +1919,7 @@ def login():
         # a new account starts private; the first page asks whether to make it public, with
         # the box ticked (the operator's choice, see CLAUDE.md about Art. 25(2) GDPR)
         session['ask_public'] = True
-    return redirect(url_for('main'))
+    return redirect(nxt or url_for('main'))
 
 
 @app.route('/logout', methods=['POST'])

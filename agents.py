@@ -19,6 +19,10 @@ by agents: the instructions tell agents to treat them as data, and the tools nev
 
 import json
 import time
+import base64
+import hashlib
+import secrets
+from urllib.parse import urlencode, urlparse
 
 from flask import Blueprint, g, jsonify, redirect, render_template, request, url_for
 
@@ -705,6 +709,23 @@ def _rpc(msg):
 
 @bp.route('/mcp', methods=['GET', 'POST', 'DELETE'])
 def mcp():
+    """anyone (the research tools), or a user's agent with a token"""
+    return _mcp()
+
+
+@bp.route('/mcp/me', methods=['GET', 'POST', 'DELETE'])
+def mcp_me():
+    """
+    the same, but only for a logged-in user: without a token it answers 401 with where to log
+    in, which is what makes claude.ai's connectors start the OAuth flow (on /mcp they'd stay
+    anonymous)
+    """
+    if not g.user:
+        return jsonify(error='log in first (OAuth)'), 401, {'WWW-Authenticate': www_authenticate()}
+    return _mcp()
+
+
+def _mcp():
     if request.method != 'POST':
         return '', 405, {'Allow': 'POST'}  # stateless: no event stream, no sessions to end
     msg = request.get_json(silent=True)
@@ -836,3 +857,192 @@ def revoke_token():
     if g.user and not g.readonly and not g.token:
         db.revoke_token(g.user, request.form.get('id', ''))
     return redirect(url_for('agents.agents_page'))
+
+
+# -----------------------------------------------------------------------------
+# OAuth 2.1 for MCP clients that log users in themselves (claude.ai's connectors), as the MCP
+# spec's authorization profile asks: protected resource metadata (RFC 9728) and authorization
+# server metadata (RFC 8414), dynamic client registration (RFC 7591), the authorization code
+# flow with PKCE S256 only, public clients only. The access token is an ordinary token (db), shown
+# on /agents and revocable there; a new grant replaces the client's earlier token for the user.
+# Checks that matter: redirect uris registered and matched exactly (else codes could be sent
+# anywhere), errors before a valid redirect uri is known shown here and never redirected,
+# codes single use and minutes long, the consent page posted from this site only (SameSite +
+# Sec-Fetch-Site in serve.before_request) and never framed (X-Frame-Options, frame-ancestors).
+
+SCOPES = ('read', 'write')
+
+
+def _base():
+    return site.PUBLIC_URL or request.host_url.rstrip('/')
+
+
+def www_authenticate():
+    return f'Bearer resource_metadata="{_base()}/.well-known/oauth-protected-resource/mcp/me"'
+
+
+@bp.route('/.well-known/oauth-protected-resource')
+@bp.route('/.well-known/oauth-protected-resource/mcp/me')
+@bp.route('/.well-known/oauth-protected-resource/mcp')
+def oauth_resource():
+    return jsonify(
+        resource=_base() + '/mcp/me',
+        authorization_servers=[_base()],
+        scopes_supported=list(SCOPES),
+        bearer_methods_supported=['header'],
+        resource_name='Arxiv Resanity',
+    )
+
+
+@bp.route('/.well-known/oauth-authorization-server')
+@bp.route('/.well-known/openid-configuration')
+def oauth_server():
+    b = _base()
+    return jsonify(
+        issuer=b,
+        authorization_endpoint=b + '/oauth/authorize',
+        token_endpoint=b + '/oauth/token',
+        registration_endpoint=b + '/oauth/register',
+        response_types_supported=['code'],
+        grant_types_supported=['authorization_code'],
+        code_challenge_methods_supported=['S256'],
+        token_endpoint_auth_methods_supported=['none'],
+        scopes_supported=list(SCOPES),
+    )
+
+
+def _redirect_ok(uri):
+    """https anywhere, or http to this machine (desktop apps listen on localhost); no fragments"""
+    try:
+        u = urlparse(uri)
+    except ValueError:
+        return False
+    if u.fragment or not u.netloc or len(uri) > 500:
+        return False
+    return u.scheme == 'https' or (u.scheme == 'http' and u.hostname in ('localhost', '127.0.0.1', '::1'))
+
+
+def _oauth_error(error, description, code=400):
+    return jsonify(error=error, error_description=description), code, {'Cache-Control': 'no-store'}
+
+
+@bp.route('/oauth/register', methods=['POST'])
+def oauth_register():
+    if site.rate_limited('oauth_register'):
+        return _oauth_error('slow_down', 'too many registrations, try later', 429)
+    meta = request.get_json(silent=True)
+    if not isinstance(meta, dict):
+        return _oauth_error('invalid_client_metadata', 'send the client metadata as a JSON object')
+    uris = meta.get('redirect_uris')
+    if (
+        not isinstance(uris, list)
+        or not 1 <= len(uris) <= 5
+        or not all(isinstance(u, str) and _redirect_ok(u) for u in uris)
+    ):
+        return _oauth_error('invalid_redirect_uri', '1-5 redirect_uris, https (or http on localhost), no fragment')
+    if meta.get('token_endpoint_auth_method', 'none') != 'none':
+        return _oauth_error('invalid_client_metadata', 'only public clients (token_endpoint_auth_method none)')
+    name = ' '.join(str(meta.get('client_name') or 'an app').split())[:60]
+    cid = db.register_client(name, uris)
+    return (
+        jsonify(
+            client_id=cid,
+            client_id_issued_at=int(time.time()),
+            client_name=name,
+            redirect_uris=uris,
+            token_endpoint_auth_method='none',
+            grant_types=['authorization_code'],
+            response_types=['code'],
+        ),
+        201,
+    )
+
+
+def _grant_request(args):
+    """(the checked request, None) or (None, an error message for the page): never redirects"""
+    client = db.get_client(args.get('client_id', ''))
+    if client is None:
+        return None, 'This app is not registered here (unknown client_id).'
+    uri = args.get('redirect_uri', '')
+    if uri not in client['redirect_uris']:
+        return None, 'This app asked to send you to an address it did not register (redirect_uri).'
+    if args.get('response_type') != 'code':
+        return None, 'Only response_type=code is supported.'
+    challenge = args.get('code_challenge', '')
+    if args.get('code_challenge_method') != 'S256' or not 43 <= len(challenge) <= 128:
+        return None, 'The app must use PKCE with S256 (code_challenge).'
+    scopes = set((args.get('scope') or 'read').split())
+    return {
+        'client': client,
+        'redirect_uri': uri,
+        'state': args.get('state', ''),
+        'challenge': challenge,
+        'wants_write': 'write' in scopes,
+        'host': urlparse(uri).hostname,
+    }, None
+
+
+def _back(req, **params):
+    """the redirect to the app with these params (and state, and who issued them: RFC 9207)"""
+    params.update(iss=_base(), **({'state': req['state']} if req['state'] else {}))
+    sep = '&' if urlparse(req['redirect_uri']).query else '?'
+    return redirect(req['redirect_uri'] + sep + urlencode(params))
+
+
+@bp.route('/oauth/authorize', methods=['GET', 'POST'])
+def oauth_authorize():
+    args = request.args if request.method == 'GET' else request.form
+    req, err = _grant_request(args)
+    context = site.default_context()
+    if err:
+        return render_template('authorize.html', error=err, **context), 400
+    if request.method == 'GET' or not g.user or g.readonly or g.token:
+        if g.readonly:
+            context['user'] = ''  # a read-only view can't grant anything: log in properly
+        page = render_template(
+            'authorize.html',
+            req=req,
+            params=[(k, args[k]) for k in args if k not in ('decision', 'write')],
+            here=request.full_path,
+            **context,
+        )
+        # browsers hold the redirect after the form (back to the app) to form-action too, so this
+        # page alone may also send forms on to the app's registered redirect origin
+        u = urlparse(req['redirect_uri'])
+        csp = site.CSP.replace("form-action 'self'", f"form-action 'self' {u.scheme}://{u.netloc}")
+        return page, 200, {'Content-Security-Policy': csp}
+    if args.get('decision') != 'allow':
+        return _back(req, error='access_denied')
+    code = secrets.token_urlsafe(32)
+    db.put_code(code, req['client']['id'], g.user, req['redirect_uri'], req['challenge'], args.get('write') == '1')
+    return _back(req, code=code)
+
+
+def _s256(verifier):
+    return base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b'=').decode()
+
+
+@bp.route('/oauth/token', methods=['POST'])
+def oauth_token():
+    f = request.form
+    if f.get('grant_type') != 'authorization_code':
+        return _oauth_error('unsupported_grant_type', 'only authorization_code')
+    grant = db.take_code(f.get('code', ''))  # used up even if what follows fails: codes are single use
+    if grant is None:
+        return _oauth_error('invalid_grant', 'unknown, used or expired code')
+    if f.get('client_id') != grant['client_id'] or f.get('redirect_uri') != grant['redirect_uri']:
+        return _oauth_error('invalid_grant', 'client_id or redirect_uri does not match the authorization')
+    if not secrets.compare_digest(_s256(f.get('code_verifier', '')), grant['challenge']):
+        return _oauth_error('invalid_grant', 'code_verifier does not match the code_challenge')
+    client = db.get_client(grant['client_id'])
+    token = db.create_token(
+        grant['user'],
+        (client['name'] if client else 'an app') + ' (connected)',
+        grant['write'],
+        client=grant['client_id'],
+    )
+    return (
+        jsonify(access_token=token, token_type='Bearer', scope='read write' if grant['write'] else 'read'),
+        200,
+        {'Cache-Control': 'no-store', 'Pragma': 'no-cache'},
+    )

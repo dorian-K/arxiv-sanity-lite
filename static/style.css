@@ -101,7 +101,7 @@ h1 { font-size: 18px; margin: 0 0 12px; }
 #header a { color: var(--accent-text); }
 #home-link { font-weight: 700; font-size: 18px; letter-spacing: -.01em; white-space: nowrap; }
 #home-link span { font-weight: 400; opacity: .85; }
-#header nav { display: flex; gap: 18px; font-size: 15px; }
+#header nav { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px 18px; font-size: 15px; }
 #header nav a { opacity: .9; white-space: nowrap; }
 #header nav a:hover { opacity: 1; text-decoration: none; }
 .nav-user { font-weight: 600; max-width: 12ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -449,7 +449,7 @@ textarea.form-control {
 
 @media (max-width: 600px) {
     body { font-size: 15px; }
-    #header nav { gap: 12px; font-size: 14px; }
+    #header nav { gap: 4px 12px; font-size: 14px; }
     .rel_paper, .card { padding: 14px; border-radius: 8px; }
     .rel_title { font-size: 17px; }
     .rel_img { display: none; }
@@ -497,7 +497,7 @@ label.check input { margin-top: 3px; width: 18px; height: 18px; flex: none; }
 .muted.small { font-size: 13px; margin: 10px 0 0; }
 @media (max-width: 380px) {
     #home-link { font-size: 16px; }
-    #header nav { gap: 10px; }
+    #header nav { gap: 4px 10px; font-size: 13px; }
     .nav-user { max-width: 8ch; }
 }
 

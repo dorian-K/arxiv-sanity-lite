@@ -27,7 +27,7 @@ var sharing = {{ sharing | default(false) | tojson }};
     <a href="/" id="home-link">Arxiv <span>Resanity</span></a>
     <nav>
         <a href="/?rank=time" class="nav-secondary" title="every paper, newest first">newest</a>
-        <a href="/agents" class="nav-secondary" title="use this site from Claude and other AI agents">agents</a>
+        <a href="/agents" title="how to use this site with Claude and other AI agents">AI agents</a>
         {% if user %}<a href="/?rank=unread&tags=all" title="saved papers you haven't marked as read">to read</a><a href="/digest">digest</a>{% endif %}{% if user and not readonly %}<a href="/import" title="add papers by arXiv link">add</a>{% endif %}
         <a href="/profile" class="{{ 'nav-user' if user else 'nav-login' }}" {% if readonly %}title="read-only view"{% endif %}>{{ ('👁 ' + user) if readonly else (user if user else 'log in') }}</a>
     </nav>

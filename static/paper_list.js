@@ -171,19 +171,23 @@ const useAiSummary = p => {
 };
 const AI_FIELDS = [['problem', 'Problem'], ['approach', 'Approach'], ['result', 'Result'], ['caveat', 'Caveat']];
 const AiSummary = ({ s }) => {
-    if (!s || s === 'none') return null;
-    if (s === 'pending') {
-        return html`<div class="rel_ai skel" aria-busy="true" title="an AI model is summarizing this paper">
-            <div class="rel_ai_head">AI summary, being written…</div>
-            ${[88, 72, 80, 60].map(w => html`<span key=${w} class="sk sk-line" style=${{ width: w + '%' }}></span>`)}
-        </div>`;
-    }
     const from = s.source === 'abstract' ? 'its abstract' : 'its full text';
-    return html`<div class="rel_ai" title=${'written by an AI model (' + (s.model || '').split('/').pop() + ') from ' + from + '; it may contain errors'}>
-        <div class="rel_ai_head">AI summary from ${from}, may contain errors</div>
+    return html`<div class="rel_ai" role="tabpanel" title=${'written by an AI model (' + (s.model || '').split('/').pop() + ') from ' + from + '; it may contain errors'}>
         <ul>${AI_FIELDS.filter(([k]) => s[k]).map(([k, label]) => html`<li key=${k}><b>${label}:</b> <${MathText} text=${s[k]} /></li>`)}</ul>
+        <div class="rel_ai_note">AI summary from ${from}, may contain errors</div>
     </div>`;
 };
+// the AI summary and the abstract as two tabs: the summary while there is one, the abstract
+// while it is being written (its tab spins), and no tabs where there will be none
+const AboutTabs = ({ ai, tab, setTab }) => html`
+    <div class="rel_tabs" role="tablist">
+        <button type="button" role="tab" aria-selected=${tab === 'summary'} disabled=${ai === 'pending'}
+                class=${tab === 'summary' ? 'on' : ''} onClick=${() => setTab('summary')}
+                title=${ai === 'pending' ? 'an AI model is summarizing this paper, a few seconds' : 'a short AI summary: problem, approach, result, caveat'}>
+            ${ai === 'pending' ? html`<span class="spin" aria-hidden="true"></span>` : null}Summary</button>
+        <button type="button" role="tab" aria-selected=${tab === 'abstract'} class=${tab === 'abstract' ? 'on' : ''}
+                onClick=${() => setTab('abstract')} title="the authors' abstract">Abstract</button>
+    </div>`;
 
 const SHOW_SCORE = ['tags', 'pid']; // (search scores are raw text-match numbers, meaningless to read)
 
@@ -264,6 +268,9 @@ const Paper = ({ paper: p, quickTag }) => {
     const [expanded, setExpanded] = useState(false); // one paper opened in the compact view
     const compactView = useView() === 'compact';
     const ai = useAiSummary(p);
+    const [chosenTab, setTab] = useState(null);
+    const hasAi = ai && ai !== 'none';
+    const tab = ai && typeof ai === 'object' ? chosenTab || 'summary' : 'abstract';
 
     const without = (list, tag) => list.filter(t => t !== tag);
     const withTag = (list, tag) => (list.includes(tag) ? list : [...list, tag]);
@@ -368,14 +375,15 @@ const Paper = ({ paper: p, quickTag }) => {
         ${picker ? html`<${TagPicker} mode=${picker} tags=${pickable}
             onPick=${t => { if (!userTagNames.includes(t)) userTagNames.push(t); (picker === 'add' ? save : notFor)(t); }}
             onCancel=${() => setPicker(null)} />` : null}
-        <${AiSummary} s=${ai} />
+        ${hasAi ? html`<${AboutTabs} ai=${ai} tab=${tab} setTab=${setTab} />` : null}
+        ${tab === 'summary' ? html`<${AiSummary} s=${ai} />` : html`
         <div class=${'rel_abs' + (long && !open ? ' clamped' : '')} onClick=${() => long && !open && setOpen(true)}>
             <${MathText} text=${p.summary} />
-        </div>
+        </div>`}
         ${canEdit || note ? html`<${NoteBox} pid=${p.id} note=${note} setNote=${setNote}
             editing=${canEdit && editingNote} setEditing=${setEditingNote} />` : null}
         <div class="rel_links">
-            ${long ? html`<button class="linkbtn" onClick=${() => setOpen(o => !o)}>${open ? 'show less' : 'show more'}</button>` : null}
+            ${long && tab === 'abstract' ? html`<button class="linkbtn" onClick=${() => setOpen(o => !o)}>${open ? 'show less' : 'show more'}</button>` : null}
             <a href=${'https://arxiv.org/pdf/' + p.id}>pdf</a>
             <a class="rel_more" href=${'/?rank=pid&pid=' + p.id}>similar</a>
             ${canEdit && !note && !editingNote ? html`<button class="linkbtn" title="a note for yourself on this paper (only you see it)"

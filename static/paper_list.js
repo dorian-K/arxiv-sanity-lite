@@ -181,19 +181,19 @@ const AiSummary = ({ s }) => {
 // summary is being written it shows the abstract, and the Summary tab is grayed out with a light
 // sweeping across it
 // a visitor's (or a read-only viewer's) card for a paper without a summary: the tab is there but
-// grayed out, and says, on hover or tap, that nothing is being written and why
+// grayed out, and a popover on hover (or tap, which focuses it) says that nothing is being written
 const NO_SUMMARY = !user
-    ? 'Nothing is being generated: summaries are written only for logged-in users. Log in to get them.'
-    : "Nothing is being generated: summaries are written only on your own account's pages.";
-const AboutTabs = ({ ai, tab, setTab, onLogin }) => html`
+    ? 'No summary for this paper yet, and none is being generated: summaries are written only for logged-in users. Log in to get them.'
+    : "No summary for this paper yet, and none is being generated: summaries are written only on your own account's pages.";
+const AboutTabs = ({ ai, tab, setTab }) => html`
     <div class="rel_tabs" role="tablist">
         <button type="button" role="tab" aria-selected=${tab === 'summary'} disabled=${ai === 'pending'}
                 class=${(tab === 'summary' ? 'on' : '') + (ai === 'pending' ? ' loading' : '') + (ai === 'login' ? ' unavailable' : '')}
-                onClick=${() => (ai === 'login' ? onLogin() : setTab('summary'))}
+                onClick=${() => ai !== 'login' && setTab('summary')} aria-description=${ai === 'login' ? NO_SUMMARY : null}
                 title=${ai === 'pending' ? 'an AI model is summarizing this paper, a few seconds'
-                    : ai === 'login' ? 'No summary for this paper yet. ' + NO_SUMMARY
-                    : 'a short AI summary: problem, approach, result, caveat'}>
-            <span class="ai-badge" title="written by an AI model">AI</span><span class="tablabel">Summary</span></button>
+                    : ai === 'login' ? null : 'a short AI summary: problem, approach, result, caveat'}>
+            <span class="ai-badge">AI</span><span class="tablabel">Summary</span>
+            ${ai === 'login' ? html`<span class="tabpop" role="tooltip">${NO_SUMMARY}</span>` : null}</button>
         <button type="button" role="tab" aria-selected=${tab === 'abstract'} class=${tab === 'abstract' ? 'on' : ''}
                 onClick=${() => setTab('abstract')} title="the authors' abstract">Abstract</button>
     </div>`;
@@ -312,7 +312,6 @@ const Paper = ({ paper: p, quickTag }) => {
     const [chosenTab, setChosenTab] = useState(null);
     const [askDefault, setAskDefault] = useState(false);
     const hasAi = ai && ai !== 'none';
-    const [whyNot, setWhyNot] = useState(false); // a tap on a grayed-out Summary tab says why
     const tab = ai && typeof ai === 'object' ? chosenTab || aboutTab : 'abstract';
     const pickTab = t => {
         setChosenTab(t);
@@ -424,10 +423,7 @@ const Paper = ({ paper: p, quickTag }) => {
         ${picker ? html`<${TagPicker} mode=${picker} tags=${pickable}
             onPick=${t => { if (!userTagNames.includes(t)) userTagNames.push(t); (picker === 'add' ? save : notFor)(t); }}
             onCancel=${() => setPicker(null)} />` : null}
-        ${hasAi ? html`<${AboutTabs} ai=${ai} tab=${tab} setTab=${pickTab} onLogin=${() => setWhyNot(w => !w)} />` : null}
-        ${whyNot && ai === 'login' ? html`<div class="rel_tabhint info" role="note"><span aria-hidden="true">ℹ️</span>
-            <span>No summary for this paper yet. ${NO_SUMMARY.replace(' Log in to get them.', '')}
-            ${!user ? html` <a href="/profile">Log in</a>` : null}</span></div>` : null}
+        ${hasAi ? html`<${AboutTabs} ai=${ai} tab=${tab} setTab=${pickTab} />` : null}
         ${askDefault && tab !== aboutTab ? html`<div class="rel_tabhint" role="note">
             <span aria-hidden="true">💡</span>
             <button class="linkbtn" onClick=${() => { setAboutDefault(tab); setAskDefault(false); setChosenTab(null); }}

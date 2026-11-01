@@ -713,3 +713,4 @@ details.danger form { margin-top: 10px; }
 #askpublic h2 { margin: 0 0 14px; font-size: 20px; font-weight: 500; }
 #askpublic .check { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 18px; }
 #askpublic .check input { margin-top: 4px; }
+.smallcaps { font-variant: small-caps; }

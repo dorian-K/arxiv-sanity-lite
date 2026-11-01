@@ -57,13 +57,63 @@ function typeset(elt) {
     }).catch(() => {}); // offline or blocked CDN: leave the raw LaTeX
 }
 
+// LaTeX that isn't math (\emph{…}, {\bf …}, \%, ``…'', \cite{…}, accents) is common in arXiv
+// abstracts, and KaTeX only typesets math. textLatex turns it into html, leaving the math
+// pieces as they are for KaTeX; everything is escaped first, so only the tags made here exist
+const HAS_TEXT_LATEX = /\\[a-zA-Z]+|\\[%&_#$'"`^~]|``|\{\\(em|it|bf|sc|tt|sl)\b/;
+const MATH_PIECES = /(\$\$[\s\S]+?\$\$|\\\[[\s\S]+?\\\]|\\\([\s\S]+?\\\)|(?<!\\)\$(?:[^$\\]|\\[\s\S])+?\$)/;
+const TEXT_STYLE = { emph: 'em', textit: 'em', textsl: 'em', textbf: 'b', textsc: 'span class="smallcaps"', texttt: 'code', underline: 'u' };
+const OLD_STYLE = { em: 'em', it: 'em', sl: 'em', bf: 'b', sc: 'span class="smallcaps"', tt: 'code' };
+const SYMBOLS = {
+    alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', epsilon: 'ε', varepsilon: 'ε', zeta: 'ζ', eta: 'η', theta: 'θ',
+    kappa: 'κ', lambda: 'λ', mu: 'μ', nu: 'ν', xi: 'ξ', pi: 'π', rho: 'ρ', sigma: 'σ', tau: 'τ', phi: 'φ',
+    varphi: 'φ', chi: 'χ', psi: 'ψ', omega: 'ω', Gamma: 'Γ', Delta: 'Δ', Theta: 'Θ', Lambda: 'Λ', Pi: 'Π',
+    Sigma: 'Σ', Phi: 'Φ', Psi: 'Ψ', Omega: 'Ω', deg: '°', times: '×', approx: '≈', sim: '~', le: '≤', leq: '≤',
+    ge: '≥', geq: '≥', neq: '≠', pm: '±', infty: '∞', cdot: '·', ldots: '…', dots: '…', to: '→', rightarrow: '→',
+    in: '∈', sqrt: '√', log: 'log', textasciitilde: '~', LaTeX: 'LaTeX', TeX: 'TeX', ie: 'i.e.', eg: 'e.g.',
+};
+const ACCENTS = { "'": '́', '`': '̀', '"': '̈', '^': '̂', '~': '̃', c: '̧', v: '̌', '=': '̄', u: '̆', H: '̋' };
+// arXiv's metadata sometimes has unicode letters inside math ($η_t$), which KaTeX refuses
+const MATH_UNICODE = {};
+for (const [cmd, ch] of Object.entries(SYMBOLS)) {
+    if (ch.length === 1 && !(ch in MATH_UNICODE) && !['sim', 'cdot', 'ldots', 'dots', 'textasciitilde', 'deg'].includes(cmd)) MATH_UNICODE[ch] = '\\' + cmd + ' ';
+}
+const mathUnicode = m => m.replace(/[^\x00-\x7f]/g, ch => MATH_UNICODE[ch] ?? ch);
+const escapeHtml = t => t.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+function textLatex(text) {
+    return text.split(MATH_PIECES).map((piece, i) => {
+        if (i % 2) return escapeHtml(mathUnicode(piece)); // math, typeset by KaTeX afterwards
+        let t = piece.replace(/\\([`'"^~=]|[cvuH](?=\{))\{?([a-zA-Z])\}?/g, (m, a, ch) => (ACCENTS[a] ? (ch + ACCENTS[a]).normalize('NFC') : m));
+        t = escapeHtml(t);
+        t = t.replace(/\s*\\(cite[pt]?|citeauthor|ref|eqref|label)\*?(\[[^\]]*\])?\{[^{}]*\}/g, '');
+        t = t.replace(/\s*\\footnote\{([^{}]*)\}/g, ' ($1)');
+        t = t.replace(/\\(?:url|href)\{([^{}]*)\}(?:\{([^{}]*)\})?/g, (m, u, label) => label || u);
+        for (let round = 0; round < 3; round++) { // nested ones, from the inside out
+            t = t.replace(/\\([a-zA-Z]+)\{([^{}]*)\}/g, (m, cmd, body) => {
+                const tag = TEXT_STYLE[cmd];
+                return tag ? '<' + tag + '>' + body + '</' + tag.split(' ')[0] + '>' : cmd === 'mbox' || cmd === 'text' ? body : m;
+            });
+            t = t.replace(/\{\\(em|it|bf|sc|tt|sl)\b\s*([^{}]*)\}/g, (m, cmd, body) => {
+                const tag = OLD_STYLE[cmd];
+                return '<' + tag + '>' + body + '</' + tag.split(' ')[0] + '>';
+            });
+        }
+        t = t.replace(/``/g, '“').replace(/''/g, '”');
+        t = t.replace(/\\([a-zA-Z]+)\b;?/g, (m, cmd) => SYMBOLS[cmd] ?? m);
+        t = t.replace(/\\([%_#&])/g, '$1').replace(/\\\$/g, '<span>$</span>');
+        t = t.replace(/\\[ ,;!]/g, ' ');
+        return t.replace(/(?<!\\[a-zA-Z]+)\{([^{}$\\]*)\}/g, '$1'); // grouping braces left over
+    }).join('');
+}
+
 // text that may contain LaTeX. React never manages the children of the span, because
 // KaTeX replaces them, so the text is set by hand and typeset lazily
 const MathText = ({ text, tag = 'span', className }) => {
     const ref = useRef(null);
     useEffect(() => {
         const elt = ref.current;
-        elt.textContent = text;
+        if (HAS_TEXT_LATEX.test(text) || HAS_MATH.test(text)) elt.innerHTML = textLatex(text);
+        else elt.textContent = text;
         if (!HAS_MATH.test(text)) return;
         if (mathObserver) {
             mathObserver.observe(elt);

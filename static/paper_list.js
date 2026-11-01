@@ -420,8 +420,8 @@ const Paper = ({ paper: p, quickTag }) => {
             <button class="linkbtn" onClick=${() => { setAboutDefault(tab); setAskDefault(false); setChosenTab(null); }}
                     title=${loggedIn ? 'every card opens on it from now on; saved in your settings (profile), where you can change it back' : 'every card opens on it from now on; remembered in this browser'}>
                 Show ${tab === 'abstract' ? 'abstract' : 'summary'} by default</button>
-            <span class="muted">·</span>
-            <button class="linkbtn muted" onClick=${() => { switches(-2 * SWITCHES_TO_ASK); setAskDefault(false); }}
+            <span class="muted">or</span>
+            <button class="linkbtn" onClick=${() => { switches(-2 * SWITCHES_TO_ASK); setAskDefault(false); }}
                     title="keep the current default">no thanks</button>
         </div>` : null}
         ${tab === 'summary' ? html`<${AiSummary} s=${ai} />` : html`

@@ -392,7 +392,6 @@ input:focus, select:focus, .btn:focus-visible, .iconbtn:focus-visible {
     margin: 4px 0 8px; padding: 4px 10px; font-size: 13px;
     border: 1px dashed var(--accent); border-radius: 8px;
 }
-.rel_tabhint .linkbtn.muted { color: var(--muted); }
 .rel_ai ul { margin: 6px 0 2px; padding-left: 18px; }
 .rel_ai li { margin: 3px 0; }
 .rel_ai b { font-weight: 600; }

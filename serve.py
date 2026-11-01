@@ -29,7 +29,7 @@ from itsdangerous import URLSafeSerializer, URLSafeTimedSerializer, BadSignature
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import generate_password_hash, check_password_hash
 
-from aslite import db, digest, mail, metrics, thumbs
+from aslite import db, digest, mail, metrics, summary, thumbs
 from aslite.spell import Speller
 from aslite.db import get_papers_db, get_secret_key, load_features, features_exist, PAPERS_DB_FILE
 from aslite.arxiv import find_arxiv_id, fetch_papers_by_id, OLD_ARXIV_ID_RE, categories_text
@@ -101,7 +101,11 @@ RATE_LIMITS = {
     'agent': (300, 60),  # every call of an agent tool (agents.py), on top of its own kind
     'agent_rank': (30, 60),  # rank_like without a token: a model fit per call, per ip
     'agent_write': (120, 60),
-    'oauth_register': (20, 3600),  # apps registering for OAuth (claude.ai does once per connector)
+    'oauth_register': (20, 3600),
+    'summary': (
+        60,
+        60,
+    ),  # requests that start AI summaries (each a model call that costs money)  # apps registering for OAuth (claude.ai does once per connector)
 }
 RATE_LIMITS_ON = os.environ.get('RATE_LIMITS', '1') != '0'
 _buckets = {}
@@ -442,9 +446,7 @@ THUMB_KINDS = (THUMB_KIND, 'page' if THUMB_KIND == 'figure' else 'figure')
 
 def _thumb_license(pid):
     """the open license a paper's thumbnails were made under, '' if they may not be shown"""
-    if 'refs_db' not in g:
-        g.refs_db = db.get_refs_db()
-    code = g.refs_db.thumb_license(pid)
+    code = _refs_db().thumb_license(pid)
     return code if thumbs.is_open(code) else ''
 
 
@@ -478,6 +480,98 @@ def thumb(kind, pid):
     return send_file(os.path.abspath(path), mimetype='image/jpeg', max_age=86400)
 
 
+def _refs_db():
+    if 'refs_db' not in g:
+        g.refs_db = db.get_refs_db()
+    return g.refs_db
+
+
+def summary_info(pid):
+    """the paper's AI summary for its card ({problem, approach, result, caveat, model, source}), or None"""
+    if not summary.enabled():
+        return None
+    try:
+        return _refs_db().summary_of(pid)
+    except Exception as e:  # refs.sqlite trouble: no summary, but never a broken page
+        print("summary of %s: %s" % (pid, e))
+        return None
+
+
+# AI summaries of the papers a page shows that have none yet (search results, recommendations):
+# the page asks /summaries for them, they are made here in the background from the abstract
+# (the full text would take a request to arxiv.org per paper, at most one per 15 s; enrich_daemon.py
+# makes full-text ones for saved and digest papers), and the page asks again until they are there.
+# a page's papers go out together, close in time, so the provider can reuse its cache of the prompt
+SUMMARY_MAX_DAY = int(os.environ.get('SUMMARY_MAX_DAY') or 300)
+SUMMARY_BATCH = 60  # papers per /summaries request
+_summary_pool = None
+_summary_pool_lock = threading.Lock()
+
+
+def _summarize_abstract(pid):
+    try:
+        with get_papers_db() as pdb, db.get_refs_db() as rdb:
+            d = pdb.get_many([pid]).get(pid)
+            if d is None:
+                rdb.put_summary(pid, 'error')
+                return
+            try:
+                fields = summary.summarize(' '.join(d['title'].split()), ' '.join(d['summary'].split()), '')
+            except Exception as e:  # the model or the network: tried again later (claim_summaries)
+                print("summary of %s: %s: %s" % (pid, type(e).__name__, e))
+                rdb.put_summary(pid, 'error')
+                return
+            rdb.put_summary(pid, 'ok', summary.MODEL, 'abstract', fields)
+    except Exception as e:  # never kill the pool's thread
+        print("summary of %s: %s" % (pid, e))
+
+
+def _summaries_later(pids):
+    global _summary_pool
+    from concurrent.futures import ThreadPoolExecutor
+
+    with _summary_pool_lock:
+        if _summary_pool is None:
+            _summary_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix='summary')
+    for pid in pids:
+        _summary_pool.submit(_summarize_abstract, pid)
+
+
+@app.route('/summaries', methods=['POST'])
+def summaries():
+    """
+    {summaries: {pid: fields}, pending: [pids]} for the papers in the form field pids
+    (comma-separated): the ready ones, and the ones being made, which this request starts
+    for those that have none (from the abstract, in the background; logged-in users only).
+    ask again for pending
+    """
+    if not summary.enabled():
+        return {'summaries': {}, 'pending': []}
+    papers = get_papers()
+    pids = [p for p in request.form.get('pids', '').split(',')[:SUMMARY_BATCH] if p and p in papers]
+    rdb = _refs_db()
+    known = rdb.summaries_of(pids)
+    ready = {
+        p: {k: s[k] for k in (*db.SUMMARY_KEYS, 'model', 'source')} for p, s in known.items() if s['status'] == 'ok'
+    }
+    missing = [p for p in pids if p not in ready]
+    started = []
+    # only logged-in users start model calls (they cost money); others see the ones that exist
+    may_start = g.user is not None and not g.readonly
+    if (
+        missing
+        and may_start
+        and rdb.summaries_since(time.time() - 86400) < SUMMARY_MAX_DAY
+        and not rate_limited('summary')
+    ):
+        left = SUMMARY_MAX_DAY - rdb.summaries_since(time.time() - 86400)
+        started = rdb.claim_summaries(missing[: max(0, left)])
+        _summaries_later(started)
+    now = rdb.summaries_of(missing)
+    pending = [p for p in missing if p in started or (now.get(p) or {}).get('status') == 'pending']
+    return {'summaries': ready, 'pending': pending}
+
+
 def render_pid(pid, d=None):
     # render a single paper with just the information we need for the UI
     tags = get_tags()
@@ -485,6 +579,7 @@ def render_pid(pid, d=None):
     d = d or get_papers()[pid]
     t_url, t_label, t_license = thumb_info(pid)
     return dict(
+        ai=summary_info(pid),
         weight=0.0,
         id=d['_id'],
         title=d['title'],
@@ -867,6 +962,9 @@ def default_context():
     me = db.get_user(g.user) if g.user and not g.readonly and not g.viewing else None
     context['sharing'] = bool(me and me['public'])
     context['ask_public'] = bool(me and session.get('ask_public'))
+    context['summaries_on'] = summary.enabled()
+    # whether this visitor's pages ask for missing summaries: model calls cost money, so only logged-in users
+    context['summaries_ask'] = summary.enabled() and g.user is not None and not g.readonly
     return context
 
 

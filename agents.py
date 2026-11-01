@@ -145,6 +145,9 @@ def _papers(pids, abstracts=True, extra=None):
             p['comment'] = ' '.join(d['arxiv_comment'].split())
         if abstracts:
             p['abstract'] = ' '.join(d['summary'].split())
+            ai = site.summary_info(pid)
+            if ai:  # written by a model, from the paper's text or abstract
+                p['ai_summary'] = {k: ai[k] for k in db.SUMMARY_KEYS if ai[k]} | {'from': ai['source']}
         if mine:
             p['saved_to'] = sorted(t for t, ps in tags.items() if pid in ps)
             nf = sorted(t for t, ps in neg.items() if pid in ps)

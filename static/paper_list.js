@@ -126,6 +126,65 @@ const NoteBox = ({ pid, note, setNote, editing, setEditing }) => {
     </div>`;
 };
 
+// AI summaries (aslite/summary.py): for logged-in users, cards that come without one ask /summaries for it, all the
+// cards of a page in one request, so they are made together; the card shows a blanked copy
+// meanwhile, and the page asks again until each is there (or gives up after ~2 minutes)
+const aiSummaries = {}; // pid -> fields | 'pending' | 'none'
+const aiListeners = new Set();
+let aiWanted = new Set();
+let aiTimer = null;
+const aiNotify = () => aiListeners.forEach(f => f());
+const askSummaries = (pids, round) => {
+    fetch('/summaries', { method: 'POST', body: new URLSearchParams({ pids: pids.join(',') }) })
+        .then(r => r.json()).then(res => {
+            Object.assign(aiSummaries, res.summaries);
+            const pending = res.pending.filter(p => !res.summaries[p]);
+            pids.forEach(p => { if (!res.summaries[p] && !pending.includes(p)) aiSummaries[p] = 'none'; });
+            if (pending.length && round < 50) setTimeout(() => askSummaries(pending, round + 1), 2500);
+            else pending.forEach(p => { aiSummaries[p] = 'none'; });
+            aiNotify();
+        })
+        .catch(() => { pids.forEach(p => { aiSummaries[p] = 'none'; }); aiNotify(); });
+};
+const wantSummary = pid => {
+    if (pid in aiSummaries) return;
+    aiSummaries[pid] = 'pending';
+    aiWanted.add(pid);
+    clearTimeout(aiTimer);
+    aiTimer = setTimeout(() => {
+        const all = [...aiWanted];
+        aiWanted = new Set();
+        for (let i = 0; i < all.length; i += 60) askSummaries(all.slice(i, i + 60), 0);
+    }, 50); // the whole page's cards, in one request
+};
+const useAiSummary = p => {
+    const [, bump] = useState(0);
+    useEffect(() => {
+        const f = () => bump(x => x + 1);
+        aiListeners.add(f);
+        if (summariesAsk && !p.ai) wantSummary(p.id);
+        return () => aiListeners.delete(f);
+    }, [p.id]);
+    if (!summariesOn) return null;
+    // only logged-in users' pages ask for missing ones (each is a model call); others show what exists
+    return p.ai || aiSummaries[p.id] || (summariesAsk ? 'pending' : null);
+};
+const AI_FIELDS = [['problem', 'Problem'], ['approach', 'Approach'], ['result', 'Result'], ['caveat', 'Caveat']];
+const AiSummary = ({ s }) => {
+    if (!s || s === 'none') return null;
+    if (s === 'pending') {
+        return html`<div class="rel_ai skel" aria-busy="true" title="an AI model is summarizing this paper">
+            <div class="rel_ai_head">AI summary, being written…</div>
+            ${[88, 72, 80, 60].map(w => html`<span key=${w} class="sk sk-line" style=${{ width: w + '%' }}></span>`)}
+        </div>`;
+    }
+    const from = s.source === 'abstract' ? 'its abstract' : 'its full text';
+    return html`<div class="rel_ai" title=${'written by an AI model (' + (s.model || '').split('/').pop() + ') from ' + from + '; it may contain errors'}>
+        <div class="rel_ai_head">AI summary from ${from}, may contain errors</div>
+        <ul>${AI_FIELDS.filter(([k]) => s[k]).map(([k, label]) => html`<li key=${k}><b>${label}:</b> <${MathText} text=${s[k]} /></li>`)}</ul>
+    </div>`;
+};
+
 const SHOW_SCORE = ['tags', 'pid']; // (search scores are raw text-match numbers, meaningless to read)
 
 // a rank fraction as people read it: 0.0031 -> "top 0.3%"
@@ -204,6 +263,7 @@ const Paper = ({ paper: p, quickTag }) => {
     const [open, setOpen] = useState(false);
     const [expanded, setExpanded] = useState(false); // one paper opened in the compact view
     const compactView = useView() === 'compact';
+    const ai = useAiSummary(p);
 
     const without = (list, tag) => list.filter(t => t !== tag);
     const withTag = (list, tag) => (list.includes(tag) ? list : [...list, tag]);
@@ -308,6 +368,7 @@ const Paper = ({ paper: p, quickTag }) => {
         ${picker ? html`<${TagPicker} mode=${picker} tags=${pickable}
             onPick=${t => { if (!userTagNames.includes(t)) userTagNames.push(t); (picker === 'add' ? save : notFor)(t); }}
             onCancel=${() => setPicker(null)} />` : null}
+        <${AiSummary} s=${ai} />
         <div class=${'rel_abs' + (long && !open ? ' clamped' : '')} onClick=${() => long && !open && setOpen(true)}>
             <${MathText} text=${p.summary} />
         </div>

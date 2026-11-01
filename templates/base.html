@@ -14,6 +14,8 @@ var user = {{ user | tojson }};
 var readonly = {{ readonly | default(false) | tojson }};
 // whose tags this page shows: someone else's on a shared link (?u=), without edit controls then
 var owner = {{ owner | default('') | tojson }};
+var summariesOn = {{ summaries_on | default(false) | tojson }};
+var summariesAsk = {{ summaries_ask | default(false) | tojson }};
 var viewing = {{ viewing | default(false) | tojson }};
 var sharing = {{ sharing | default(false) | tojson }};
 </script>

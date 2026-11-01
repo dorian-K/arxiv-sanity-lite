@@ -22,6 +22,13 @@ x-common: &common
     - ${DATA_PATH:-./data}:/app/data
   environment: &env
     TZ: ${TZ:-UTC}
+    # AI summaries on paper cards and in the digest (aslite/summary.py), through OpenRouter. off by
+    # default; the web service makes them for the papers a page shows (from the abstract), the
+    # updater for saved and digest papers (from the full text, needs ENRICH_ENABLED=1)
+    SUMMARIES_ENABLED: ${SUMMARIES_ENABLED:-0}
+    OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+    SUMMARY_MODEL: ${SUMMARY_MODEL:-}
+    SUMMARY_MAX_DAY: ${SUMMARY_MAX_DAY:-300}
 
 services:
   arxiv_resanity_web:
@@ -104,7 +111,8 @@ services:
       # records are in place and a test mail passes (see README)
       DIGEST_ENABLED: ${DIGEST_ENABLED:-0}
       DIGEST_SCHEDULE: ${DIGEST_SCHEDULE:-sun 08:00 Europe/Berlin}
-      DIGEST_DAYS: ${DIGEST_DAYS:-7}
+      DIGEST_DAYS: ${DIGEST_DAYS:-}  # set: every digest covers this many days; empty: each user's own pick
+      DIGEST_PREPARE_HOURS: ${DIGEST_PREPARE_HOURS:-12}  # with summaries: digests are made this long before the slot
       PUBLIC_URL: ${PUBLIC_URL:-}
       MAIL_FROM: ${MAIL_FROM:-}
       SMTP_HOST: ${SMTP_HOST:-arxiv_resanity_mail}

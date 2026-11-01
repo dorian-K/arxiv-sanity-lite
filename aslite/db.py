@@ -1456,6 +1456,7 @@ def get_jobs(since):
 # refs.sqlite: the references of papers (aslite/refs.py, enrich_daemon.py), and the titles of
 # every arXiv paper to match them by (import_snapshot.py --titles). no user data in it
 
+SUMMARY_KEYS = ('problem', 'approach', 'result', 'caveat')
 REFS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS refs (
     citing TEXT NOT NULL,     -- the paper whose bibliography this is
@@ -1485,6 +1486,18 @@ CREATE TABLE IF NOT EXISTS licenses (
 CREATE TABLE IF NOT EXISTS titles (
     h INTEGER PRIMARY KEY,    -- refs.title_hash() of a normalized title
     id TEXT NOT NULL          -- the arXiv paper with that title (the oldest, if several)
+);
+CREATE TABLE IF NOT EXISTS summaries (
+    pid TEXT PRIMARY KEY,     -- a paper enrich_daemon.py summarized (aslite/summary.py)
+    status TEXT NOT NULL,     -- ok | pending (being made) | error (tried again later)
+    t REAL NOT NULL,          -- when it was last tried
+    tries INTEGER NOT NULL,
+    model TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT '',  -- what the model read: html | pdf | abstract
+    problem TEXT NOT NULL DEFAULT '',
+    approach TEXT NOT NULL DEFAULT '',
+    result TEXT NOT NULL DEFAULT '',
+    caveat TEXT NOT NULL DEFAULT ''
 );
 """
 
@@ -1578,6 +1591,77 @@ class RefsDB:
                 'figure = excluded.figure, page = excluded.page, license = excluded.license',
                 (citing, status, time.time(), len(rows), refs_from, int(figure), int(page), license),
             )
+
+    def put_summary(self, pid, status, model='', source='', fields=None):
+        """a paper's summary (fields: problem, approach, result, caveat); 'error' keeps an earlier one and counts a try"""
+        f = fields or {}
+        with self.con:
+            if status == 'ok':
+                self.con.execute(
+                    'INSERT OR REPLACE INTO summaries (pid, status, t, tries, model, source, problem, approach, result,'
+                    " caveat) VALUES (?, 'ok', ?, 1, ?, ?, ?, ?, ?, ?)",
+                    (pid, time.time(), model, source, *(f.get(k, '') for k in SUMMARY_KEYS)),
+                )
+            else:
+                self.con.execute(
+                    "INSERT INTO summaries (pid, status, t, tries) VALUES (?, 'error', ?, 1) ON CONFLICT(pid) DO UPDATE"
+                    " SET t = excluded.t, tries = tries + 1, status = CASE status WHEN 'ok' THEN 'ok' ELSE 'error' END",
+                    (pid, time.time()),
+                )
+
+    def claim_summaries(self, pids, stale=600, retry=86400, max_tries=3):
+        """
+        the papers of pids this process should summarize now, marked 'pending' so other workers
+        leave them: those without a summary, a pending one older than stale seconds (its worker
+        died), or a failed one older than retry, at most max_tries times
+        """
+        now, out = time.time(), []
+        with self.con:
+            self.con.execute('BEGIN IMMEDIATE')
+            for pid in dict.fromkeys(pids):
+                row = self.con.execute('SELECT status, t, tries FROM summaries WHERE pid = ?', (pid,)).fetchone()
+                if row is None:
+                    self.con.execute(
+                        "INSERT INTO summaries (pid, status, t, tries) VALUES (?, 'pending', ?, 0)", (pid, now)
+                    )
+                elif (row[0] == 'pending' and now - row[1] > stale) or (
+                    row[0] == 'error' and row[2] < max_tries and now - row[1] > retry
+                ):
+                    self.con.execute("UPDATE summaries SET status = 'pending', t = ? WHERE pid = ?", (now, pid))
+                else:
+                    continue
+                out.append(pid)
+        return out
+
+    def summaries_of(self, pids):
+        """{pid: {problem, approach, result, caveat, model, source, status, tries}} of the known ones"""
+        out = {}
+        pids = list(dict.fromkeys(pids))
+        for i in range(0, len(pids), 500):
+            chunk = pids[i : i + 500]
+            q = (
+                'SELECT pid, problem, approach, result, caveat, model, source, status, tries FROM summaries'
+                f' WHERE pid IN ({",".join("?" * len(chunk))})'
+            )
+            for row in self.con.execute(q, chunk):
+                out[row[0]] = dict(zip((*SUMMARY_KEYS, 'model', 'source', 'status', 'tries'), row[1:], strict=True))
+        return out
+
+    def summary_of(self, pid):
+        """{problem, approach, result, caveat, model, source} of a paper, or None"""
+        s = self.summaries_of([pid]).get(pid)
+        return {k: s[k] for k in (*SUMMARY_KEYS, 'model', 'source')} if s and s['status'] == 'ok' else None
+
+    def summarized(self):
+        """{pid: (status, last try, tries, source)} of the summaries"""
+        return {
+            p: (s, t, n, src)
+            for p, s, t, n, src in self.con.execute('SELECT pid, status, t, tries, source FROM summaries')
+        }
+
+    def summaries_since(self, t):
+        """how many summaries were asked for since t (made, failed or being made), for the daily cap"""
+        return self.con.execute('SELECT count(*) FROM summaries WHERE t > ?', (t,)).fetchone()[0]
 
     def fetched(self):
         """{pid: (status, last try, tries)}"""
@@ -1685,6 +1769,17 @@ def thumb_file(pid, kinds, big=False):
         if os.path.isfile(path):
             return path, kind
     return None, None
+
+
+def pending_digest_pids():
+    """the papers in digests made since the last scheduled send, of users who get it by email: summarized first"""
+    last, emails = get_last_digest() or 0, get_emails()
+    out = set()
+    for user, sections in _query('SELECT user, sections FROM digests WHERE time > ?', (last,)):
+        if user in emails:
+            for s in json.loads(sections):
+                out.update(p[0] if isinstance(p, list) else p for p in s['papers'])
+    return out
 
 
 def all_digest_pids():

@@ -14,6 +14,12 @@ SMTP, configured as described in aslite/mail.py, plus
 Europe/Berlin", local time, so summer time included) has passed since the last scheduled
 send, kept in data/last_digest. The first --if-due run only starts that clock: enabling the
 digest never mails everyone on the spot. Manual runs (without --if-due) don't touch it.
+
+With AI summaries on (SUMMARIES_ENABLED=1, aslite/summary.py), every paper in a mail has one.
+--prepare-if-due, run as often as --if-due, makes and stores the digests DIGEST_PREPARE_HOURS
+(default 12) before the slot, so enrich_daemon.py has the time to summarize their papers from the
+full text (one arxiv.org request per 15 s or more); --if-due then sends those digests, and any paper
+still without a summary gets one from its abstract right before the mails go out.
 """
 
 import os
@@ -21,16 +27,18 @@ import time
 import html
 import argparse
 import smtplib
+from concurrent.futures import ThreadPoolExecutor
 import datetime
 import zoneinfo
 from email.utils import formataddr
 
 from itsdangerous import URLSafeSerializer
 
-from aslite import db, digest, mail
+from aslite import db, digest, mail, summary
 from aslite.db import load_features, get_papers_db, get_emails, get_secret_key
 
 DIGEST_SCHEDULE = os.environ.get('DIGEST_SCHEDULE', 'sun 08:00 Europe/Berlin')
+PREPARE = float(os.environ.get('DIGEST_PREPARE_HOURS') or 12) * 3600
 DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
 
 
@@ -61,6 +69,61 @@ def due(now):
     return last < last_slot(now)
 
 
+def next_slot(now, schedule=DIGEST_SCHEDULE):
+    """unix time of the first weekly slot after now"""
+    return last_slot(now + 7 * 86400, schedule)
+
+
+def prepared(d, now):
+    """whether the stored digest d was made for the slot that is due now (by --prepare-if-due, or by hand since)"""
+    return bool(d) and d['time'] >= last_slot(now) - PREPARE - 3600 and d['time'] > (db.get_last_digest() or 0)
+
+
+def _summarize(pid):
+    """a summary from the paper's abstract (enrich_daemon.py didn't get to its text in time)"""
+    with get_papers_db() as pdb, db.get_refs_db() as rdb:
+        d = pdb.get_many([pid]).get(pid)
+        if d is None:
+            return
+        try:
+            fields = summary.summarize(' '.join(d['title'].split()), ' '.join(d['summary'].split()), '')
+        except Exception as e:
+            print(f"no summary for {pid}: {type(e).__name__}: {e}")
+            rdb.put_summary(pid, 'error')
+            return
+        rdb.put_summary(pid, 'ok', summary.MODEL, 'abstract', fields)
+
+
+def ensure_summaries(pids):
+    """{pid: summary} for the papers of the mails; those without one get it now, all at once (not capped)"""
+    if not summary.enabled() or not pids:
+        return {}
+    with db.get_refs_db() as rdb:
+        missing = [p for p in pids if (rdb.summaries_of([p]).get(p) or {}).get('status') != 'ok']
+    if missing:
+        print(f"summarizing {len(missing)} papers from their abstracts")
+        with ThreadPoolExecutor(8) as ex:
+            list(ex.map(_summarize, missing))
+    with db.get_refs_db() as rdb:
+        return {p: s for p, s in rdb.summaries_of(pids).items() if s['status'] == 'ok'}
+
+
+def prepare(features, times, emails, now, per_tag=digest.PER_TAG, **kw):
+    """makes the digests of the coming slot ahead of it, once; returns how many"""
+    slot = next_slot(now)
+    if now < slot - PREPARE:
+        return 0
+    n = 0
+    for user in sorted(emails):
+        d = db.get_digest(user)
+        if d and d['time'] >= slot - PREPARE:
+            continue  # done already
+        days = db.get_digest_days(user)
+        db.save_digest(user, digest.compute_for(user, features, times, days, per_tag, **kw), days)
+        n += 1
+    return n
+
+
 # `or`: docker compose passes unset variables as empty strings
 PUBLIC_URL = (os.environ.get('PUBLIC_URL') or 'http://localhost:5000').rstrip('/')
 
@@ -72,8 +135,12 @@ def unsubscribe_url(user):
     return f'{PUBLIC_URL}/unsubscribe?token={token}'
 
 
-def render(user, sections, papers, days):
-    """(subject, plain text, html) of one digest email"""
+AI_LABELS = (('problem', 'Problem'), ('approach', 'Approach'), ('result', 'Result'), ('caveat', 'Caveat'))
+
+
+def render(user, sections, papers, days, ais=None):
+    """(subject, plain text, html) of one digest email; ais: {pid: AI summary}, shown instead of the abstract"""
+    ais = ais or {}
     n = sum(len(s['papers']) for s in sections)
     subject = f"{n} new papers for you, {time.strftime('%b %d')}"
     digest_url = f'{PUBLIC_URL}/digest'
@@ -93,16 +160,29 @@ def render(user, sections, papers, days):
         for pid, _ in s['papers']:
             p = papers[pid]
             authors = ', '.join(a['name'] for a in p['authors'][:6]) + (' et al.' if len(p['authors']) > 6 else '')
-            summary = ' '.join(p['summary'].split())
-            summary = summary[:400] + ('…' if len(summary) > 400 else '')
+            abstract = ' '.join(p['summary'].split())
+            abstract = abstract[:400] + ('…' if len(abstract) > 400 else '')
             title = ' '.join(p['title'].split())
-            text += [f"- {title}", f"  {authors}", f"  https://arxiv.org/abs/{pid}", '']
+            ai = ais.get(pid)
+            lines = [(label, ai[k]) for k, label in AI_LABELS if ai and ai.get(k)]
+            text += [f"- {title}", f"  {authors}", *(f"  {label}: {v}" for label, v in lines)]
+            text += [f"  https://arxiv.org/abs/{pid}", '']
+            if lines:
+                about = (
+                    '<ul style="margin:4px 0;padding-left:18px;font-size:14px;color:#333">'
+                    + ''.join(f'<li style="margin:2px 0"><b>{label}:</b> {e(v)}</li>' for label, v in lines)
+                    + '</ul><div style="font-size:11px;color:#999">AI summary from the paper\'s '
+                    + ('abstract' if ai.get('source') == 'abstract' else 'full text')
+                    + ', may contain errors</div>'
+                )
+            else:
+                about = f'<div style="font-size:14px;color:#333">{e(abstract)}</div>'
             parts.append(
                 '<div style="margin:0 0 16px">'
                 f'<a href="https://arxiv.org/abs/{pid}" style="font-size:15px;font-weight:600;color:#1a1a1a">{e(title)}</a>'
                 f'<div style="font-size:13px;color:#666;margin:2px 0">{e(authors)} · {e(p["_time_str"])}</div>'
-                f'<div style="font-size:14px;color:#333">{e(summary)}</div>'
-                f'<div style="font-size:13px;margin-top:4px"><a href="{PUBLIC_URL}/?rank=pid&pid={pid}">similar papers</a>'
+                + about
+                + f'<div style="font-size:13px;margin-top:4px"><a href="{PUBLIC_URL}/?rank=pid&pid={pid}">similar papers</a>'
                 f' · <a href="https://arxiv.org/pdf/{pid}">pdf</a></div>'
                 '</div>'
             )
@@ -149,8 +229,21 @@ if __name__ == "__main__":
     parser.add_argument('--feats', type=str, default='auto', help='auto|tfidf|emb|concat|fusion (see aslite/rank.py)')
     parser.add_argument('--model', type=str, default='auto', help='auto|svm|logreg (see aslite/rank.py)')
     parser.add_argument('--if-due', action='store_true', help='only send when the DIGEST_SCHEDULE slot has passed')
+    parser.add_argument(
+        '--prepare-if-due',
+        action='store_true',
+        help='with AI summaries on: make the digests DIGEST_PREPARE_HOURS before the slot (send nothing)',
+    )
     args = parser.parse_args()
     started = time.time()
+    if args.prepare_if_due:
+        if not summary.enabled() or db.get_last_digest() is None or not db.features_exist():
+            raise SystemExit(0)  # nothing to summarize, or the schedule hasn't started
+        if started >= next_slot(started) - PREPARE:
+            n = prepare(load_features(), get_papers_db().times(), get_emails(), started, args.per_tag)
+            if n:
+                print(f"prepared {n} digests for the next slot, so their papers get summaries in time")
+        raise SystemExit(0)
     if args.if_due and not due(started):
         raise SystemExit(0)
     print(args)
@@ -174,16 +267,26 @@ if __name__ == "__main__":
     pdb = get_papers_db()
     times = pdb.times()
 
-    num_sent = num_failed = 0
+    todo = []
     for user, email in sorted(emails.items()):
-        days = args.time_delta or db.get_digest_days(user)
-        sections = digest.compute_for(user, features, times, days, args.per_tag, feats=args.feats, model=args.model)
+        d = db.get_digest(user)
+        if args.if_due and summary.enabled() and prepared(d, started):
+            sections, days = d['sections'], d['days']  # made ahead, so its papers have their summaries
+        else:
+            days = args.time_delta or db.get_digest_days(user)
+            sections = digest.compute_for(user, features, times, days, args.per_tag, feats=args.feats, model=args.model)
+            if sections:
+                db.save_digest(user, sections, days)
         if not sections:
             print(f"skipping {user}: no recommendations (no tags, or nothing new)")
             continue
-        db.save_digest(user, sections, days)
+        todo.append((user, email, sections, days))
+    ais = ensure_summaries(list(dict.fromkeys(p for _, _, ss, _ in todo for s in ss for p, _ in s['papers'])))
+
+    num_sent = num_failed = 0
+    for user, email, sections, days in todo:
         papers = pdb.get_many(p for s in sections for p, _ in s['papers'])
-        subject, text, body = render(user, sections, papers, days)
+        subject, text, body = render(user, sections, papers, days, ais)
         if args.save:
             with open(args.save, 'w') as f:
                 f.write(body)

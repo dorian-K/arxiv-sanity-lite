@@ -47,6 +47,7 @@ Five years of papers (~460k) runs in 2–3 GB of RAM. The daily rebuild needs ~2
 **Outward-facing features are off until you turn them on.**
 - **Digest:** set `DIGEST_ENABLED=1` once a test mail passes SPF and DKIM. To try it without sending: `send_emails.py --dry-run 1 -u <user> --save d.html`.
 - **References and thumbnails:** `ENRICH_ENABLED=1`. One request to arxiv.org every 20 s, for saved and digest papers only.
+- **AI summaries:** `SUMMARIES_ENABLED=1` with an `OPENROUTER_API_KEY`. Try one first: `enrich_daemon.py --try-summary <id>`.
 
 **EU law** (GDPR, ePrivacy, German imprint duty), handled in code:
 - double opt-in for email addresses;
@@ -67,6 +68,7 @@ Left to you: a data processing agreement with your VPS provider, short nginx log
 - **Tag check:** ranks each saved paper with a model trained without it, and lists the ones that don't fit.
 - **Cited tab:** built from the references in arXiv's HTML version of each saved paper, with the PDF as a fallback. They're matched to arXiv papers by id or title, and no other service is asked.
 - **Thumbnails:** only for papers under a Creative Commons license, because German copyright has no fair use.
+- **AI summaries:** problem, approach, result and a caveat per paper, on cards and in every digest mail, written by MiMo V2.6 Flash through OpenRouter (~$0.001 a paper; chosen over 15 other models on 11 papers). Saved and digest papers are summarized from their full text, other papers a logged-in user sees from their abstract, in the background. Capped per day.
 - **AI agents:** an MCP server at `/mcp` and the same tools as JSON at `/api` (`/llms.txt` describes them). `rank_like` ranks every paper by a few example papers, the best way to find related work. Searching and ranking need no account; a user's tags, reading list and notes need an access token they make on `/agents`, read-only unless they allow changes: to everything, or only to tags named `agent:…`, so their own tags stay theirs. In claude.ai, add `/mcp/me` as a custom connector: it logs in with OAuth.
 - **arXiv politeness:** API calls at most one per 3.5 s across all processes; arxiv.org pages one per 15 s or more, as its robots.txt asks.
 

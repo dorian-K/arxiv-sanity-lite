@@ -11,6 +11,9 @@ Per paper, up to four requests to arxiv.org:
    only) when there is no HTML version or its bibliography didn't convert
 Thumbnails only for papers under an open license (aslite/thumbs.py says why): for the others,
 2 is skipped, and 3 too unless the references need it.
+With SUMMARIES_ENABLED=1 (and OPENROUTER_API_KEY), the text of 1 (else 3) also goes to a model
+for a short summary (aslite/summary.py): no extra request for new papers; papers enriched before
+are fetched once more (HTML, else PDF). At most SUMMARY_MAX_DAY summaries a day.
 A paper is done ('ok') with whatever of that worked; it isn't asked for again (except, once,
 the papers whose thumbnails were made before there were big ones). A network error
 or a broken answer marks it 'error': tried again after a day, at most 3 times.
@@ -27,12 +30,13 @@ nothing are matched again (papers added since, or a titles table built since).
 """
 
 import os
+import json
 import time
 import argparse
 import urllib.error
 import urllib.request
 
-from aslite import db, thumbs
+from aslite import db, summary, thumbs
 from aslite.db import get_papers_db, get_refs_db
 from aslite.refs import Matcher, parse, parse_pdf, rows_for
 
@@ -44,6 +48,7 @@ MAX_TRIES = 3  # ...this many times
 MAX_HTML = 20_000_000
 MAX_IMAGE = 15_000_000
 MAX_PDF = 60_000_000  # bigger PDFs (some are 50 MB of figures) get no page thumbnail
+SUMMARY_MAX_DAY = int(os.environ.get('SUMMARY_MAX_DAY') or 300)  # summaries a day at most (~$0.001 each)
 
 
 class SlowDown(Exception):
@@ -108,17 +113,19 @@ def save_thumbs(pid, kind, big):
 
 def process(pid, fetch, matcher, license):
     """
-    (refs rows, where they came from, figure made, page made) for one paper; see the docstring.
-    Thumbnails only under an open license (thumbs.is_open): otherwise neither the figure nor the
-    PDF is downloaded for them, and the PDF only if the references have to come from it
+    (refs rows, where they came from, figure made, page made, (text source, text)) for one paper;
+    see the docstring. Thumbnails only under an open license (thumbs.is_open): otherwise neither
+    the figure nor the PDF is downloaded for them, and the PDF only if the references have to
+    come from it. The text (for the summary) is the HTML version's, else the PDF's if it was read
     """
-    rows, refs_from, figure, page = [], '', False, False
+    rows, refs_from, figure, page, text = [], '', False, False, ('', '')
     may_show = thumbs.is_open(license)
     url, body = fetch.get(f'https://arxiv.org/html/{pid}', MAX_HTML)
     html = body.decode('utf-8', 'replace') if url and '/html/' in url else ''
     if 'ltx_page_main' not in html and 'ltx_document' not in html:
         html = ''  # no HTML version: arXiv answers with a notice page (or 404)
     if html:
+        text = ('html', summary.html_text(html))
         parsed = parse(html)
         if parsed:
             rows, refs_from = rows_for(parsed, matcher), 'html'
@@ -133,7 +140,7 @@ def process(pid, fetch, matcher, license):
             except Exception as e:  # e.g. an svg, or a broken file: the next figure, or none
                 print(f"  {pid}: figure {img_url}: {e}", flush=True)
     if not may_show and refs_from:
-        return rows, refs_from, figure, page
+        return rows, refs_from, figure, page, text
     try:
         pdf_url, pdf = fetch.get(f'https://arxiv.org/pdf/{pid}', MAX_PDF)
     except TooBig:
@@ -146,15 +153,18 @@ def process(pid, fetch, matcher, license):
                 page = True
             except Exception as e:
                 print(f"  {pid}: rendering the PDF: {e}", flush=True)
-        if not refs_from:  # text and data mining (§44b UrhG): the PDF isn't kept
+        if not refs_from or not text[1]:  # text and data mining (§44b UrhG): the PDF isn't kept
             try:
-                parsed = parse_pdf(thumbs.pdf_text(pdf))
+                pdf_text = thumbs.pdf_text(pdf)
+                parsed = parse_pdf(pdf_text) if not refs_from else []
             except Exception as e:
                 print(f"  {pid}: reading the PDF: {e}", flush=True)
-                parsed = []
+                pdf_text, parsed = '', []
+            if not text[1] and pdf_text:
+                text = ('pdf', summary.pdf_text(pdf_text))
             if parsed:
                 rows, refs_from = rows_for(parsed, matcher), 'pdf'
-    return rows, refs_from, figure, page
+    return rows, refs_from, figure, page, text
 
 
 def queue(pdb, rdb, now=None):
@@ -170,12 +180,111 @@ def queue(pdb, rdb, now=None):
         st = done.get(p)
         return st is None or p in redo or (st[0] == 'error' and st[2] < MAX_TRIES and now - st[1] > RETRY)
 
+    return [p for p in wanted(pdb, times) if due(p)]
+
+
+def wanted(pdb, times=None):
+    """
+    the papers people care about, best first: those of digests about to be mailed (send_emails.py
+    prepares them hours ahead, so they have their summaries), then saved ones, newest first, then
+    the other digest ones
+    """
+    times = times or pdb.times()
+    soon = db.pending_digest_pids()
     saved = set()
     for tags in db.get_all_tags().values():
         saved = saved.union(*tags.values())
-    digest = db.all_digest_pids() - saved
-    newest = lambda ps: sorted(ps, key=lambda p: -times.get(p, 0))
-    return [p for p in newest(saved) + newest(digest) if due(p)]
+    saved -= soon
+    digest = db.all_digest_pids() - saved - soon
+    newest = lambda ps: sorted((p for p in ps if p in times), key=lambda p: -times[p])
+    return newest(soon) + newest(saved) + newest(digest)
+
+
+def needs_summary(st, now=None):
+    """whether a paper with this summaries row (or None) should get a (full-text) summary now"""
+    now = now or time.time()
+    if st is None:
+        return True
+    status, t, tries, source = st
+    if status == 'ok':
+        return source == 'abstract'  # made from the abstract for a page or a mail: now from the text
+    if status == 'pending':
+        return now - t > 600
+    return tries < MAX_TRIES and now - t > RETRY
+
+
+def summary_queue(pdb, rdb, now=None):
+    """the enriched papers still without a summary, best first (the text has to be fetched again)"""
+    now = now or time.time()
+    done = rdb.summarized()
+    fetched = rdb.fetched()
+    return [p for p in wanted(pdb) if fetched.get(p, ('',))[0] == 'ok' and needs_summary(done.get(p), now)]
+
+
+def fetch_text(pid, fetch):
+    """(source, text) of a paper for its summary: its HTML version, else its PDF, else ('', '')"""
+    url, body = fetch.get(f'https://arxiv.org/html/{pid}', MAX_HTML)
+    html = body.decode('utf-8', 'replace') if url and '/html/' in url else ''
+    if 'ltx_page_main' in html or 'ltx_document' in html:
+        text = summary.html_text(html)
+        if text:
+            return 'html', text
+    try:
+        url, pdf = fetch.get(f'https://arxiv.org/pdf/{pid}', MAX_PDF)
+    except TooBig:
+        return '', ''
+    if url and pdf.startswith(b'%PDF'):
+        try:
+            return 'pdf', summary.pdf_text(thumbs.pdf_text(pdf))
+        except Exception as e:
+            print(f"  {pid}: reading the PDF: {e}", flush=True)
+    return '', ''
+
+
+def summarize(pid, pdb, rdb, text):
+    """makes and stores the summary of a paper from (source, text); without text, from its abstract"""
+    d = pdb.get_many([pid]).get(pid)
+    if d is None:
+        return False
+    source, body = text if text and text[1] else ('notext', '')  # not 'abstract': trying again won't help
+    try:
+        fields = summary.summarize(' '.join(d['title'].split()), ' '.join(d['summary'].split()), body)
+    except Exception as e:  # the model or the network: tried again after RETRY
+        print(f"  {pid}: summary: {type(e).__name__}: {e}", flush=True)
+        rdb.put_summary(pid, 'error')
+        return False
+    rdb.put_summary(pid, 'ok', summary.MODEL, source, fields)
+    return True
+
+
+def summarize_some(todo, fetch, pdb, rdb):
+    """summaries of papers enriched before (their text is fetched again); returns how many were tried"""
+    t0, n, ok = time.time(), 0, 0
+    for pid in todo:
+        if not summaries_left(rdb):
+            break
+        try:
+            text = fetch_text(pid, fetch)
+        except SlowDown as e:
+            print(f"{e}, waiting", flush=True)
+            time.sleep(e.retry_after)
+            break
+        except Exception as e:  # network trouble: summarized from the abstract would be worse, so later
+            print(f"  {pid}: {type(e).__name__}: {e}", flush=True)
+            rdb.put_summary(pid, 'error')
+            n += 1
+            continue
+        made = summarize(pid, pdb, rdb, text)
+        ok, n = ok + made, n + 1
+        print(f"  {pid}: summary {'made' if made else 'failed'} ({text[0] or 'abstract'})", flush=True)
+    if n:
+        db.put_job('summaries', time.time() - t0, papers=n, made=ok)
+    return n
+
+
+def summaries_left(rdb):
+    """how many more summaries today allows (SUMMARY_MAX_DAY, a cap on the cost)"""
+    return max(0, SUMMARY_MAX_DAY - rdb.summaries_since(time.time() - 86400))
 
 
 def rematch(rdb, matcher):
@@ -199,8 +308,23 @@ def main():
     )
     parser.add_argument('--once', action='store_true', help='exit when nothing is queued')
     parser.add_argument('--max', type=int, default=0, help='stop after this many papers (0: never)')
+    parser.add_argument(
+        '--try-summary', metavar='PID', help="print a paper's summary (needs OPENROUTER_API_KEY) and store nothing"
+    )
     args = parser.parse_args()
     fetch = Fetcher(max(PAUSE, args.pause))
+    if args.try_summary:
+        with get_papers_db() as pdb:
+            d = pdb.get_many([args.try_summary]).get(args.try_summary)
+            if d is None:
+                raise SystemExit(f"{args.try_summary} isn't in papers.sqlite")
+            source, text = fetch_text(args.try_summary, fetch)
+            print(f"{summary.MODEL}, from {source or 'the abstract'} ({len(text)} characters):", flush=True)
+            fields = summary.summarize(' '.join(d['title'].split()), ' '.join(d['summary'].split()), text)
+            print(json.dumps(fields, indent=2, ensure_ascii=False))
+        return
+    summaries = summary.enabled()
+    print(f"summaries {'on, ' + summary.MODEL if summaries else 'off'}", flush=True)
 
     with get_papers_db() as pdb, get_refs_db() as rdb:
         matcher = Matcher(pdb, rdb)
@@ -210,17 +334,25 @@ def main():
                 print(f"matched {rematch(rdb, matcher)} earlier references now", flush=True)
                 last_rematch = time.time()
             todo = queue(pdb, rdb)
+            if summaries and summaries_left(rdb):
+                # papers of a digest about to be mailed first, then the rest when nothing else is queued
+                soon = db.pending_digest_pids()
+                sq = [p for p in summary_queue(pdb, rdb) if p in soon or not todo]
+                n = summarize_some(sq[:10], fetch, pdb, rdb)
+                total += n
+                if n:
+                    continue
             if not todo:
                 if args.once:
                     break
                 time.sleep(REFRESH)
                 continue
             print(f"{len(todo)} papers to enrich", flush=True)
-            t0, n, n_refs, n_matched, n_thumbs = time.time(), 0, 0, 0, 0
+            t0, n, n_refs, n_matched, n_thumbs, n_summaries = time.time(), 0, 0, 0, 0, 0
             for pid in todo[:10]:  # then look at the queue again: newly saved papers go first
                 try:
                     license = paper_license(pid, fetch, rdb)
-                    rows, refs_from, figure, page = process(pid, fetch, matcher, license)
+                    rows, refs_from, figure, page, text = process(pid, fetch, matcher, license)
                 except SlowDown as e:
                     print(f"{e}, waiting", flush=True)
                     time.sleep(e.retry_after)
@@ -230,6 +362,8 @@ def main():
                     rdb.put_refs(pid, 'error')
                     continue
                 rdb.put_refs(pid, 'ok', rows, refs_from, figure, page, license)
+                if summaries and needs_summary(rdb.summarized().get(pid)) and summaries_left(rdb):
+                    n_summaries += summarize(pid, pdb, rdb, text)
                 n += 1
                 n_refs += len(rows)
                 n_matched += sum(1 for r in rows if r[1])
@@ -249,6 +383,7 @@ def main():
                     refs=n_refs,
                     matched=n_matched,
                     thumbs=n_thumbs,
+                    summaries=n_summaries,
                     left=len(todo) - n,
                 )
             if args.max and total >= args.max:

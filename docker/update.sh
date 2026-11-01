@@ -39,7 +39,9 @@ fi
 # spot (send a test with `docker compose exec arxiv_resanity_updater python send_emails.py -u <you>`)
 digest() {
     [ "${DIGEST_ENABLED:-0}" = 1 ] || return 0
-    python send_emails.py --if-due --time-delta "${DIGEST_DAYS:-7}" || echo "send_emails.py failed"
+    # with AI summaries: the digests are made hours ahead, so their papers get summaries in time
+    python send_emails.py --prepare-if-due || echo "send_emails.py --prepare-if-due failed"
+    python send_emails.py --if-due ${DIGEST_DAYS:+--time-delta "$DIGEST_DAYS"} || echo "send_emails.py failed"
 }
 while true; do
     now=$(date +%s)

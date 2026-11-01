@@ -443,13 +443,36 @@ const TagList = ({ tags }) => html`
     });
 })();
 
-// the digest page: one section per tag, with quick votes for that tag
-const Digest = ({ sections }) => html`
-    ${sections.map(s => html`
-    <section key=${s.tag} class="digest-section">
-        <h2 class="digest-tag"><a href=${tagUrl(s.tag)}>${s.tag}</a></h2>
-        <div class="rel_papers">${s.papers.map(p => html`<${Paper} key=${p.id} paper=${p} quickTag=${s.tag} />`)}</div>
-    </section>`)}`;
+// the digest page: one section per tag, with quick votes for that tag. a click on a tag's
+// heading folds it away; which tags are folded is remembered in this browser
+const FOLDED_KEY = 'digest-folded';
+const Digest = ({ sections }) => {
+    const [folded, setFolded] = useState(() => {
+        try { return JSON.parse(localStorage.getItem(FOLDED_KEY)) || []; } catch (e) { return []; }
+    });
+    const toggle = tag => {
+        const next = folded.includes(tag) ? folded.filter(t => t !== tag) : [...folded, tag];
+        setFolded(next);
+        try { localStorage.setItem(FOLDED_KEY, JSON.stringify(next)); } catch (e) { /* storage blocked: this page only */ }
+    };
+    return html`
+    ${sections.map(s => {
+        const open = !folded.includes(s.tag);
+        return html`
+    <section key=${s.tag} class=${'digest-section' + (open ? '' : ' folded')}>
+        <h2 class="digest-tag">
+            <button type="button" class="digest-fold" aria-expanded=${open} onClick=${() => toggle(s.tag)}
+                    title=${open ? 'collapse this tag' : 'show its papers again'}>
+                <span class="fold-mark" aria-hidden="true">${open ? '▾' : '▸'}</span>
+                ${s.tag}
+                <span class="muted digest-count">${s.papers.length} paper${s.papers.length === 1 ? '' : 's'}${open ? '' : ', collapsed'}</span>
+            </button>
+            <a href=${tagUrl(s.tag)} class="digest-open" title=${'all recommendations for ' + s.tag}>open tag →</a>
+        </h2>
+        ${open ? html`<div class="rel_papers">${s.papers.map(p => html`<${Paper} key=${p.id} paper=${p} quickTag=${s.tag} />`)}</div>` : null}
+    </section>`;
+    })}`;
+};
 
 // "check this tag": how well the tag's papers predict each other, and which don't fit
 const TagCheck = ({ tag }) => {

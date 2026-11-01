@@ -472,7 +472,13 @@ textarea.form-control {
 /* digest */
 .digest-section { margin-top: 24px; }
 .digest-tag { margin: 0 0 10px; font-size: 20px; }
-.digest-tag a { color: var(--tag); }
+.digest-tag { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.digest-fold { all: unset; cursor: pointer; color: var(--tag); display: inline-flex; align-items: baseline; gap: 8px; }
+.digest-fold:focus-visible { outline: 2px solid var(--tag); outline-offset: 2px; }
+.fold-mark { display: inline-block; width: 1em; font-size: 16px; }
+.digest-count { font-size: 14px; font-weight: normal; }
+.digest-open { font-size: 14px; font-weight: normal; color: var(--tag); }
+.digest-section.folded { margin-top: 12px; }
 .quickvote { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .vote-like.on { color: var(--tag); background: var(--tag-soft); border-color: var(--tag); }
 .vote-seen.on { color: var(--text); background: var(--surface-2); border-color: var(--muted); }

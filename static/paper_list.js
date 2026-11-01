@@ -177,17 +177,16 @@ const AiSummary = ({ s }) => {
         <div class="rel_ai_note">AI summary from ${from}, may contain errors</div>
     </div>`;
 };
-// the AI summary and the abstract as two tabs. picking one picks it for every card (and the
-// switch above the list); while the summary is being written the card shows the abstract and
-// the Summary tab spins
+// the AI summary and the abstract as two tabs: the card opens on the user's default, and while the
+// summary is being written it shows the abstract, the Summary tab spinning
 const AboutTabs = ({ ai, tab, setTab }) => html`
     <div class="rel_tabs" role="tablist">
         <button type="button" role="tab" aria-selected=${tab === 'summary'} disabled=${ai === 'pending'}
                 class=${tab === 'summary' ? 'on' : ''} onClick=${() => setTab('summary')}
-                title=${ai === 'pending' ? 'an AI model is summarizing this paper, a few seconds' : 'show the AI summary on every card (problem, approach, result, caveat)'}>
+                title=${ai === 'pending' ? 'an AI model is summarizing this paper, a few seconds' : 'a short AI summary: problem, approach, result, caveat'}>
             ${ai === 'pending' ? html`<span class="spin" aria-hidden="true"></span>` : null}Summary</button>
         <button type="button" role="tab" aria-selected=${tab === 'abstract'} class=${tab === 'abstract' ? 'on' : ''}
-                onClick=${() => setTab('abstract')} title="show the authors' abstract on every card">Abstract</button>
+                onClick=${() => setTab('abstract')} title="the authors' abstract">Abstract</button>
     </div>`;
 
 const SHOW_SCORE = ['tags', 'pid']; // (search scores are raw text-match numbers, meaningless to read)
@@ -232,11 +231,14 @@ document.querySelectorAll('#viewswitch [data-view]').forEach(b => {
     b.addEventListener('click', () => setView(b.dataset.view));
 });
 
-// what cards with an AI summary show: the summary or the abstract. one choice for all cards, made
-// with the tabs on any card or the switch above the list, remembered in this browser only
+// what cards with an AI summary open on: the summary or the abstract. a setting on the profile
+// (this browser's choice for visitors); each card's tabs switch only that card, but whoever keeps
+// switching to the other one is offered, on the card, to make it the default
 const ABOUT_KEY = 'resanity-about';
+const SWITCH_KEY = 'resanity-about-switches';
+const SWITCHES_TO_ASK = 3;
 const about = { tab: 'summary' };
-try { about.tab = localStorage.getItem(ABOUT_KEY) === 'abstract' ? 'abstract' : 'summary'; } catch (e) { /* storage blocked */ }
+try { about.tab = cardTab || (localStorage.getItem(ABOUT_KEY) === 'abstract' ? 'abstract' : 'summary'); } catch (e) { about.tab = cardTab || 'summary'; }
 const useAbout = () => {
     const [tab, setTab] = useState(about.tab);
     useEffect(() => {
@@ -246,16 +248,19 @@ const useAbout = () => {
     }, []);
     return tab;
 };
-function setAbout(tab) {
+const switches = n => {
+    try {
+        if (n !== undefined) localStorage.setItem(SWITCH_KEY, String(n));
+        return +(localStorage.getItem(SWITCH_KEY) || 0);
+    } catch (e) { return 0; }
+};
+function setAboutDefault(tab) {
     about.tab = tab;
-    try { localStorage.setItem(ABOUT_KEY, tab); } catch (e) { /* storage blocked: this page only */ }
-    document.querySelectorAll('#viewswitch [data-about]').forEach(b => b.setAttribute('aria-pressed', b.dataset.about === tab));
+    switches(0);
+    if (loggedIn) fetch('/card_tab', { method: 'POST', body: new URLSearchParams({ tab, ajax: '1' }) }).catch(() => {});
+    else try { localStorage.setItem(ABOUT_KEY, tab); } catch (e) { /* storage blocked: this page only */ }
     window.dispatchEvent(new Event('about'));
 }
-document.querySelectorAll('#viewswitch [data-about]').forEach(b => {
-    b.setAttribute('aria-pressed', b.dataset.about === about.tab);
-    b.addEventListener('click', () => setAbout(b.dataset.about));
-});
 
 // one-click votes for a given tag (the digest page): like, neutral (seen, no opinion: hidden
 // from later digests, not used for training) or downvote. one state per paper and tag,
@@ -295,8 +300,16 @@ const Paper = ({ paper: p, quickTag }) => {
     const compactView = useView() === 'compact';
     const ai = useAiSummary(p);
     const aboutTab = useAbout();
+    const [chosenTab, setChosenTab] = useState(null);
+    const [askDefault, setAskDefault] = useState(false);
     const hasAi = ai && ai !== 'none';
-    const tab = ai && typeof ai === 'object' ? aboutTab : 'abstract';
+    const tab = ai && typeof ai === 'object' ? chosenTab || aboutTab : 'abstract';
+    const pickTab = t => {
+        setChosenTab(t);
+        if (t === aboutTab) return;
+        const n = switches(switches() + 1);
+        if (n >= SWITCHES_TO_ASK) setAskDefault(true);
+    };
 
     const without = (list, tag) => list.filter(t => t !== tag);
     const withTag = (list, tag) => (list.includes(tag) ? list : [...list, tag]);
@@ -401,7 +414,13 @@ const Paper = ({ paper: p, quickTag }) => {
         ${picker ? html`<${TagPicker} mode=${picker} tags=${pickable}
             onPick=${t => { if (!userTagNames.includes(t)) userTagNames.push(t); (picker === 'add' ? save : notFor)(t); }}
             onCancel=${() => setPicker(null)} />` : null}
-        ${hasAi ? html`<${AboutTabs} ai=${ai} tab=${tab} setTab=${setAbout} />` : null}
+        ${hasAi ? html`<${AboutTabs} ai=${ai} tab=${tab} setTab=${pickTab} />` : null}
+        ${askDefault && tab !== aboutTab ? html`<div class="rel_tabhint">
+            <button class="linkbtn" onClick=${() => { setAboutDefault(tab); setAskDefault(false); setChosenTab(null); }}
+                    title=${loggedIn ? 'saved in your settings (profile), where you can change it back' : 'remembered in this browser'}>
+                Open every card on the ${tab === 'abstract' ? 'abstract' : 'summary'}</button>
+            <span> · </span><button class="linkbtn" onClick=${() => { switches(-2 * SWITCHES_TO_ASK); setAskDefault(false); }}>no thanks</button>
+        </div>` : null}
         ${tab === 'summary' ? html`<${AiSummary} s=${ai} />` : html`
         <div class=${'rel_abs' + (long && !open ? ' clamped' : '')} onClick=${() => long && !open && setOpen(true)}>
             <${MathText} text=${p.summary} />

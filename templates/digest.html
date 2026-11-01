@@ -40,11 +40,8 @@ var gvars = {rank: 'digest'};
     {% if sections %}
     <div id="viewswitch" role="group" aria-label="view">
         <button type="button" class="btn btn-small" id="share" title="copy a link to this page that others can open">🔗 Share</button>
-        <span class="vgroup"><button type="button" class="btn btn-small" data-view="cards" title="Title, authors, abstract and buttons">Cards</button>
-        <button type="button" class="btn btn-small" data-view="compact" title="One line per paper; ▸ opens one">Titles only</button></span>
-    {% if summaries_on %}<span class="vgroup vsep">
-    <button type="button" class="btn btn-small" data-about="summary" title="cards open on the AI summary (problem, approach, result, caveat); remembered in this browser">Summaries</button>
-    <button type="button" class="btn btn-small" data-about="abstract" title="cards open on the authors' abstract; remembered in this browser">Abstracts</button></span>{% endif %}
+        <button type="button" class="btn btn-small" data-view="cards" title="Title, authors, abstract and buttons">Cards</button>
+        <button type="button" class="btn btn-small" data-view="compact" title="One line per paper; ▸ opens one">Titles only</button>
     </div>
     {% endif %}
     <div id="digestwrap"></div>

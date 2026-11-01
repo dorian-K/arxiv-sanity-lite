@@ -238,3 +238,17 @@ def test_a_refs_db_without_the_summaries_table_opens(tmp_path):
         assert rdb.fetched()['2601.00001'][0] == 'ok' and rdb.summaries_of(['2601.00001']) == {}
         rdb.put_summary('2601.00001', 'ok', 'm', 'html', json.loads(answer()))
         assert rdb.summary_of('2601.00001')['problem'] == 'Models forget things.'
+
+
+def test_which_tab_cards_open_on_is_a_setting(client, monkeypatch, summaries_on):
+    login(client)
+    page = client.get('/profile').data
+    assert b'Paper cards' in page and b'var cardTab = "summary"' in page
+    client.post('/card_tab', data={'tab': 'abstract'})
+    assert db.get_user('alice')['card_tab'] == 'abstract'
+    assert b'var cardTab = "abstract"' in client.get('/').data
+    assert db.export_user('alice')['paper_cards_open_on'] == 'abstract'
+    assert client.post('/card_tab', data={'tab': 'summary', 'ajax': '1'}).data == b'ok'  # a card's suggestion
+    assert db.get_user('alice')['card_tab'] == ''
+    monkeypatch.setenv('SUMMARIES_ENABLED', '0')
+    assert b'Paper cards' not in client.get('/profile').data

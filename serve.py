@@ -965,6 +965,9 @@ def default_context():
     context['summaries_on'] = summary.enabled()
     # whether this visitor's pages ask for missing summaries: model calls cost money, so only logged-in users
     context['summaries_ask'] = summary.enabled() and g.user is not None and not g.readonly
+    # what paper cards open on, the AI summary or the abstract (profile setting; visitors: their browser's)
+    context['card_tab'] = ((me or {}).get('card_tab') or 'summary') if g.user and not g.viewing else ''
+    context['logged_in'] = bool(g.user and not g.readonly)
     return context
 
 
@@ -1442,6 +1445,7 @@ def profile(error=''):
         time.strftime('%b %d %Y', time.localtime(user['email_confirmed'])) if user and user['email_confirmed'] else ''
     )
     context['public'] = bool(user and user['public'])
+    context['summaries_on'] = summary.enabled()
     sizes = db.get_digest_sizes(g.user) if user else {}
     context['digest_tags'] = (
         [{'name': t, 'n': sizes.get(t, digest.default_size(t))} for t in sorted(get_tags())] if user else []
@@ -1477,6 +1481,17 @@ def digest_sizes():
 def _local_url(url):
     """a path on this site, so redirecting there can't send anyone elsewhere (no open redirect)"""
     return url.startswith('/') and not url.startswith('//') and '\\' not in url
+
+
+@app.route('/card_tab', methods=['POST'])
+def card_tab():
+    """what the user's paper cards open on: the AI summary or the abstract (also from a card's suggestion)"""
+    if g.user is None:
+        return redirect(url_for('profile'))
+    db.set_card_tab(g.user, request.form.get('tab', ''))
+    if request.form.get('ajax'):
+        return 'ok'
+    return redirect(url_for('profile', _anchor='cards'))
 
 
 @app.route('/sharing', methods=['POST'])

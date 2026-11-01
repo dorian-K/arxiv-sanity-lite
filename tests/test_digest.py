@@ -294,6 +294,7 @@ def test_digest_window_is_the_users_pick(client, corpus, tmp_path, monkeypatch):
     monkeypatch.setattr(db, 'USERS_DB_FILE', str(path))
     assert db.get_digest_days('bob') == db.DIGEST_DAYS
     assert db.get_user('bob')['digest_days'] == 0
+    assert db.get_user('bob')['card_tab'] == ''
 
 
 def test_load_more_digest_papers(client, corpus, monkeypatch):

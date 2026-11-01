@@ -16,6 +16,8 @@ var readonly = {{ readonly | default(false) | tojson }};
 var owner = {{ owner | default('') | tojson }};
 var summariesOn = {{ summaries_on | default(false) | tojson }};
 var summariesAsk = {{ summaries_ask | default(false) | tojson }};
+var cardTab = {{ card_tab | default('') | tojson }};
+var loggedIn = {{ logged_in | default(false) | tojson }};
 var viewing = {{ viewing | default(false) | tojson }};
 var sharing = {{ sharing | default(false) | tojson }};
 </script>

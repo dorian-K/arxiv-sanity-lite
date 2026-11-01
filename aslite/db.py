@@ -379,7 +379,8 @@ CREATE TABLE IF NOT EXISTS users (
     public INTEGER NOT NULL DEFAULT 0,  -- 1: anyone may view this user's tags read-only, without the password
     pending_email TEXT NOT NULL DEFAULT '',  -- entered, but the confirmation link not clicked yet
     email_confirmed REAL,  -- when the owner of `email` confirmed it (double opt-in): the consent record
-    digest_days INTEGER NOT NULL DEFAULT 0  -- the digest takes papers of the last this many days (0: DIGEST_DAYS)
+    digest_days INTEGER NOT NULL DEFAULT 0,  -- the digest takes papers of the last this many days (0: DIGEST_DAYS)
+    card_tab TEXT NOT NULL DEFAULT ''  -- what paper cards open on: '' (the AI summary) or 'abstract'
 ) WITHOUT ROWID;
 -- one row per (user, tag, paper): liked (neg = 0), downvoted (neg = 1) or seen without an
 -- opinion (neg = 2, the digest's neutral button: not shown again, not used for training)
@@ -471,6 +472,7 @@ def users_db():
                 'pending_email': "TEXT NOT NULL DEFAULT ''",
                 'email_confirmed': 'REAL',
                 'digest_days': 'INTEGER NOT NULL DEFAULT 0',
+                'card_tab': "TEXT NOT NULL DEFAULT ''",
             },
             'tokens': {'client': "TEXT NOT NULL DEFAULT ''"},
         }
@@ -508,7 +510,17 @@ def _query(sql, args=()):
         con.close()
 
 
-USER_KEYS = ('name', 'pw_hash', 'email', 'last_active', 'public', 'pending_email', 'email_confirmed', 'digest_days')
+USER_KEYS = (
+    'name',
+    'pw_hash',
+    'email',
+    'last_active',
+    'public',
+    'pending_email',
+    'email_confirmed',
+    'digest_days',
+    'card_tab',
+)
 
 
 def get_user(name):
@@ -536,6 +548,11 @@ def get_digest_days(name):
 def set_digest_days(name, days):
     days = min(DIGEST_DAYS_MAX, max(1, int(days)))
     _run('UPDATE users SET digest_days = ? WHERE name = ?', (0 if days == DIGEST_DAYS else days, name))
+
+
+def set_card_tab(name, tab):
+    """what the user's paper cards open on: 'summary' or 'abstract'"""
+    _run('UPDATE users SET card_tab = ? WHERE name = ?', ('abstract' if tab == 'abstract' else '', name))
 
 
 def set_password(name, pw_hash):
@@ -613,6 +630,7 @@ def export_user(name):
         'last_active': u.get('last_active'),
         'shares_tags_read_only': bool(u.get('public')),
         'digest_days': u.get('digest_days') or DIGEST_DAYS,
+        'paper_cards_open_on': u.get('card_tab') or 'summary',
         'tags': tags,
         'notes': [
             {'pid': p, 'text': t, 'time': w}

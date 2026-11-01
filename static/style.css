@@ -371,8 +371,9 @@ input:focus, select:focus, .btn:focus-visible, .iconbtn:focus-visible {
     -webkit-line-clamp: 4;
     -webkit-box-orient: vertical;
     overflow: hidden;
-    cursor: pointer;
 }
+.rel_abswrap.clamped { cursor: pointer; }
+.abs_toggle { display: block; margin-top: 2px; font-size: 14px; }
 .rel_tabs { display: flex; gap: 4px; margin: 10px 0 6px; border-bottom: 1px solid var(--border); }
 .rel_tabs button {
     background: none; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px;

@@ -434,13 +434,14 @@ const Paper = ({ paper: p, quickTag }) => {
                     title="keep the current default">no thanks</button>
         </div>` : null}
         ${tab === 'summary' ? html`<${AiSummary} s=${ai} />` : html`
-        <div class=${'rel_abs' + (long && !open ? ' clamped' : '')} onClick=${() => long && !open && setOpen(true)}>
-            <${MathText} text=${p.summary} />
+        <div class=${'rel_abswrap' + (long && !open ? ' clamped' : '')} onClick=${() => long && !open && setOpen(true)}>
+            <div class=${'rel_abs' + (long && !open ? ' clamped' : '')}><${MathText} text=${p.summary} /></div>
+            ${long ? html`<button type="button" class="linkbtn abs_toggle" aria-expanded=${open}
+                    onClick=${e => { e.stopPropagation(); setOpen(o => !o); }}>${open ? 'Show less ▴' : 'Reveal more ▾'}</button>` : null}
         </div>`}
         ${canEdit || note ? html`<${NoteBox} pid=${p.id} note=${note} setNote=${setNote}
             editing=${canEdit && editingNote} setEditing=${setEditingNote} />` : null}
         <div class="rel_links">
-            ${long && tab === 'abstract' ? html`<button class="linkbtn" onClick=${() => setOpen(o => !o)}>${open ? 'show less' : 'show more'}</button>` : null}
             <a href=${'https://arxiv.org/pdf/' + p.id}>pdf</a>
             <a class="rel_more" href=${'/?rank=pid&pid=' + p.id}>similar</a>
             ${canEdit && !note && !editingNote ? html`<button class="linkbtn" title="a note for yourself on this paper (only you see it)"

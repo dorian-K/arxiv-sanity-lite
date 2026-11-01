@@ -178,13 +178,14 @@ const AiSummary = ({ s }) => {
     </div>`;
 };
 // the AI summary and the abstract as two tabs: the card opens on the user's default, and while the
-// summary is being written it shows the abstract, the Summary tab spinning
+// summary is being written it shows the abstract, and the Summary tab is grayed out with a light
+// sweeping across it
 const AboutTabs = ({ ai, tab, setTab }) => html`
     <div class="rel_tabs" role="tablist">
         <button type="button" role="tab" aria-selected=${tab === 'summary'} disabled=${ai === 'pending'}
-                class=${tab === 'summary' ? 'on' : ''} onClick=${() => setTab('summary')}
+                class=${(tab === 'summary' ? 'on' : '') + (ai === 'pending' ? ' loading' : '')} onClick=${() => setTab('summary')}
                 title=${ai === 'pending' ? 'an AI model is summarizing this paper, a few seconds' : 'a short AI summary: problem, approach, result, caveat'}>
-            ${ai === 'pending' ? html`<span class="spin" aria-hidden="true"></span>` : null}Summary<span class="ai-badge" title="written by an AI model">AI</span></button>
+            <span class="ai-badge" title="written by an AI model">AI</span><span class="tablabel">Summary</span></button>
         <button type="button" role="tab" aria-selected=${tab === 'abstract'} class=${tab === 'abstract' ? 'on' : ''}
                 onClick=${() => setTab('abstract')} title="the authors' abstract">Abstract</button>
     </div>`;

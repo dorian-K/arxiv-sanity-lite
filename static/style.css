@@ -385,12 +385,15 @@ input:focus, select:focus, .btn:focus-visible, .iconbtn:focus-visible {
 }
 .rel_tabs button.on { color: var(--text); border-bottom-color: var(--accent); }
 .rel_tabs button:disabled { cursor: default; }
-.spin {
-    width: 10px; height: 10px; border-radius: 50%;
-    border: 2px solid var(--border); border-top-color: var(--accent);
-    animation: spin .8s linear infinite;
+.rel_tabs button.loading { opacity: .6; }
+.rel_tabs button.loading .tablabel {
+    color: transparent;
+    background: linear-gradient(90deg, var(--muted) 0%, var(--muted) 35%, var(--text) 50%, var(--muted) 65%, var(--muted) 100%);
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    animation: shimmer 1.6s linear infinite;
 }
-@keyframes spin { to { transform: rotate(360deg); } }
 .rel_tabhint {
     display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap;
     margin: 4px 0 8px; padding: 4px 10px; font-size: 13px;

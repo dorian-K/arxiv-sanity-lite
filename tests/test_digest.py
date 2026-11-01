@@ -296,6 +296,28 @@ def test_digest_window_is_the_users_pick(client, corpus, tmp_path, monkeypatch):
     assert db.get_user('bob')['digest_days'] == 0
 
 
+def test_load_more_digest_papers(client, corpus, monkeypatch):
+    import serve
+    from conftest import login
+
+    monkeypatch.setattr(serve, 'DIGEST_MORE', 2)
+    v = vision(corpus)
+    login(client)
+    for p in v[:4]:
+        client.post(f'/add/{p}/cv')
+    client.post('/digest')
+    d = db.get_digest('alice')
+    shown = {p for p, _ in d['sections'][0]['papers']}
+    r = client.get('/digest/more?tag=cv').get_json()
+    first = [p['id'] for p in r['papers']]
+    assert len(first) == 2 and r['more'] and not shown & set(first) and not set(v[:4]) & set(first)
+    times = {p: corpus[p]['_time'] for p in corpus}
+    assert all(d['time'] - d['days'] * 86400 < times[p] <= d['time'] for p in first)
+    r = client.get('/digest/more?tag=cv&skip=' + ','.join(first)).get_json()
+    assert not set(first) & {p['id'] for p in r['papers']}
+    assert client.get('/digest/more?tag=nope').status_code == 404
+
+
 def test_agent_tags_stay_out_of_the_digest_unless_given_a_number(client, corpus):
     from conftest import login
 

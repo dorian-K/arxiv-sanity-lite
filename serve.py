@@ -304,7 +304,7 @@ def _start_session(user, readonly=False):
         session['readonly'] = True
 
 
-SHAREABLE = ('main', 'digest_page', 'tag_check')  # pages a ?u= link can show for another user
+SHAREABLE = ('main', 'digest_page', 'digest_more', 'tag_check')  # pages a ?u= link can show for another user
 AGENT_ENDPOINTS = (
     'agents.mcp',
     'agents.mcp_me',
@@ -1860,6 +1860,41 @@ def digest_page():
             digest_days=d['days'],
         )
     return render_template('digest.html', **context)
+
+
+DIGEST_MORE = 10  # papers per "load more" on the digest page
+
+
+@app.route('/digest/more')
+def digest_more():
+    """
+    the next best papers of one tag over the stored digest's window (the same days, ending when
+    it was made), for "load more" on the digest page: not those the digest shows, not those in
+    skip (loaded before), not rated ones. the tag's model is the Recommended page's, so usually cached
+    """
+    tag = request.args.get('tag', '')
+    d = db.get_digest(g.owner) if g.owner else None
+    if d is None or tag not in get_tags():
+        return {'error': 'no such tag in your digest'}, 404
+    if not features_exist():
+        return {'error': 'no features yet'}, 400
+    if rate_limited('rank'):
+        return {'error': 'too many requests, try again in a minute'}, 429
+    m, _, _ = svm_rank(tags=tag)
+    if m is None:
+        return {'papers': [], 'more': False}
+    end, start = d['time'], d['time'] - d['days'] * 86400
+    shown = {p for s in d['sections'] for p, _ in s['papers']}
+    shown |= set(request.args.get('skip', '').split(',')[:1000])
+    days = int((time.time() - start) // 86400) + 1
+    pids, scores, _ = _model_ranking(m, str(days), True, {tag})
+    times = get_times()[0]
+    picked = [(p, sc) for p, sc in zip(pids, scores, strict=True) if p not in shown and start < times.get(p, 0) <= end][
+        : DIGEST_MORE + 1
+    ]
+    found = get_papers().get_many(p for p, _ in picked[:DIGEST_MORE])
+    papers = [dict(render_pid(p, found[p]), weight=round(sc, 4)) for p, sc in picked[:DIGEST_MORE] if p in found]
+    return {'papers': papers, 'more': len(picked) > DIGEST_MORE}
 
 
 def _unsubscribe_user(token):

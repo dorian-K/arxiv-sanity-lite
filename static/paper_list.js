@@ -353,12 +353,12 @@ const waitingFor = () => (gvars.rank === 'pid' ? 'Finding similar papers…'
 // what the list will look like, blanked, while the results are on their way: cards or lines
 // in the current view, so nothing jumps when they arrive. widths vary like real titles do
 const SKELETON_WIDTHS = [92, 74, 86, 65, 80, 70, 88, 60, 78, 84, 68, 90];
-const Skeleton = () => {
+const Skeleton = ({ count, caption }) => {
     const compact = useView() === 'compact';
     const w = i => ({ width: SKELETON_WIDTHS[i % SKELETON_WIDTHS.length] + '%' });
-    const rows = Array.from({ length: compact ? 12 : 5 }, (_, i) => i);
+    const rows = Array.from({ length: count || (compact ? 12 : 5) }, (_, i) => i);
     return html`<div class="rel_papers skeleton" role="status" aria-busy="true" aria-live="polite">
-        <div class="skel-caption">${waitingFor()}</div>
+        <div class="skel-caption">${caption || waitingFor()}</div>
         ${rows.map(i => compact ? html`
         <div key=${i} class="rel_paper rel_compact skel" aria-hidden="true">
             <span class="sk sk-score"></span><span class="sk sk-line" style=${w(i)}></span>
@@ -444,8 +444,47 @@ const TagList = ({ tags }) => html`
 })();
 
 // the digest page: one section per tag, with quick votes for that tag. a click on a tag's
-// heading folds it away; which tags are folded is remembered in this browser
+// heading folds it away; which tags are folded is remembered in this browser. "load more"
+// fetches the tag's next best papers of the same days (/digest/more)
 const FOLDED_KEY = 'digest-folded';
+const DigestSection = ({ s, open, onToggle }) => {
+    const [extra, setExtra] = useState([]);
+    const [state, setState] = useState('idle'); // idle | loading | done | error message
+    const papers = s.papers.concat(extra);
+    const more = () => {
+        setState('loading');
+        const q = new URLSearchParams({ tag: s.tag, skip: extra.map(p => p.id).join(',') });
+        if (viewing) q.set('u', owner);
+        fetch('/digest/more?' + q).then(r => r.json()).then(res => {
+            if (res.error) { setState(res.error); return; }
+            setExtra(x => x.concat(res.papers));
+            setState(res.more ? 'idle' : 'done');
+        }).catch(() => setState('loading failed, try again'));
+    };
+    return html`
+    <section class=${'digest-section' + (open ? '' : ' folded')}>
+        <h2 class="digest-tag">
+            <button type="button" class="digest-fold" aria-expanded=${open} onClick=${onToggle}
+                    title=${open ? 'collapse this tag' : 'show its papers again'}>
+                <span class="fold-mark" aria-hidden="true">${open ? '▾' : '▸'}</span>
+                ${s.tag}
+                <span class="muted digest-count">${papers.length} paper${papers.length === 1 ? '' : 's'}${open ? '' : ', collapsed'}</span>
+            </button>
+            <a href=${tagUrl(s.tag)} class="digest-open" title=${'all recommendations for ' + s.tag}>open tag →</a>
+        </h2>
+        ${open ? html`
+        <div class="rel_papers">${papers.map(p => html`<${Paper} key=${p.id} paper=${p} quickTag=${s.tag} />`)}</div>
+        ${state === 'loading' ? html`<${Skeleton} count=${3} caption=${'Finding more papers for "' + s.tag + '"…'} />` : null}
+        <div class="digest-more">
+            ${state === 'done' ? html`<span class="muted">That's all for "${s.tag}" in these days.</span>`
+            : state === 'loading' ? null : html`
+            <button type="button" class="btn btn-small" onClick=${more}
+                    title="the next best papers for this tag from the same days">Load more</button>
+            <span class="muted">the next best papers of the same days</span>
+            ${state !== 'idle' ? html`<span class="form-error">${state}</span>` : null}`}
+        </div>` : null}
+    </section>`;
+};
 const Digest = ({ sections }) => {
     const [folded, setFolded] = useState(() => {
         try { return JSON.parse(localStorage.getItem(FOLDED_KEY)) || []; } catch (e) { return []; }
@@ -455,23 +494,8 @@ const Digest = ({ sections }) => {
         setFolded(next);
         try { localStorage.setItem(FOLDED_KEY, JSON.stringify(next)); } catch (e) { /* storage blocked: this page only */ }
     };
-    return html`
-    ${sections.map(s => {
-        const open = !folded.includes(s.tag);
-        return html`
-    <section key=${s.tag} class=${'digest-section' + (open ? '' : ' folded')}>
-        <h2 class="digest-tag">
-            <button type="button" class="digest-fold" aria-expanded=${open} onClick=${() => toggle(s.tag)}
-                    title=${open ? 'collapse this tag' : 'show its papers again'}>
-                <span class="fold-mark" aria-hidden="true">${open ? '▾' : '▸'}</span>
-                ${s.tag}
-                <span class="muted digest-count">${s.papers.length} paper${s.papers.length === 1 ? '' : 's'}${open ? '' : ', collapsed'}</span>
-            </button>
-            <a href=${tagUrl(s.tag)} class="digest-open" title=${'all recommendations for ' + s.tag}>open tag →</a>
-        </h2>
-        ${open ? html`<div class="rel_papers">${s.papers.map(p => html`<${Paper} key=${p.id} paper=${p} quickTag=${s.tag} />`)}</div>` : null}
-    </section>`;
-    })}`;
+    return html`${sections.map(s => html`
+        <${DigestSection} key=${s.tag} s=${s} open=${!folded.includes(s.tag)} onToggle=${() => toggle(s.tag)} />`)}`;
 };
 
 // "check this tag": how well the tag's papers predict each other, and which don't fit

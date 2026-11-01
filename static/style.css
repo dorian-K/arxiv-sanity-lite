@@ -479,6 +479,7 @@ textarea.form-control {
 .digest-count { font-size: 14px; font-weight: normal; }
 .digest-open { font-size: 14px; font-weight: normal; color: var(--tag); }
 .digest-section.folded { margin-top: 12px; }
+.digest-more { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-top: 10px; font-size: 14px; }
 .quickvote { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .vote-like.on { color: var(--tag); background: var(--tag-soft); border-color: var(--tag); }
 .vote-seen.on { color: var(--text); background: var(--surface-2); border-color: var(--muted); }

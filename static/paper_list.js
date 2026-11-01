@@ -434,10 +434,10 @@ const Paper = ({ paper: p, quickTag }) => {
                     title="keep the current default">no thanks</button>
         </div>` : null}
         ${tab === 'summary' ? html`<${AiSummary} s=${ai} />` : html`
-        <div class=${'rel_abswrap' + (long && !open ? ' clamped' : '')} onClick=${() => long && !open && setOpen(true)}>
-            <div class=${'rel_abs' + (long && !open ? ' clamped' : '')}><${MathText} text=${p.summary} /></div>
-            ${long ? html`<button type="button" class="linkbtn abs_toggle" aria-expanded=${open}
-                    onClick=${e => { e.stopPropagation(); setOpen(o => !o); }}>${open ? 'Show less ▴' : 'Reveal more ▾'}</button>` : null}
+        <div class=${'rel_abs' + (long && !open ? ' clamped' : '')} onClick=${() => long && !open && setOpen(true)}>
+            <${MathText} text=${p.summary} />
+            ${long ? html`<button type="button" class=${'linkbtn abs_toggle' + (open ? '' : ' over')} aria-expanded=${open}
+                    onClick=${e => { e.stopPropagation(); setOpen(o => !o); }}>${open ? ' show less' : html`<span class="abs_dots">… </span>reveal more`}</button>` : null}
         </div>`}
         ${canEdit || note ? html`<${NoteBox} pid=${p.id} note=${note} setNote=${setNote}
             editing=${canEdit && editingNote} setEditing=${setEditingNote} />` : null}

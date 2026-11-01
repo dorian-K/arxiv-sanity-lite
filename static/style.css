@@ -372,8 +372,14 @@ input:focus, select:focus, .btn:focus-visible, .iconbtn:focus-visible {
     -webkit-box-orient: vertical;
     overflow: hidden;
 }
-.rel_abswrap.clamped { cursor: pointer; }
-.abs_toggle { display: block; margin-top: 2px; font-size: 14px; }
+.rel_abs.clamped { position: relative; cursor: pointer; }
+/* "… reveal more" over the end of the last visible line, the text fading out under it */
+.abs_toggle { font-size: inherit; line-height: inherit; }
+.abs_toggle.over {
+    position: absolute; right: 0; bottom: 0; padding-left: 2.5em;
+    background: linear-gradient(90deg, transparent, var(--surface) 2em);
+}
+.abs_dots { color: var(--text); }
 .rel_tabs { display: flex; gap: 4px; margin: 10px 0 6px; border-bottom: 1px solid var(--border); }
 .rel_tabs button {
     background: none; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px;

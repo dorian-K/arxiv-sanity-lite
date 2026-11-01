@@ -415,11 +415,14 @@ const Paper = ({ paper: p, quickTag }) => {
             onPick=${t => { if (!userTagNames.includes(t)) userTagNames.push(t); (picker === 'add' ? save : notFor)(t); }}
             onCancel=${() => setPicker(null)} />` : null}
         ${hasAi ? html`<${AboutTabs} ai=${ai} tab=${tab} setTab=${pickTab} />` : null}
-        ${askDefault && tab !== aboutTab ? html`<div class="rel_tabhint">
+        ${askDefault && tab !== aboutTab ? html`<div class="rel_tabhint" role="note">
+            <span aria-hidden="true">💡</span>
             <button class="linkbtn" onClick=${() => { setAboutDefault(tab); setAskDefault(false); setChosenTab(null); }}
-                    title=${loggedIn ? 'saved in your settings (profile), where you can change it back' : 'remembered in this browser'}>
-                Open every card on the ${tab === 'abstract' ? 'abstract' : 'summary'}</button>
-            <span> · </span><button class="linkbtn" onClick=${() => { switches(-2 * SWITCHES_TO_ASK); setAskDefault(false); }}>no thanks</button>
+                    title=${loggedIn ? 'every card opens on it from now on; saved in your settings (profile), where you can change it back' : 'every card opens on it from now on; remembered in this browser'}>
+                Show ${tab === 'abstract' ? 'abstract' : 'summary'} by default</button>
+            <span class="muted">·</span>
+            <button class="linkbtn muted" onClick=${() => { switches(-2 * SWITCHES_TO_ASK); setAskDefault(false); }}
+                    title="keep the current default">no thanks</button>
         </div>` : null}
         ${tab === 'summary' ? html`<${AiSummary} s=${ai} />` : html`
         <div class=${'rel_abs' + (long && !open ? ' clamped' : '')} onClick=${() => long && !open && setOpen(true)}>

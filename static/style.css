@@ -638,6 +638,9 @@ details.danger form { margin-top: 10px; }
    cards or titles only */
 
 #viewswitch { display: flex; justify-content: flex-end; gap: 4px; margin-top: 12px; }
+#viewswitch { flex-wrap: wrap; }
+#viewswitch .vgroup { display: inline-flex; gap: 4px; }
+#viewswitch .vsep { border-left: 1px solid var(--border); padding-left: 8px; margin-left: 4px; }
 #viewswitch .btn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); font-weight: 600; }
 #viewswitch + #wrap, #viewswitch + #digestwrap { margin-top: 8px; }
 

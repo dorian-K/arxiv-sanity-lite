@@ -177,16 +177,17 @@ const AiSummary = ({ s }) => {
         <div class="rel_ai_note">AI summary from ${from}, may contain errors</div>
     </div>`;
 };
-// the AI summary and the abstract as two tabs: the summary while there is one, the abstract
-// while it is being written (its tab spins), and no tabs where there will be none
+// the AI summary and the abstract as two tabs. picking one picks it for every card (and the
+// switch above the list); while the summary is being written the card shows the abstract and
+// the Summary tab spins
 const AboutTabs = ({ ai, tab, setTab }) => html`
     <div class="rel_tabs" role="tablist">
         <button type="button" role="tab" aria-selected=${tab === 'summary'} disabled=${ai === 'pending'}
                 class=${tab === 'summary' ? 'on' : ''} onClick=${() => setTab('summary')}
-                title=${ai === 'pending' ? 'an AI model is summarizing this paper, a few seconds' : 'a short AI summary: problem, approach, result, caveat'}>
+                title=${ai === 'pending' ? 'an AI model is summarizing this paper, a few seconds' : 'show the AI summary on every card (problem, approach, result, caveat)'}>
             ${ai === 'pending' ? html`<span class="spin" aria-hidden="true"></span>` : null}Summary</button>
         <button type="button" role="tab" aria-selected=${tab === 'abstract'} class=${tab === 'abstract' ? 'on' : ''}
-                onClick=${() => setTab('abstract')} title="the authors' abstract">Abstract</button>
+                onClick=${() => setTab('abstract')} title="show the authors' abstract on every card">Abstract</button>
     </div>`;
 
 const SHOW_SCORE = ['tags', 'pid']; // (search scores are raw text-match numbers, meaningless to read)
@@ -231,6 +232,31 @@ document.querySelectorAll('#viewswitch [data-view]').forEach(b => {
     b.addEventListener('click', () => setView(b.dataset.view));
 });
 
+// what cards with an AI summary show: the summary or the abstract. one choice for all cards, made
+// with the tabs on any card or the switch above the list, remembered in this browser only
+const ABOUT_KEY = 'resanity-about';
+const about = { tab: 'summary' };
+try { about.tab = localStorage.getItem(ABOUT_KEY) === 'abstract' ? 'abstract' : 'summary'; } catch (e) { /* storage blocked */ }
+const useAbout = () => {
+    const [tab, setTab] = useState(about.tab);
+    useEffect(() => {
+        const f = () => setTab(about.tab);
+        window.addEventListener('about', f);
+        return () => window.removeEventListener('about', f);
+    }, []);
+    return tab;
+};
+function setAbout(tab) {
+    about.tab = tab;
+    try { localStorage.setItem(ABOUT_KEY, tab); } catch (e) { /* storage blocked: this page only */ }
+    document.querySelectorAll('#viewswitch [data-about]').forEach(b => b.setAttribute('aria-pressed', b.dataset.about === tab));
+    window.dispatchEvent(new Event('about'));
+}
+document.querySelectorAll('#viewswitch [data-about]').forEach(b => {
+    b.setAttribute('aria-pressed', b.dataset.about === about.tab);
+    b.addEventListener('click', () => setAbout(b.dataset.about));
+});
+
 // one-click votes for a given tag (the digest page): like, neutral (seen, no opinion: hidden
 // from later digests, not used for training) or downvote. one state per paper and tag,
 // clicking the active one undoes it
@@ -268,9 +294,9 @@ const Paper = ({ paper: p, quickTag }) => {
     const [expanded, setExpanded] = useState(false); // one paper opened in the compact view
     const compactView = useView() === 'compact';
     const ai = useAiSummary(p);
-    const [chosenTab, setTab] = useState(null);
+    const aboutTab = useAbout();
     const hasAi = ai && ai !== 'none';
-    const tab = ai && typeof ai === 'object' ? chosenTab || 'summary' : 'abstract';
+    const tab = ai && typeof ai === 'object' ? aboutTab : 'abstract';
 
     const without = (list, tag) => list.filter(t => t !== tag);
     const withTag = (list, tag) => (list.includes(tag) ? list : [...list, tag]);
@@ -375,7 +401,7 @@ const Paper = ({ paper: p, quickTag }) => {
         ${picker ? html`<${TagPicker} mode=${picker} tags=${pickable}
             onPick=${t => { if (!userTagNames.includes(t)) userTagNames.push(t); (picker === 'add' ? save : notFor)(t); }}
             onCancel=${() => setPicker(null)} />` : null}
-        ${hasAi ? html`<${AboutTabs} ai=${ai} tab=${tab} setTab=${setTab} />` : null}
+        ${hasAi ? html`<${AboutTabs} ai=${ai} tab=${tab} setTab=${setAbout} />` : null}
         ${tab === 'summary' ? html`<${AiSummary} s=${ai} />` : html`
         <div class=${'rel_abs' + (long && !open ? ' clamped' : '')} onClick=${() => long && !open && setOpen(true)}>
             <${MathText} text=${p.summary} />

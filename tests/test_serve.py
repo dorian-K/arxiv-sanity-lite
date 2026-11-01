@@ -570,3 +570,13 @@ def test_removing_a_tags_last_saved_paper_deletes_the_tag(client, corpus):
     client.post(f'/sub/{pids[1]}/foo')
     assert db.get_tags('alice') == {} and db.get_tags('alice', neg=True) == {} and db.get_digest_sizes('alice') == {}
     assert b'<option value="foo">' not in client.get('/import').data
+
+
+def test_health_not_counted(client, monkeypatch):
+    import serve
+
+    seen = []
+    monkeypatch.setattr(serve.metrics, 'record', lambda name, sec: seen.append(name))
+    assert client.get('/health').data == b'ok'
+    client.get('/about')
+    assert seen == ['about']

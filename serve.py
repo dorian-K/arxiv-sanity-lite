@@ -398,7 +398,7 @@ def static_version(endpoint, values):
 @app.after_request
 def record_timing(resp):
     """how long this kind of page took (aslite/metrics.py), shown on /stats; static files aren't counted"""
-    if request.endpoint not in (None, 'static') and 't0' in g:
+    if request.endpoint not in (None, 'static', 'health') and 't0' in g:
         metrics.record(g.get('metric_name') or request.endpoint, time.perf_counter() - g.t0)
     return resp
 
@@ -1520,6 +1520,7 @@ STAT_LABELS = {
     'list:saved': 'Saved papers of a tag',
     'list:down': 'Not for this tag',
     'list:unread': 'To read',
+    'list:cited': 'Cited by a tag',
     'agent:search': 'Agent: search',
     'agent:rank_like': 'Agent: rank like these papers',
     'agent:recommend': 'Agent: recommendations',
@@ -1531,11 +1532,42 @@ STAT_LABELS = {
     'subneg': 'Vote: undo not for this tag',
     'seen': 'Vote: neutral',
     'unseen': 'Vote: undo neutral',
-    'digest': 'Digest',
+    'read': 'Mark read',
+    'note': 'Note',
+    'delete_tag': 'Delete a tag',
+    'copy_tag': 'Copy a tag',
+    'import_papers': 'Import papers',
+    'digest_page': 'Digest',
+    'digest_more': 'Digest: load more',
+    'digest_sizes': 'Digest settings',
+    'card_tab': 'Card setting (summary or abstract)',
+    'summaries': 'AI summaries a page asks for',
+    'thumb': 'Thumbnails',
     'inspect': 'Paper details',
     'tag_check': 'Tag check',
     'profile': 'Profile',
+    'sharing': 'Public profile setting',
+    'stats': 'Stats',
+    'about': 'About',
+    'privacy': 'Privacy',
+    'imprint': 'Imprint',
+    'login': 'Log in',
+    'logout': 'Log out',
+    'agents.agents_page': 'Agents page',
+    'agents.api': 'Agent: JSON API (all)',
+    'agents.api_index': 'Agent: JSON API index',
+    'agents.llms_txt': 'llms.txt',
 }
+
+# the number of arXiv titles changes only with import_snapshot.py --titles, and counting 3M rows
+# takes seconds, so each worker counts once an hour
+_n_titles = [0.0, None]
+
+
+def n_titles(rdb):
+    if _n_titles[1] is None or time.time() - _n_titles[0] > 3600:
+        _n_titles[:] = [time.time(), rdb.n_titles()]
+    return _n_titles[1]
 
 
 def fmt_seconds(s):
@@ -1619,7 +1651,7 @@ def stats():
     try:
         with db.get_refs_db() as rdb:
             enrich = rdb.counts()
-            enrich['titles'] = rdb.n_titles()
+            enrich['titles'] = n_titles(rdb)
     except Exception as e:
         print("reading refs failed: %s" % (e,))
         enrich = None
@@ -1629,6 +1661,12 @@ def stats():
         enrich['left'] = runs('enrich')[-1][3].get('left') if runs('enrich') else None
     context['enrich'] = enrich
     return render_template('stats.html', **context)
+
+
+@app.route('/health')
+def health():
+    """for the docker healthcheck (once a minute): not counted on /stats, where it drowned out real pages"""
+    return 'ok'
 
 
 @app.route('/about')

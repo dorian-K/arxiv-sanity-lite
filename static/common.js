@@ -236,3 +236,14 @@ document.addEventListener('submit', e => {
     }
     showBusy(form.dataset.busy || busyMessage(url));
 });
+
+// the sticky header's height as --header-h, for things that stick just below it (the digest's
+// tag headings); it changes when the nav wraps on narrow screens
+(() => {
+    const header = document.getElementById('header');
+    if (!header) return;
+    const set = () => document.documentElement.style.setProperty('--header-h', header.offsetHeight + 'px');
+    set();
+    if ('ResizeObserver' in window) new ResizeObserver(set).observe(header);
+    else window.addEventListener('resize', set);
+})();

@@ -470,15 +470,22 @@ textarea.form-control {
 .stattable.import-results td:last-child { text-align: left; font-weight: normal; padding-right: 0; width: 40%; }
 
 /* digest */
-.digest-section { margin-top: 24px; }
-.digest-tag { margin: 0 0 10px; font-size: 20px; }
-.digest-tag { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+/* a clear gap and a rule between tags, and the current tag's heading stays under the header
+   while its papers scroll by (--header-h is the header's height, set by common.js) */
+.digest-section { margin-top: 48px; padding-top: 4px; border-top: 2px solid var(--border); }
+.digest-section:first-child { margin-top: 24px; border-top: 0; }
+.digest-tag {
+    position: sticky; top: var(--header-h, 0px); z-index: 5;
+    margin: 0 -16px 10px; padding: 8px 16px; background: var(--bg);
+    font-size: 20px; display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+    box-shadow: 0 1px 0 var(--border);
+}
 .digest-fold { all: unset; cursor: pointer; color: var(--tag); display: inline-flex; align-items: baseline; gap: 8px; }
 .digest-fold:focus-visible { outline: 2px solid var(--tag); outline-offset: 2px; }
 .fold-mark { display: inline-block; width: 1em; font-size: 16px; }
 .digest-count { font-size: 14px; font-weight: normal; }
 .digest-open { font-size: 14px; font-weight: normal; color: var(--tag); }
-.digest-section.folded { margin-top: 12px; }
+.digest-section.folded { margin-top: 16px; }
 .digest-more { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-top: 10px; font-size: 14px; }
 .quickvote { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .vote-like.on { color: var(--tag); background: var(--tag-soft); border-color: var(--tag); }

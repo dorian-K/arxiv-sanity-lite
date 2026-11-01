@@ -1862,7 +1862,7 @@ def digest_page():
     return render_template('digest.html', **context)
 
 
-DIGEST_MORE = 10  # papers per "load more" on the digest page
+DIGEST_MORE = 5  # papers per "load more" on the digest page
 
 
 @app.route('/digest/more')

@@ -184,7 +184,7 @@ const AboutTabs = ({ ai, tab, setTab }) => html`
         <button type="button" role="tab" aria-selected=${tab === 'summary'} disabled=${ai === 'pending'}
                 class=${tab === 'summary' ? 'on' : ''} onClick=${() => setTab('summary')}
                 title=${ai === 'pending' ? 'an AI model is summarizing this paper, a few seconds' : 'a short AI summary: problem, approach, result, caveat'}>
-            ${ai === 'pending' ? html`<span class="spin" aria-hidden="true"></span>` : null}Summary</button>
+            ${ai === 'pending' ? html`<span class="spin" aria-hidden="true"></span>` : html`<span aria-hidden="true">✨</span>`}Summary</button>
         <button type="button" role="tab" aria-selected=${tab === 'abstract'} class=${tab === 'abstract' ? 'on' : ''}
                 onClick=${() => setTab('abstract')} title="the authors' abstract">Abstract</button>
     </div>`;

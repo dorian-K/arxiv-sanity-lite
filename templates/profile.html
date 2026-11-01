@@ -53,7 +53,7 @@
         <form action="/card_tab" method="post">
             <label class="check" title="problem, approach, result and a caveat, written by an AI model">
                 <input type="radio" name="tab" value="summary" {{ 'checked' if card_tab != 'abstract' }} onchange="this.form.submit()">
-                <span>The AI summary</span>
+                <span>✨ The AI summary</span>
             </label>
             <label class="check" title="the paper's abstract, as the authors wrote it">
                 <input type="radio" name="tab" value="abstract" {{ 'checked' if card_tab == 'abstract' }} onchange="this.form.submit()">

@@ -1349,6 +1349,8 @@ def profile(error=''):
         [{'name': t, 'n': sizes.get(t, digest.default_size(t))} for t in sorted(get_tags())] if user else []
     )
     context['max_per_tag'] = digest.MAX_PER_TAG
+    context['digest_days'] = db.get_digest_days(g.user) if user else db.DIGEST_DAYS
+    context['max_digest_days'] = db.DIGEST_DAYS_MAX
     context['saved_sizes'] = request.args.get('saved') == '1'
     return render_template('profile.html', **context)
 
@@ -1358,6 +1360,10 @@ def digest_sizes():
     """papers per tag in the user's digest (0 = leave the tag out)"""
     if g.user is None:
         return redirect(url_for('profile'))
+    try:
+        db.set_digest_days(g.user, request.form.get('days', ''))
+    except ValueError:
+        pass
     tags = get_tags()
     for tag, n in zip(request.form.getlist('tag'), request.form.getlist('n'), strict=False):
         if tag not in tags:
@@ -1816,14 +1822,13 @@ def tag_check():
     }
 
 
-DIGEST_DAYS = 7
-
-
 @app.route('/digest', methods=['GET', 'POST'])
 def digest_page():
     """the user's latest digest (what the email showed), with thumbs up/down per tag"""
     context = default_context()
-    context.update(sections=[], digest_time='', digest_days=DIGEST_DAYS, error='')
+    context.update(
+        sections=[], digest_time='', digest_days=db.get_digest_days(g.owner) if g.owner else db.DIGEST_DAYS, error=''
+    )
     context['tags'] = [{'name': t} for t in get_tags()]  # suggestions in the tag editor
     if g.owner is None:
         return render_template('digest.html', **context)
@@ -1834,8 +1839,9 @@ def digest_page():
         if not features_exist():
             context['error'] = "No features yet, run compute.py first."
             return render_template('digest.html', **context)
-        sections = digest.compute_for(g.user, load_features(), get_times()[0], DIGEST_DAYS)
-        db.save_digest(g.user, sections, DIGEST_DAYS)
+        days = db.get_digest_days(g.user)
+        sections = digest.compute_for(g.user, load_features(), get_times()[0], days)
+        db.save_digest(g.user, sections, days)
         return redirect(url_for('digest_page'))
 
     d = db.get_digest(g.owner)

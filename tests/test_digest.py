@@ -263,6 +263,39 @@ def test_papers_per_tag_in_the_digest(client, corpus):
     assert db.get_digest_sizes('alice') == {}
 
 
+def test_digest_window_is_the_users_pick(client, corpus, tmp_path, monkeypatch):
+    import sqlite3
+
+    from conftest import login
+
+    v = vision(corpus)
+    login(client)
+    for p in v[:4]:
+        client.post(f'/add/{p}/cv')
+    assert db.get_digest_days('alice') == db.DIGEST_DAYS
+    client.post('/digest_sizes', data={'days': '14', 'tag': ['cv'], 'n': ['3']})
+    assert db.get_digest_days('alice') == 14 and b'value="14"' in client.get('/profile').data
+    client.post('/digest')
+    assert db.get_digest('alice')['days'] == 14
+    assert b'14 days before' in client.get('/digest').data
+    assert db.export_user('alice')['digest_days'] == 14
+    client.post('/digest_sizes', data={'days': '9999'})
+    assert db.get_digest_days('alice') == db.DIGEST_DAYS_MAX
+    # an old users db without the column
+    path = tmp_path / 'old.sqlite'
+    con = sqlite3.connect(path)
+    con.execute(
+        "CREATE TABLE users (name TEXT PRIMARY KEY, pw_hash TEXT, email TEXT NOT NULL DEFAULT '',"
+        " last_active INTEGER NOT NULL DEFAULT 0)"
+    )
+    con.execute("INSERT INTO users (name) VALUES ('bob')")
+    con.commit()
+    con.close()
+    monkeypatch.setattr(db, 'USERS_DB_FILE', str(path))
+    assert db.get_digest_days('bob') == db.DIGEST_DAYS
+    assert db.get_user('bob')['digest_days'] == 0
+
+
 def test_agent_tags_stay_out_of_the_digest_unless_given_a_number(client, corpus):
     from conftest import login
 

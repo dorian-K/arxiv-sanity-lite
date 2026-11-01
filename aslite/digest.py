@@ -88,7 +88,9 @@ def compute(
     return sections
 
 
-def compute_for(user, features, times, days=7, per_tag=PER_TAG, **kwargs):
+def compute_for(user, features, times, days=None, per_tag=PER_TAG, **kwargs):
+    """the user's digest over days, by default the window they picked (db.get_digest_days)"""
+    days = days or db.get_digest_days(user)
     # papers marked neutral ("seen") count as rated: left out, but not used for training
     neg = db.get_tags(user, neg=True)
     seen = db.get_tags(user, neg=db.SEEN)

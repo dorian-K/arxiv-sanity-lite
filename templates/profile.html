@@ -75,11 +75,17 @@
         </form>
         {% endif %}
         {% if digest_tags %}
-        <h2 id="digest-sizes">Papers per tag</h2>
-        <p class="muted">How many papers each tag gets in the digest; 0 leaves the tag out. Tags an AI agent made
+        <h2 id="digest-sizes">What the digest shows</h2>
+        <p class="muted">It comes every week; the window says how far back it looks for papers (say 14 days, to
+            see two weeks of papers in each mail). Papers per tag: 0 leaves the tag out. Tags an AI agent made
             (<code>agent:…</code>) start at 0.</p>
         {% if saved_sizes %}<p class="form-ok">Saved.</p>{% endif %}
         <form action="/digest_sizes" method="post" class="digest-sizes">
+            <label title="the digest takes papers that came out in the last this many days (1 to {{ max_digest_days }})">
+                <span>Window, in days</span>
+                <input class="form-control" type="number" name="days" min="1" max="{{ max_digest_days }}" value="{{ digest_days }}" required>
+            </label>
+            <span class="muted">Papers per tag:</span>
             {% for t in digest_tags %}
             <label>
                 <span>{{ t.name }}</span>

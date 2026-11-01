@@ -136,7 +136,13 @@ if __name__ == "__main__":
     parser.add_argument(
         '-n', '--per-tag', type=int, default=digest.PER_TAG, help="papers per tag, where the user didn't pick a number"
     )
-    parser.add_argument('-t', '--time-delta', type=int, default=7, help='papers from the last this many days')
+    parser.add_argument(
+        '-t',
+        '--time-delta',
+        type=int,
+        default=0,
+        help="papers from the last this many days (default: each user's pick)",
+    )
     parser.add_argument('-d', '--dry-run', type=int, default=0, help='if 1, compose (and store) but do not send')
     parser.add_argument('-u', '--user', type=str, default='', help='only this user (for testing)')
     parser.add_argument('--save', type=str, default='', help='also write the html of the (last) email to this file')
@@ -170,15 +176,14 @@ if __name__ == "__main__":
 
     num_sent = num_failed = 0
     for user, email in sorted(emails.items()):
-        sections = digest.compute_for(
-            user, features, times, args.time_delta, args.per_tag, feats=args.feats, model=args.model
-        )
+        days = args.time_delta or db.get_digest_days(user)
+        sections = digest.compute_for(user, features, times, days, args.per_tag, feats=args.feats, model=args.model)
         if not sections:
             print(f"skipping {user}: no recommendations (no tags, or nothing new)")
             continue
-        db.save_digest(user, sections, args.time_delta)
+        db.save_digest(user, sections, days)
         papers = pdb.get_many(p for s in sections for p, _ in s['papers'])
-        subject, text, body = render(user, sections, papers, args.time_delta)
+        subject, text, body = render(user, sections, papers, days)
         if args.save:
             with open(args.save, 'w') as f:
                 f.write(body)

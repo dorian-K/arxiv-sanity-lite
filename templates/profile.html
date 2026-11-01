@@ -76,7 +76,8 @@
         {% endif %}
         {% if digest_tags %}
         <h2 id="digest-sizes">Papers per tag</h2>
-        <p class="muted">How many papers each tag gets in the digest; 0 leaves the tag out.</p>
+        <p class="muted">How many papers each tag gets in the digest; 0 leaves the tag out. Tags an AI agent made
+            (<code>agent:…</code>) start at 0.</p>
         {% if saved_sizes %}<p class="form-ok">Saved.</p>{% endif %}
         <form action="/digest_sizes" method="post" class="digest-sizes">
             {% for t in digest_tags %}

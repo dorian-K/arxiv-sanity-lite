@@ -17,6 +17,12 @@ PER_TAG = 3  # papers per tag, unless the user set another number for the tag (0
 MAX_PER_TAG = 50
 
 
+def default_size(tag, per_tag=PER_TAG):
+    """papers a tag gets where the user picked no number: none for an agent's tags (agent:...),
+    which the user didn't make themselves, until they give them a number on the profile"""
+    return 0 if tag.startswith(db.AGENT_TAG_PREFIX) else per_tag
+
+
 def compute(
     features,
     times,
@@ -49,7 +55,7 @@ def compute(
     ptoi = features.get('ptoi') or {p: i for i, p in enumerate(pids)}
     want, candidates = {}, []  # candidates: (rank fraction among all papers, tag, -score, row)
     for tag in sorted(tags):
-        n = sizes.get(tag, per_tag)
+        n = sizes.get(tag, default_size(tag, per_tag))
         if not tags[tag] or not recent or n <= 0:
             continue
         s, _ = score(features, tags[tag], neg_tags.get(tag, set()), feats=feats, model=model)
@@ -63,7 +69,9 @@ def compute(
         ok = usable(features, resolve_feats(features, feats))
         if ok is not None:
             rows = rows[ok[rows]]  # not the papers still waiting for an embedding
-        rows = rows[np.argsort(-s[rows], kind='stable')][: n + sum(sizes.get(t, per_tag) for t in tags)]
+        rows = rows[np.argsort(-s[rows], kind='stable')][
+            : n + sum(sizes.get(t, default_size(t, per_tag)) for t in tags)
+        ]
         ordered = np.sort(s)
         higher = len(s) - np.searchsorted(ordered, s[rows], side='right')
         candidates += [(h / len(s), tag, -float(s[r]), int(r)) for h, r in zip(higher, rows, strict=True)]

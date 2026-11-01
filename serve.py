@@ -1346,7 +1346,7 @@ def profile(error=''):
     context['public'] = bool(user and user['public'])
     sizes = db.get_digest_sizes(g.user) if user else {}
     context['digest_tags'] = (
-        [{'name': t, 'n': sizes.get(t, digest.PER_TAG)} for t in sorted(get_tags())] if user else []
+        [{'name': t, 'n': sizes.get(t, digest.default_size(t))} for t in sorted(get_tags())] if user else []
     )
     context['max_per_tag'] = digest.MAX_PER_TAG
     context['saved_sizes'] = request.args.get('saved') == '1'
@@ -1366,7 +1366,7 @@ def digest_sizes():
             n = min(digest.MAX_PER_TAG, max(0, int(n)))
         except ValueError:
             continue
-        db.set_digest_size(g.user, tag, None if n == digest.PER_TAG else n)
+        db.set_digest_size(g.user, tag, None if n == digest.default_size(tag) else n)
     return redirect(url_for('profile', saved=1, _anchor='digest-sizes'))
 
 

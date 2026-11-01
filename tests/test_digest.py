@@ -263,6 +263,24 @@ def test_papers_per_tag_in_the_digest(client, corpus):
     assert db.get_digest_sizes('alice') == {}
 
 
+def test_agent_tags_stay_out_of_the_digest_unless_given_a_number(client, corpus):
+    from conftest import login
+
+    v = vision(corpus)
+    login(client)
+    for p in v[:4]:
+        client.post(f'/add/{p}/agent:cv')
+    assert b'value="0"' in client.get('/profile').data
+    client.post('/digest')
+    assert db.get_digest('alice')['sections'] == []
+    client.post('/digest_sizes', data={'tag': ['agent:cv'], 'n': ['2']})
+    assert db.get_digest_sizes('alice') == {'agent:cv': 2}
+    client.post('/digest')
+    assert [(s['tag'], len(s['papers'])) for s in db.get_digest('alice')['sections']] == [('agent:cv', 2)]
+    client.post('/digest_sizes', data={'tag': ['agent:cv'], 'n': ['0']})
+    assert db.get_digest_sizes('alice') == {}  # 0 is the default for an agent's tag
+
+
 def test_digest_hides_a_downvote_only_for_its_tag(features, corpus):
     v = vision(corpus)
     times = {p: corpus[p]['_time'] for p in corpus}

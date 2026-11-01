@@ -379,6 +379,10 @@ input:focus, select:focus, .btn:focus-visible, .iconbtn:focus-visible {
     padding: 4px 10px; font: inherit; font-size: 14px; color: var(--muted); cursor: pointer;
     display: inline-flex; align-items: center; gap: 6px;
 }
+.ai-badge {
+    font-size: 10px; font-weight: 600; letter-spacing: .03em; line-height: 1;
+    padding: 2px 4px; border: 1px solid currentColor; border-radius: 4px; opacity: .75;
+}
 .rel_tabs button.on { color: var(--text); border-bottom-color: var(--accent); }
 .rel_tabs button:disabled { cursor: default; }
 .spin {

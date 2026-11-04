@@ -448,3 +448,17 @@ def test_all_tags_leaves_out_the_agent_tags(client, corpus):
     found = ids('/?rank=search&q=language&skip_have=yes')
     assert set(language[:4]) & found and not set(vision[:3]) & ids('/?rank=search&q=vision&skip_have=yes')
     assert call(client, 'list_tags', token)[0]['all']['saved'] == 3
+
+
+def test_the_token_choices_are_the_same_on_agents_and_the_consent_page(client):
+    import agents
+
+    choices = client.get('/ui/agents').get_json()['access_choices']
+    assert [c[0] for c in choices] == ['read', 'agent', 'write'] == [c[0] for c in agents.ACCESS_CHOICES]
+    from flask import render_template_string
+
+    import serve
+
+    with serve.app.test_request_context():
+        page = render_template_string('{% from "_access.html" import access_choice %}{{ access_choice() }}')
+    assert all(name in page and f'value="{v}"' in page for v, _, name, _ in agents.ACCESS_CHOICES)

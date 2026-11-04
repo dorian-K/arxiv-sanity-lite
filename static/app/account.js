@@ -288,14 +288,6 @@ export const ImportPage = () => {
 // -----------------------------------------------------------------------------
 // AI agents: how to connect one, and the user's access tokens
 
-const ACCESS = [
-    ['read', 'it can read your tags, lists, notes and recommendations, and search and rank papers, but change nothing',
-        html`<b>Nothing</b>: read only.`],
-    ['agent', "your own tags stay untouched: every tag it saves to, removes from or marks papers for is named agent:..., the prefix added automatically. It can't change read marks or notes",
-        html`<b>Only its own tags</b>: tags named <code>agent:…</code> (it can't touch your other tags, read marks or notes).`],
-    ['write', 'it can save papers to any of your tags, mark them as not for a tag or as read, and write notes; it can never delete a tag',
-        html`<b>Everything</b>: any of your tags, read marks and notes (it can never delete a tag).`],
-];
 const NEEDS = { public: 'nothing', user: 'a token', agent: 'a token that may change its own tags (or everything)', write: 'a token that may change everything' };
 
 const NewToken = ({ token, base }) => html`
@@ -339,10 +331,10 @@ const Tokens = ({ d, reload, onNew }) => {
             </div>
             <fieldset class="access-choice">
                 <legend>What may it change?</legend>
-                ${ACCESS.map(([v, title, label]) => html`
+                ${d.access_choices.map(([v, title, name, text]) => html`
                 <label class="check" title=${title} key=${v}>
                     <input type="radio" name="access" value=${v} checked=${f.access === v} onChange=${field(f, setF)} />
-                    <span>${label}</span>
+                    <span><b>${name}</b>: ${text}</span>
                 </label>`)}
             </fieldset>
             <button type="submit" class="btn btn-primary" disabled=${state.busy}>Make a token</button>

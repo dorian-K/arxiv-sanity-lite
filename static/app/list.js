@@ -2,11 +2,14 @@
 // search, newest, similar to a paper), with the user's tags, the tabs of a tag and the
 // ranking's settings. every choice changes the address and fetches /ui/list with it
 import { html, setShared, useState, useEffect, me, api, useData, navigate, location, tagRequest, canEdit, Err, useAction, prefetchOnHover } from 'app/lib';
-import { Page, PaperList, Skeleton, ViewSwitch, WordList, TagCheck, ViewBanner, tagUrl, FOR_YOU_DAYS } from 'app/papers';
+import { Page, PaperList, Skeleton, ViewSwitch, WordList, TagCheck, ViewBanner, tagUrl, FOR_YOU_DAYS, withMadeTags } from 'app/papers';
 
 // a page address -> the address of its data
 export const listPath = url => '/ui/list' + url.search;
-prefetchOnHover(url => (url.pathname === '/' ? listPath(url) : null));
+// on hover, only lists that cost nothing to make: a hovered Recommended chip would train a model
+// (and use up the user's rate limit) for a page they may never open
+const CHEAP = ['saved', 'unread', 'down', 'cited', 'time'];
+prefetchOnHover(url => (url.pathname === '/' && CHEAP.includes(url.searchParams.get('rank')) && !url.searchParams.get('q') ? listPath(url) : null));
 
 const TABS = ['saved', 'unread', 'down', 'cited'];
 const SLOW_RANKS = ['tags', 'pid']; // they train a model: a skeleton of the list meanwhile
@@ -243,13 +246,15 @@ export const ListPage = () => {
     }
     setShared(d, m);
     const g = d.gvars;
-    const userTags = d.tags.map(t => t.name).filter(n => n !== 'all');
+    const userTags = withMadeTags(d.tags.map(t => t.name).filter(n => n !== 'all'));
     const editable = canEdit(m, d);
     const page = { rank: g.rank, tags: g.tags, viewing: d.viewing, owner: d.owner, canEdit: editable, userTags };
     // the next page's data is on its way: a model to train shows a skeleton of the list, else the
     // current list stays (dimmed) until the new one is there
     const want = new URLSearchParams(url.search);
-    const slow = loading && (SLOW_RANKS.includes(want.get('rank') || g.rank) && !want.get('q'));
+    // (the bare / is "For you", a model, for whoever has tags: likely if logged in or on a shared link)
+    const wantRank = want.get('rank') || (m.user || want.get('u') ? 'tags' : 'time');
+    const slow = loading && SLOW_RANKS.includes(wantRank) && !want.get('q');
     const single = g.rank === 'tags' && !g.tags.includes(',') && userTags.includes(g.tags);
     const exact = new URLSearchParams(url.search);
     exact.set('exact', 'yes');

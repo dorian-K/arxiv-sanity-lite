@@ -38,6 +38,7 @@ def register(serve_module):
     global site
     site = serve_module
     serve_module.app.register_blueprint(bp)
+    serve_module.app.jinja_env.globals['ACCESS_CHOICES'] = ACCESS_CHOICES  # the consent page's choices
 
 
 PROTOCOL_VERSIONS = ('2025-06-18', '2025-03-26', '2024-11-05')  # newest first
@@ -552,6 +553,30 @@ SCOPE_LABELS = {
     'agent': 'read, and change only tags named agent:...',
     'write': 'read and change',
 }
+# what a token may change, as offered on /agents (the app) and the OAuth consent page (_access.html):
+# (scope, tooltip, the choice, what it means)
+ACCESS_CHOICES = [
+    (
+        'read',
+        'it can read your tags, lists, notes and recommendations, and search and rank papers, but change nothing',
+        'Nothing',
+        'read only.',
+    ),
+    (
+        'agent',
+        'your own tags stay untouched: every tag it saves to, removes from or marks papers for is named agent:..., '
+        "the prefix added automatically. It can't change read marks or notes",
+        'Only its own tags',
+        "tags named agent:… (it can't touch your other tags, read marks or notes).",
+    ),
+    (
+        'write',
+        'it can save papers to any of your tags, mark them as not for a tag or as read, and write notes; '
+        'it can never delete a tag',
+        'Everything',
+        'any of your tags, read marks and notes (it can never delete a tag).',
+    ),
+]
 
 
 def _access():
@@ -861,6 +886,7 @@ def agents_page():
         'base': site.PUBLIC_URL or request.host_url.rstrip('/'),
         'tools': [(n, t['access'], t['description']) for n, t in TOOLS.items()],
         'scope_labels': SCOPE_LABELS,
+        'access_choices': ACCESS_CHOICES,
         'categories': categories_text(),
     }
 

@@ -1,9 +1,9 @@
 // the app: header, footer and the page for the address. who is logged in comes first (/ui/me),
 // each page then fetches its own data (see lib.js)
 import { render } from 'preact';
-import { html, useEffect, useRef, me, refreshMe, api, location, shared, setAddress, SHARED_PATHS } from 'app/lib';
+import { html, useEffect, useRef, me, refreshMe, api, load, location, shared, setAddress, SHARED_PATHS } from 'app/lib';
 import { initAbout } from 'app/papers';
-import { ListPage } from 'app/list';
+import { ListPage, listPath } from 'app/list';
 import { DigestPage, InspectPage, StatsPage, TextPage } from 'app/pages';
 import { ProfilePage, ImportPage, AgentsPage } from 'app/account';
 import { GraphPage } from 'app/graph';
@@ -100,7 +100,13 @@ const App = () => {
         ${m.ask_public ? html`<${AskPublic} m=${m} />` : null}`;
 };
 
-refreshMe().then(m => {
+// the first page's data is asked for together with who is logged in, not after
+const here = new URL(window.location.href);
+if (here.pathname === '/') load(listPath(here)).catch(() => {});
+if (here.pathname === '/digest') load('/ui/digest' + here.search).catch(() => {});
+
+api('/ui/me').then(m => {
+    me.set(m);
     initAbout(m.card_tab);
     render(html`<${App} />`, document.getElementById('app'));
 }).catch(() => {

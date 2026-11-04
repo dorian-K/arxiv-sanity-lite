@@ -7,6 +7,10 @@ import { MathText } from 'app/math';
 // shared page) and whether this user can vote there. userTags grows when a card makes a new tag
 export const Page = createContext({ rank: '', tags: '', viewing: false, owner: '', canEdit: false, userTags: [] });
 
+// tags made in a card's picker since the page's data came: offered on every card until the next load
+const madeTags = new Set();
+export const withMadeTags = names => [...names, ...[...madeTags].filter(t => !names.includes(t))];
+
 // a tag's page: its recommendations, minus the papers already saved (those are its "Saved" tab)
 export const FOR_YOU_DAYS = 30; // as in serve.py
 // venues are aslite.arxiv.venue() of what the authors wrote in the comment or journal reference
@@ -115,7 +119,7 @@ let aiWanted = new Set();
 let aiTimer = null;
 const aiNotify = () => aiListeners.forEach(f => f());
 const askSummaries = (pids, round) => {
-    api('/summaries', { pids: pids.join(',') })
+    api('/summaries', { pids: pids.join(',') }, { keep: true })
         .then(res => {
             Object.assign(aiSummaries, res.summaries);
             const pending = res.pending.filter(p => !res.summaries[p]);
@@ -219,7 +223,7 @@ const switches = n => {
 };
 export function setAboutDefault(tab) {
     switches(0);
-    if (me.get().logged_in) api('/card_tab', { tab }).then(() => me.set({ ...me.get(), card_tab: tab })).catch(() => {});
+    if (me.get().logged_in) api('/card_tab', { tab }, { keep: true }).then(() => me.set({ ...me.get(), card_tab: tab })).catch(() => {});
     else try { localStorage.setItem(ABOUT_KEY, tab); } catch (e) { /* storage blocked: this page only */ }
     about.set(tab);
 }
@@ -377,7 +381,7 @@ export const Paper = ({ paper: p, quickTag }) => {
             ${ntags.filter(t => t !== quickTag).map(t => html`<${NTag} key=${'n' + t} tag=${t} onUndo=${() => undoNeg(t)} />`)}
         </div>` : null}
         ${picker ? html`<${TagPicker} mode=${picker} tags=${pickable}
-            onPick=${t => { if (!page.userTags.includes(t)) page.userTags.push(t); (picker === 'add' ? save : notFor)(t); }}
+            onPick=${t => { madeTags.add(t); if (!page.userTags.includes(t)) page.userTags.push(t); (picker === 'add' ? save : notFor)(t); }}
             onCancel=${() => setPicker(null)} />` : null}
         ${hasAi ? html`<${AboutTabs} ai=${ai} tab=${tab} setTab=${pickTab} />` : null}
         ${askDefault && tab !== aboutTab ? html`<div class="rel_tabhint" role="note">

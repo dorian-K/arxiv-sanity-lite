@@ -33,13 +33,15 @@ export function store(value) {
 
 export class ApiError extends Error {}
 
-export async function api(path, form) {
+// keep: a POST that changes nothing a page shows (summaries, the card setting), so the cache stays
+export async function api(path, form, { keep = false } = {}) {
     const opts = { headers: { Accept: 'application/json' } };
+    const changes = form !== undefined && !keep;
     if (form !== undefined) {
         opts.method = 'POST';
         opts.body = new URLSearchParams(form);
-        changed();
     }
+    if (changes) changed();
     let r;
     try {
         r = await fetch(path, opts);
@@ -47,6 +49,8 @@ export async function api(path, form) {
         throw new ApiError(form !== undefined ? 'Could not reach the server, so this was not saved.' : 'Could not reach the server.');
     }
     const text = await r.text();
+    // again once the change is stored: a page fetched meanwhile (another worker) may predate it
+    if (changes) changed();
     let data;
     try { data = JSON.parse(text); } catch (e) { data = null; }
     if (!r.ok || (data && data.error)) throw new ApiError((data && data.error) || text || r.statusText);
@@ -137,7 +141,9 @@ export function withOwner(url, owner = shared.owner) {
 }
 
 history.scrollRestoration = 'manual';
-let pendingScroll = null;
+// the first page: its #anchor (a link in a mail), or where a reload left it
+let pendingScroll = window.location.hash ? { hash: window.location.hash } : { y: (history.state && history.state.scroll) || 0 };
+window.addEventListener('pagehide', () => history.replaceState({ ...(history.state || {}), scroll: window.scrollY }, ''));
 
 // own: to one of the user's own pages, also from someone else's shared one
 export function navigate(href, { replace = false, own = false } = {}) {

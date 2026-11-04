@@ -1,6 +1,6 @@
 // the digest, one paper's words, the stats and the text pages (about, privacy, imprint)
 import { html, setShared, me, api, useData, location, canEdit, Err, useAction, LoadError } from 'app/lib';
-import { Page, ViewSwitch, DigestSections, WordList, ViewBanner } from 'app/papers';
+import { Page, ViewSwitch, DigestSections, WordList, ViewBanner, withMadeTags } from 'app/papers';
 import { MathText } from 'app/math';
 
 // -----------------------------------------------------------------------------
@@ -14,15 +14,16 @@ export const DigestPage = () => {
     if (!d) return error ? html`<${LoadError} error=${error} reload=${reload} />` : null;
     setShared(d, m);
     const editable = canEdit(m, d);
-    const page = { rank: 'digest', tags: '', viewing: d.viewing, owner: d.owner, canEdit: editable, userTags: d.tags.map(t => t.name) };
+    const page = { rank: 'digest', tags: '', viewing: d.viewing, owner: d.owner, canEdit: editable, userTags: withMadeTags(d.tags.map(t => t.name)) };
     const make = () => run(() => api('/digest', {}), 'Making your digest… one model per tag, this takes a few seconds per tag.').then(r => r && reload());
     return html`
     <${Page.Provider} value=${page}>
         <${ViewBanner} info=${d} />
         <div class="page">
             <section class="card">
-                <h1>${d.viewing ? '@' + d.owner + "'s digest" : 'Your digest'}</h1>
-                ${!d.owner ? html`<p class="muted">Please <a href="/profile">log in</a> to see your digest.</p>` : html`
+                <h1>${d.not_shared ? 'Digest' : d.viewing ? '@' + d.owner + "'s digest" : 'Your digest'}</h1>
+                ${d.not_shared ? html`<p class="muted">Nothing to show here.</p>`
+                : !d.owner ? html`<p class="muted">Please <a href="/profile">log in</a> to see your digest.</p>` : html`
                 <${Err} msg=${state.error} />
                 ${d.sections.length ? html`<p class="muted">
                     The best papers of the ${d.digest_days} days before ${d.digest_time} for each of your tags.

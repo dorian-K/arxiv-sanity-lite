@@ -1505,6 +1505,10 @@ CREATE TABLE IF NOT EXISTS titles (
     h INTEGER PRIMARY KEY,    -- refs.title_hash() of a normalized title
     id TEXT NOT NULL          -- the arXiv paper with that title (the oldest, if several)
 );
+CREATE TABLE IF NOT EXISTS requested (
+    pid TEXT PRIMARY KEY,     -- a paper someone asked to analyze on the citation graph (not who)
+    t REAL NOT NULL           -- when: enrich_daemon.py takes them first, oldest first
+);
 CREATE TABLE IF NOT EXISTS summaries (
     pid TEXT PRIMARY KEY,     -- a paper enrich_daemon.py summarized (aslite/summary.py)
     status TEXT NOT NULL,     -- ok | pending (being made) | error (tried again later)
@@ -1729,6 +1733,37 @@ class RefsDB:
     def citing(self, pid):
         """the processed papers whose references include this arXiv id"""
         return [r[0] for r in self.con.execute('SELECT DISTINCT citing FROM refs WHERE cited = ?', (pid,))]
+
+    def edges_among(self, pids):
+        """[(citing, cited)] between papers of pids, from the references known so far"""
+        pids = list(dict.fromkeys(pids))[:2000]
+        if not pids:
+            return []
+        marks = ','.join('?' * len(pids))
+        q = f'SELECT DISTINCT citing, cited FROM refs WHERE citing IN ({marks}) AND cited IN ({marks}) AND citing != cited'
+        return self.con.execute(q, pids + pids).fetchall()
+
+    def status_of(self, pids):
+        """{pid: (status, refs_from, tries)} of the papers enrich_daemon.py has tried"""
+        out, pids = {}, list(dict.fromkeys(pids))
+        for i in range(0, len(pids), 500):
+            chunk = pids[i : i + 500]
+            q = f'SELECT pid, status, refs_from, tries FROM fetched WHERE pid IN ({",".join("?" * len(chunk))})'
+            out.update({r[0]: r[1:] for r in self.con.execute(q, chunk)})
+        return out
+
+    def request(self, pid):
+        """asks enrich_daemon.py to analyze this paper next (the graph page's "analyze")"""
+        with self.con:
+            self.con.execute('INSERT OR IGNORE INTO requested (pid, t) VALUES (?, ?)', (pid, time.time()))
+
+    def requested(self):
+        """the papers asked for, oldest first"""
+        return [r[0] for r in self.con.execute('SELECT pid FROM requested ORDER BY t')]
+
+    def unrequest(self, pid):
+        with self.con:
+            self.con.execute('DELETE FROM requested WHERE pid = ?', (pid,))
 
     def n_processed(self):
         return self.con.execute("SELECT count(*) FROM fetched WHERE status = 'ok'").fetchone()[0]

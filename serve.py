@@ -103,6 +103,7 @@ RATE_LIMITS = {
     'agent_rank': (30, 60),  # rank_like without a token: a model fit per call, per ip
     'agent_write': (120, 60),
     'oauth_register': (20, 3600),
+    'analyze': (30, 3600),  # papers asked to analyze on the citation graph: arXiv requests (enrich_daemon.py)
     'summary': (
         60,
         60,
@@ -1536,6 +1537,8 @@ STAT_LABELS = {
     'sharing': 'Public profile setting',
     'ui_stats': 'Stats',
     'ui_page': 'About, privacy, imprint',
+    'ui_graph': 'Citation graph',
+    'graph_analyze': 'Citation graph: analyze a paper',
     'login': 'Log in',
     'logout': 'Log out',
     'agents.agents_page': 'Agents page',
@@ -1654,6 +1657,114 @@ def health():
     return 'ok'
 
 
+# -----------------------------------------------------------------------------
+# the citation graph (/graph): a paper, what it cites and what cites it, from the references
+# enrich_daemon.py read; any paper on it can be asked for, and the daemon reads it next
+
+ENRICH_ON = os.environ.get('ENRICH_ENABLED', '0') == '1'
+GRAPH_MAX = 150  # neighbours of one paper sent at once (a survey cites hundreds)
+ANALYZE_QUEUE_MAX = 50  # papers waiting at most: each takes the daemon about a minute
+PAPER_ID_RE = re.compile(r'^(\d{4}\.\d{4,5}|[a-z-]+(\.[A-Z]{2})?/\d{7})$')
+
+
+def graph_nodes(ids):
+    """
+    what the graph shows of each paper: title, first author, year, whether it is on this site,
+    whether its references are known (state: analyzed | queued | failed | new), the user's tags
+    """
+    ids = list(dict.fromkeys(ids))
+    found = get_papers().get_many(ids)
+    rdb = _refs_db()
+    other = rdb.titles_of_cited([p for p in ids if p not in found])
+    status = rdb.status_of(ids)
+    asked = set(rdb.requested())
+    saved = {}
+    for t, pids in get_tags().items():
+        for p in pids & set(ids):
+            saved.setdefault(p, []).append(t)
+    out = []
+    for p in ids:
+        d, st = found.get(p), status.get(p)
+        if st and st[0] == 'ok':
+            state = 'analyzed'
+        elif p in asked:
+            state = 'queued'
+        elif st and st[2] >= 3:  # enrich_daemon.MAX_TRIES
+            state = 'failed'
+        else:
+            state = 'new'
+        authors = [a['name'] for a in d['authors']] if d else []
+        m = re.match(r'(\d\d)\d\d\.', p) or re.search(r'/(\d\d)', p)
+        out.append(
+            {
+                'id': p,
+                'title': ' '.join((d['title'] if d else other.get(p, '')).split()),
+                'authors': authors[0] + (' et al.' if len(authors) > 1 else '') if authors else '',
+                'year': (('20' if int(m.group(1)) < 90 else '19') + m.group(1)) if m else '',
+                'here': d is not None,
+                'state': state,
+                'readable': not (st and st[0] == 'ok' and not st[1]),  # analyzed, but no reference list found
+                'saved': sorted(saved.get(p, [])),
+            }
+        )
+    return out
+
+
+@app.route('/ui/graph')
+def ui_graph():
+    """one paper's neighbourhood: the papers it cites and the analyzed ones citing it, with the links among them"""
+    pid = request.args.get('pid', '').strip()
+    if not PAPER_ID_RE.match(pid):
+        return {'error': 'Not an arXiv id.'}, 400
+    rdb = _refs_db()
+    _, _, rows = rdb.references_of(pid)
+    cited = [c for c in dict.fromkeys(r[1] for r in rows if r[1]) if c != pid]
+    citing = [c for c in rdb.citing(pid) if c != pid]
+    ids = [pid] + cited[:GRAPH_MAX] + citing[:GRAPH_MAX]
+    return {
+        'pid': pid,
+        'nodes': graph_nodes(ids),
+        'edges': rdb.edges_among(ids),
+        'n_refs': len(rows),
+        'n_cited': len(cited),
+        'n_citing': len(citing),
+        'queue': rdb.requested(),
+        'enrich_on': ENRICH_ON,
+    }
+
+
+@app.route('/graph/analyze', methods=['POST'])
+def graph_analyze():
+    """asks enrich_daemon.py to read a paper's references next; one not on this site is fetched first"""
+    if g.user is None:
+        return not_logged_in()
+    if not ENRICH_ON:
+        return {'error': "Reading papers' references is turned off on this server (ENRICH_ENABLED)."}, 400
+    pid = request.form.get('pid', '').strip()
+    if not PAPER_ID_RE.match(pid):
+        return {'error': 'Not an arXiv id.'}, 400
+    rdb = _refs_db()
+    st = rdb.status_of([pid]).get(pid)
+    if st and st[0] == 'ok':
+        return {'state': 'analyzed'}
+    if pid in rdb.requested():
+        return {'state': 'queued'}
+    if len(rdb.requested()) >= ANALYZE_QUEUE_MAX:
+        return {'error': 'Many papers are waiting to be read already. Try again in a few minutes.'}, 429
+    if rate_limited('analyze'):
+        return too_many('analyze')
+    if pid not in get_papers():  # cited, but outside this site's categories: its metadata first
+        _, fetched, over, failed = fetch_missing([pid])
+        if pid not in fetched:
+            if pid in over:
+                return {'error': "Over today's limit of papers fetched from arXiv. Try again tomorrow."}, 429
+            if pid in failed:
+                return {'error': 'arXiv could not be reached. Try again later.'}, 503
+            return {'error': "arXiv doesn't know this paper."}, 404
+    rdb.request(pid)
+    return {'state': 'queued'}
+
+
 # operator details for the privacy policy and imprint, from the environment (see .env.example)
 OPERATOR = {k: os.environ.get('OPERATOR_' + k.upper(), '') for k in ('name', 'address', 'email', 'hosting')}
 TEXT_PAGES = ('about', 'privacy', 'imprint')
@@ -1670,7 +1781,7 @@ def ui_page(name):
 # every page of the site is the app (static/app): one html file that loads its modules, which
 # then fetch the page's data from /ui/. the addresses stay what they were, so links and
 # bookmarks keep working
-APP_PAGES = ('/', '/digest', '/profile', '/import', '/inspect', '/stats', '/agents') + tuple(
+APP_PAGES = ('/', '/digest', '/profile', '/import', '/inspect', '/stats', '/agents', '/graph') + tuple(
     '/' + p for p in TEXT_PAGES
 )
 SHELL_FILE = os.path.join(app.static_folder, 'app', 'index.html')

@@ -119,7 +119,7 @@ export const canEdit = (m, page) => Boolean(m && m.user) && !m.readonly && !(pag
 // the router: same-origin links to the app's pages change the address and the page, without
 // loading a new document; back and forward return to where the page was scrolled
 
-export const APP_PATHS = ['/', '/digest', '/profile', '/import', '/inspect', '/stats', '/agents', '/about', '/privacy', '/imprint'];
+export const APP_PATHS = ['/', '/digest', '/profile', '/import', '/inspect', '/stats', '/agents', '/graph', '/about', '/privacy', '/imprint'];
 export const location = store(new URL(window.location.href));
 
 // shared links: ?u=<name> shows that user's tags. on someone else's page, links to the shareable

@@ -29,6 +29,10 @@ x-common: &common
     OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
     SUMMARY_MODEL: ${SUMMARY_MODEL:-}
     SUMMARY_MAX_DAY: ${SUMMARY_MAX_DAY:-300}
+    # references (the Cited tab, the citation graph) and thumbnails of saved and digest papers, from
+    # arXiv's HTML pages and PDFs, one request per ENRICH_PAUSE seconds (enrich_daemon.py in the
+    # updater). off by default; the web service only needs to know, for the graph's "analyze"
+    ENRICH_ENABLED: ${ENRICH_ENABLED:-0}
 
 services:
   arxiv_resanity_web:
@@ -98,9 +102,6 @@ services:
       EMBED_DUTY: ${EMBED_DUTY:-0.1}
       EMBED_THREADS: ${EMBED_THREADS:-2}
       EMBED_SESSION: ${EMBED_SESSION:-120}
-      # references (the Cited tab) and thumbnails of saved and digest papers, from arXiv's
-      # HTML pages and PDFs, one request per ENRICH_PAUSE seconds (enrich_daemon.py). off by default
-      ENRICH_ENABLED: ${ENRICH_ENABLED:-0}
       ENRICH_PAUSE: ${ENRICH_PAUSE:-20}
       HF_TOKEN: ${HF_TOKEN:-}  # only for gated models; embeddinggemma-2 downloads without one
       COMPUTE_ARGS: ${COMPUTE_ARGS:---max_docs 100000}

@@ -400,6 +400,7 @@ export const Paper = ({ paper: p, quickTag }) => {
         <div class="rel_links">
             <a href=${'https://arxiv.org/pdf/' + p.id}>pdf</a>
             <a class="rel_more" href=${'/?rank=pid&pid=' + p.id}>similar</a>
+            <a href=${'/graph?pid=' + p.id} title="what it cites and what cites it, as a graph to explore">graph</a>
             ${canEdit && !note && !editingNote ? html`<button class="linkbtn" title="a note for yourself on this paper (only you see it)"
                 onClick=${() => setEditingNote(true)}>+ note</button>` : null}
             ${readBox}

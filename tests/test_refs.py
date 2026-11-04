@@ -285,3 +285,46 @@ def test_a_refs_db_from_before_the_thumbnails_is_migrated(tmp_path):
         rdb.put_refs('2601.00001', 'ok', [(0, '1706.03762', 't', None, 'r')], 'html', True, False, 'by/4.0')
         rdb.put_licenses([('2601.00001', 'by/4.0')])
         assert rdb.thumb_license('2601.00001') == 'by/4.0'
+
+
+def test_the_citation_graph_and_asking_for_papers(client, corpus, monkeypatch):
+    import enrich_daemon
+    import serve
+
+    a, b, c, d = sorted(corpus)[:4]
+    with db.get_refs_db() as rdb:  # a cites b and c; b cites c
+        rdb.put_refs(a, 'ok', [(1, b, 'B', None, 'B'), (2, c, 'C', None, 'C'), (3, None, 'X', None, 'X')], 'html')
+        rdb.put_refs(b, 'ok', [(1, c, 'C', None, 'C')], 'html')
+    g = client.get(f'/ui/graph?pid={b}').get_json()
+    assert {n['id']: n['state'] for n in g['nodes']} == {b: 'analyzed', c: 'new', a: 'analyzed'}
+    assert sorted(map(tuple, g['edges'])) == sorted([(a, b), (a, c), (b, c)])  # the link between neighbours too
+    assert g['n_refs'] == 1 and g['n_citing'] == 1
+    assert client.get('/ui/graph?pid=../x').status_code == 400
+
+    # asking for a paper's references: logged in, and only where the server reads references at all
+    assert client.post('/graph/analyze', data={'pid': c}).status_code == 403
+    login(client)
+    monkeypatch.setattr(serve, 'ENRICH_ON', False)
+    assert client.post('/graph/analyze', data={'pid': c}).status_code == 400
+    monkeypatch.setattr(serve, 'ENRICH_ON', True)
+    assert client.post('/graph/analyze', data={'pid': c}).get_json() == {'state': 'queued'}
+    assert client.post('/graph/analyze', data={'pid': a}).get_json() == {'state': 'analyzed'}
+    assert next(n for n in client.get(f'/ui/graph?pid={b}').get_json()['nodes'] if n['id'] == c)['state'] == 'queued'
+    # the daemon takes it before everything else, and forgets the request once it is done
+    client.post(f'/add/{d}/cv')
+    with db.get_refs_db() as rdb, db.get_papers_db() as pdb:
+        assert enrich_daemon.queue(pdb, rdb)[:2] == [c, d]
+        rdb.put_refs(c, 'ok', [], 'html')
+        assert enrich_daemon.requested_due(pdb, rdb) == [] and rdb.requested() == []
+
+
+def test_a_refs_db_without_the_requests_table_gets_it(tmp_path):
+    import sqlite3
+
+    path = str(tmp_path / 'refs.sqlite')
+    con = sqlite3.connect(path)
+    con.executescript(db.REFS_SCHEMA.split('CREATE TABLE IF NOT EXISTS requested')[0])
+    con.close()
+    with db.get_refs_db(path) as rdb:
+        rdb.request('2601.00001')
+        assert rdb.requested() == ['2601.00001'] and rdb.status_of(['2601.00001']) == {}

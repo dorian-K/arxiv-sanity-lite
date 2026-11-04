@@ -772,3 +772,48 @@ details.danger form { margin-top: 10px; }
 
 /* the next list is on its way (the app keeps the current one until it is there) */
 #wrap.stale { opacity: .55; transition: opacity .2s .15s; }
+
+/* the citation graph (static/app/graph.js) */
+.graph-page { margin-top: 16px; }
+.graph-head h1 { font-size: 20px; margin: 0 0 6px; }
+.graph-head p { margin: 0 0 8px; max-width: 75ch; }
+.graph-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-bottom: 10px; }
+.graph-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.lg { display: inline-block; width: 11px; height: 11px; border-radius: 50%; border: 2px solid var(--muted); }
+.lg-center { background: var(--accent); border-color: var(--accent); }
+.lg-analyzed { background: var(--link); border-color: var(--link); }
+.lg-new { background: var(--surface); }
+.lg-saved { background: var(--link); border-color: #2a9d55; box-shadow: 0 0 0 2px #2a9d55; }
+.lg-away { background: var(--surface); border-style: dashed; }
+.graph-wrap { display: grid; grid-template-columns: 1fr 320px; gap: 12px; align-items: start; }
+.graph-canvas { position: relative; height: 72vh; min-height: 360px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); overflow: hidden; }
+.graph-svg { width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; user-select: none; }
+.graph-svg:active { cursor: grabbing; }
+.graph-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+.graph-zoom { position: absolute; right: 8px; top: 8px; display: flex; gap: 4px; }
+.graph-count { position: absolute; left: 10px; bottom: 8px; }
+.graph-edge { stroke: var(--muted); stroke-opacity: .35; stroke-width: 1; }
+.graph-edge.on { stroke: var(--accent); stroke-opacity: .9; stroke-width: 1.6; }
+.graph-arrow { fill: var(--muted); fill-opacity: .5; }
+.graph-arrow.on { fill: var(--accent); fill-opacity: 1; }
+.graph-node { cursor: pointer; }
+.graph-node circle { fill: var(--surface); stroke: var(--muted); stroke-width: 1.5; }
+.graph-node.analyzed circle { fill: var(--link); stroke: var(--link); }
+.graph-node.away circle { stroke-dasharray: 3 2; }
+.graph-node.failed circle { stroke-opacity: .4; }
+.graph-node.saved circle { stroke: #2a9d55; stroke-width: 3; }
+.graph-node.center circle { fill: var(--accent); stroke: var(--accent); }
+.graph-node.selected circle { stroke: var(--text); stroke-width: 3; }
+.graph-node.queued circle { animation: graphwait 1.2s ease-in-out infinite; }
+@keyframes graphwait { 50% { stroke-width: 5; stroke: var(--link); } }
+.graph-node text { fill: var(--text); paint-order: stroke; stroke: var(--surface); stroke-width: 3px; pointer-events: none; }
+.graph-panel { margin: 0; }
+.graph-panel-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px; font-size: 13px; }
+.graph-saved { color: #2a9d55; font-size: 13px; }
+.graph-title { font-size: 16px; margin: 6px 0; line-height: 1.35; }
+.graph-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+@media (max-width: 760px) {
+    .graph-wrap { grid-template-columns: 1fr; }
+    .graph-canvas { height: 60vh; }
+}
+@media (prefers-reduced-motion: reduce) { .graph-node.queued circle { animation-duration: 3s; } }

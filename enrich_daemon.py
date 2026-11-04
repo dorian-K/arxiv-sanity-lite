@@ -43,6 +43,7 @@ from aslite.refs import Matcher, parse, parse_pdf, rows_for
 PAUSE = 15  # seconds between requests: arxiv.org's robots.txt asks for Crawl-delay 15
 USER_AGENT = 'arxiv-resanity (https://github.com/dorian-K/arxiv-sanity-lite)'
 REFRESH = 600  # seconds between looking for new saved papers when nothing is queued
+ASK_POLL = 5  # ...but papers asked for on the graph page are looked for this often
 RETRY = 86400  # a failed paper is tried again after this long...
 MAX_TRIES = 3  # ...this many times
 MAX_HTML = 20_000_000
@@ -167,9 +168,32 @@ def process(pid, fetch, matcher, license):
     return rows, refs_from, figure, page, text
 
 
+def requested_due(pdb, rdb, now=None):
+    """
+    the papers someone asked to analyze on the graph page (serve.py, /graph/analyze), oldest first:
+    someone waits for them, so they go before everything else. requests that are done, failed for
+    good or for a paper that never arrived are dropped
+    """
+    now = now or time.time()
+    asked = rdb.requested()
+    if not asked:
+        return []
+    have = pdb.get_many(asked)
+    status = rdb.status_of(asked)
+    out = []
+    for p in asked:
+        st = status.get(p)
+        if p in have and (st is None or (st[0] == 'error' and st[2] < MAX_TRIES)):
+            out.append(p)
+        elif st is not None or p not in have:
+            rdb.unrequest(p)
+    return out
+
+
 def queue(pdb, rdb, now=None):
     """the papers to process, best first"""
     now = now or time.time()
+    first = requested_due(pdb, rdb, now)
     times = pdb.times()
     done = rdb.fetched()
     redo = rdb.without_big_thumbs()  # made again, once: they predate the enlarged view
@@ -180,7 +204,7 @@ def queue(pdb, rdb, now=None):
         st = done.get(p)
         return st is None or p in redo or (st[0] == 'error' and st[2] < MAX_TRIES and now - st[1] > RETRY)
 
-    return [p for p in wanted(pdb, times) if due(p)]
+    return first + [p for p in wanted(pdb, times) if due(p) and p not in first]
 
 
 def wanted(pdb, times=None):
@@ -334,7 +358,8 @@ def main():
                 print(f"matched {rematch(rdb, matcher)} earlier references now", flush=True)
                 last_rematch = time.time()
             todo = queue(pdb, rdb)
-            if summaries and summaries_left(rdb):
+            # (not while someone waits for a paper they asked for on the graph page)
+            if summaries and summaries_left(rdb) and not requested_due(pdb, rdb):
                 # papers of a digest about to be mailed first, then the rest when nothing else is queued
                 soon = db.pending_digest_pids()
                 sq = [p for p in summary_queue(pdb, rdb) if p in soon or not todo]
@@ -345,11 +370,21 @@ def main():
             if not todo:
                 if args.once:
                     break
-                time.sleep(REFRESH)
+                # someone may ask for a paper on the graph page meanwhile: look every few seconds
+                for _ in range(REFRESH // ASK_POLL):
+                    time.sleep(ASK_POLL)
+                    if requested_due(pdb, rdb):
+                        break
                 continue
             print(f"{len(todo)} papers to enrich", flush=True)
             t0, n, n_refs, n_matched, n_thumbs, n_summaries = time.time(), 0, 0, 0, 0, 0
-            for pid in todo[:10]:  # then look at the queue again: newly saved papers go first
+            batch = todo[:10]  # then look at the queue again: newly saved papers go first
+            for pid in batch:
+                if args.max and total + n >= args.max:
+                    break
+                # a paper asked for on the graph page meanwhile: it goes before the rest of this batch
+                if any(p not in batch for p in requested_due(pdb, rdb)):
+                    break
                 try:
                     license = paper_license(pid, fetch, rdb)
                     rows, refs_from, figure, page, text = process(pid, fetch, matcher, license)
@@ -360,8 +395,10 @@ def main():
                 except Exception as e:  # network trouble, a broken page: tried again after RETRY
                     print(f"  {pid}: {type(e).__name__}: {e}", flush=True)
                     rdb.put_refs(pid, 'error')
+                    rdb.unrequest(pid)
                     continue
                 rdb.put_refs(pid, 'ok', rows, refs_from, figure, page, license)
+                rdb.unrequest(pid)
                 if summaries and needs_summary(rdb.summarized().get(pid)) and summaries_left(rdb):
                     n_summaries += summarize(pid, pdb, rdb, text)
                 n += 1

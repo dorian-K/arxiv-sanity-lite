@@ -35,11 +35,11 @@
             your choice and outside our control. Revoking the token ends its access at once. Agents without a
             token can only search and rank papers; like everyone, they are subject to the rate limits below.</li>
         <li><b>References and thumbnails</b>: to show which papers your saved papers cite, and a picture of
-            each paper, the server downloads the public HTML version and PDF of saved and recommended papers
-            from arXiv and keeps their reference lists, and, for papers under a Creative Commons license, a small
+            each paper, the server downloads the public HTML version and PDF of saved and recommended papers,
+            and of papers someone asks to analyze on the citation graph, from arXiv and keeps their reference lists, and, for papers under a Creative Commons license, a small
             image of their first figure and first page, credited with that license.
-            The requests contain only the paper's id, nothing about you, and none of this says who saved a
-            paper.</li>
+            The requests contain only the paper's id, nothing about you, and none of this says who saved or
+            asked for a paper.</li>
         <li><b>AI summaries</b>: if the operator turned them on, short summaries of papers (shown on paper
             cards and in the digest) are written by an AI model reached through OpenRouter. It receives only
             the public text of a paper (its title, abstract and full text from arXiv), never anything about

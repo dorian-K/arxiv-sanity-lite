@@ -6,6 +6,7 @@ import { initAbout } from 'app/papers';
 import { ListPage } from 'app/list';
 import { DigestPage, InspectPage, StatsPage, TextPage } from 'app/pages';
 import { ProfilePage, ImportPage, AgentsPage } from 'app/account';
+import { GraphPage } from 'app/graph';
 
 const PAGES = {
     '/': ListPage,
@@ -15,6 +16,7 @@ const PAGES = {
     '/profile': ProfilePage,
     '/import': ImportPage,
     '/agents': AgentsPage,
+    '/graph': GraphPage,
     '/about': () => html`<${TextPage} name="about" />`,
     '/privacy': () => html`<${TextPage} name="privacy" />`,
     '/imprint': () => html`<${TextPage} name="imprint" />`,

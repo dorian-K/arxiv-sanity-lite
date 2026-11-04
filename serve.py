@@ -1509,6 +1509,7 @@ STAT_LABELS = {
     'agent:rank_like': 'Agent: rank like these papers',
     'agent:recommend': 'Agent: recommendations',
     'agents.mcp': 'Agent: MCP requests (all)',
+    'agents.mcp_me': 'Agent: MCP requests with a login (all)',
     'model training': 'Training a model (after a vote, or while a page waits)',
     'add': 'Vote: save',
     'sub': 'Vote: unsave',
@@ -1589,7 +1590,7 @@ def ui_stats():
         pages, jobs = {}, []
     context['pages'] = [
         dict(
-            label=STAT_LABELS.get(name, name),
+            label=STAT_LABELS.get(name) or ('Agent: ' + name[6:] if name.startswith('agent:') else name),
             n=v['n'],
             p50=fmt_seconds(v['p50']),
             p95=fmt_seconds(v['p95']),

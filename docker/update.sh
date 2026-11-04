@@ -54,7 +54,7 @@ while true; do
         # one copy of the accounts/tags/votes database, refreshed daily, in data/backups/
         python -c "from aslite.db import backup_users; print('backed up users to', backup_users())" \
             || echo "backup failed"
-        if python arxiv_daemon.py --num "${DAEMON_NUM:-2000}" || [ "$requested" = 1 ]; then
+        if python arxiv_daemon.py --num "${DAEMON_NUM:-5000}" || [ "$requested" = 1 ]; then
             compute
         else
             echo "no new papers (or arXiv unreachable)"

@@ -11,7 +11,8 @@ A reference is matched by the arXiv id in its links or text, else by its title: 
 one (or the block after the authors), looked up exactly (normalized) in the table of all arXiv
 titles (RefsDB.put_titles, built from the Hugging Face snapshot) and in our own papers; else by our
 paper whose whole title appears in the reference, or a piece of it that is exactly some arXiv
-title. Papers without an HTML version fall back to their PDF (parse_pdf, numbered lists only;
+title. Papers without an HTML version (arXiv has HTML only from Dec 2023 on) fall back to their PDF
+(parse_pdf: numbered lists, else author-year ones split where an entry starts with 'Surname, ';
 enrich_daemon.py fetches it anyway for the page thumbnail). A match is an arXiv id, which may or may not
 be in papers.sqlite (other categories); the page joins at display time, so papers added later
 count too. No other service is asked (no Semantic Scholar, no OpenAlex): the user's choice.
@@ -98,14 +99,30 @@ def parse(html):
 
 
 # PDFs (papers without an HTML version): the reference list after its heading, up to an
-# appendix; only numbered lists ([1] ...) are split, author-year ones come out garbled
+# appendix. Numbered lists ([1] ...) split at their numbers; author-year ones (Adam, most ML papers
+# before 2018) where a line ending a sentence is followed by one starting with 'Surname, First'
 PDF_HEAD = re.compile(
     r'^\s*(?:\d+\.?\s*)?(references|bibliography|references and notes|literature cited)\s*$', re.I | re.M
 )
 PDF_END = re.compile(
-    r'\n\s*(?:appendix|appendices|supplementary material|[A-H]\.?\s+[A-Z][a-z]+(?: [A-Za-z]+){0,6}\s*\n)'
+    r'\n\s*(?:(?:[A-Z\d]{1,3}\.?\s+)?(?i:appendix|appendices|supplementary material)\b|[A-H]\.?\s+[A-Z][a-z]+(?: [A-Za-z]+){0,6}\s*\n)'
 )
 PDF_NUM = re.compile(r'(?:^|\n)\s*\[(\d{1,3})\]\s+')
+# an author-year entry's first line: "Amari, Shun-Ichi.", "Hinton, G.E. and", "van der Maaten, L"
+PDF_AUTHOR = re.compile(
+    r"^(?:(?:van|von|de|der|den|la|le|da|di|del|du)\s+)*[A-Z][\w'’\-]+(?:\s[A-Z][\w'’\-]+)?,\s+[A-Z]"
+)
+YEAR = re.compile(r'\b(?:19|20)\d\d[a-z]?\b')
+
+
+# when parse_pdf learned author-year lists: papers read before it without finding a list may be
+# read once more when someone asks for them on the graph page (may_reread)
+PDF_AUTHOR_YEAR_SINCE = 1793750400  # 2026-11-04
+
+
+def may_reread(st):
+    """whether a paper with this RefsDB.status_of entry may be read again: no list found, by an older parser"""
+    return bool(st) and st[0] == 'ok' and not st[1] and st[3] < PDF_AUTHOR_YEAR_SINCE
 
 
 def parse_pdf(text):
@@ -117,11 +134,35 @@ def parse_pdf(text):
     end = PDF_END.search(t)
     if end and end.start() > 1500:
         t = t[: end.start()]
+    t = re.sub(r'[\ufffe\u00ad]\s*', '', t)  # hyphens pdfium marks as soft: "Im\ufffeproving"
     parts = PDF_NUM.split(t)
-    if len(parts) < 7:  # fewer than 3 numbered references: not a numbered list
-        return []
-    refs = [' '.join(parts[i + 1].split()) for i in range(1, len(parts) - 1, 2)]
+    if len(parts) >= 7:  # at least 3 numbered references
+        refs = [' '.join(parts[i + 1].split()) for i in range(1, len(parts) - 1, 2)]
+    else:
+        refs = _author_year(t, text)
     return [{'raw': r, 'links': [], 'title': '', 'blocks': []} for r in refs if r]
+
+
+def _author_year(t, text):
+    """the entries of an author-year list, [] if t doesn't look like one"""
+    seen = {}
+    for line in text.split('\n'):
+        seen[line.strip()] = seen.get(line.strip(), 0) + 1
+    # page numbers and running heads ("Published as a conference paper at ...") are no part of any entry
+    keep = [x.strip() for x in t.split('\n') if x.strip() and not x.strip().isdigit() and seen.get(x.strip(), 0) < 3]
+    refs, cur = [], []
+    for line in keep:
+        if cur and cur[-1].endswith('.') and PDF_AUTHOR.match(line):
+            refs.append(' '.join(cur))
+            cur = []
+        cur.append(line)
+    if cur:
+        refs.append(' '.join(cur))
+    refs = [' '.join(r.split()) for r in refs]
+    # a list of references, not some other text: several entries, nearly all with a year, none huge
+    if len(refs) < 5 or sum(bool(YEAR.search(r)) for r in refs) < 0.8 * len(refs) or max(map(len, refs)) > 1500:
+        return []
+    return refs
 
 
 def _pieces(raw):

@@ -38,7 +38,7 @@ import urllib.request
 
 from aslite import db, summary, thumbs
 from aslite.db import get_papers_db, get_refs_db
-from aslite.refs import Matcher, parse, parse_pdf, rows_for
+from aslite.refs import Matcher, may_reread, parse, parse_pdf, rows_for
 
 PAUSE = 15  # seconds between requests: arxiv.org's robots.txt asks for Crawl-delay 15
 USER_AGENT = 'arxiv-resanity (https://github.com/dorian-K/arxiv-sanity-lite)'
@@ -183,7 +183,7 @@ def requested_due(pdb, rdb, now=None):
     out = []
     for p in asked:
         st = status.get(p)
-        if p in have and (st is None or (st[0] == 'error' and st[2] < MAX_TRIES)):
+        if p in have and (st is None or (st[0] == 'error' and st[2] < MAX_TRIES) or may_reread(st)):
             out.append(p)
         elif st is not None or p not in have:
             rdb.unrequest(p)

@@ -13,7 +13,7 @@
 // direction in which the embeddings of the paper's neighbourhood differ, so threads of related work
 // form bands. Faint "ghosts" are the papers closest in content to the selected one that no
 // citation links to it (/ui/graph/alike): related work it missed, or that missed it. A force layout in SVG, no library
-import { html, useState, useEffect, useRef, me, api, location, Err } from 'app/lib';
+import { html, useState, useEffect, useRef, me, api, location, navigate, Err } from 'app/lib';
 import { MathText } from 'app/math';
 
 const YEAR_GAP = 120; // graph units between two years that have papers
@@ -216,6 +216,32 @@ const lensPicks = (lens, { g, pid, cited, out, ancestors, descendants, alike: al
     return [...sharing.slice(0, LENS_MAX - Math.min(4, content.length)), ...content].slice(0, LENS_MAX);
 };
 
+// an arXiv id from what was typed or pasted: an id, or a link to its abstract, pdf or html page
+const ID_IN = /(\d{4}\.\d{4,5}|[a-z-]+(?:\.[A-Z]{2})?\/\d{7})(?:v\d+)?(?:\.pdf)?\/?\s*$/;
+export const paperId = text => {
+    const m = ID_IN.exec(text.trim().replace(/[?#].*$/, ''));
+    return m ? m[1] : '';
+};
+
+// the box at the top: a graph around another paper
+const OpenPaper = () => {
+    const [err, setErr] = useState('');
+    const submit = e => {
+        e.preventDefault();
+        const id = paperId(e.target.elements.paper.value);
+        if (!id) { setErr('That is no arXiv id or link (like 1412.6980 or arxiv.org/abs/1412.6980).'); return; }
+        setErr('');
+        e.target.reset();
+        navigate('/graph?pid=' + encodeURIComponent(id));
+    };
+    return html`<form class="graph-open" onSubmit=${submit} title="open the citation graph of another paper">
+        <input name="paper" type="text" placeholder="Another paper: arXiv id or link" aria-label="arXiv id or link of another paper"
+            autocomplete="off" spellcheck=${false} />
+        <button class="btn btn-small" type="submit">Open graph</button>
+        ${err ? html`<span class="form-error small">${err}</span>` : null}
+    </form>`;
+};
+
 const short = (t, n = 38) => (t.length > n ? t.slice(0, n - 1) + '…' : t);
 const STATE_TEXT = {
     analyzed: 'References read',
@@ -301,6 +327,7 @@ export const GraphPage = () => {
         gRef.current = new Graph(pid);
         fitted.current = true;
         setRes(null); setError(''); setSelected(pid); setActionError('');
+        if (!pid) return undefined;
         fetchAround(pid).then(r => {
             const g = gRef.current;
             g.merge(r, pid);
@@ -422,7 +449,13 @@ export const GraphPage = () => {
         else if (d && !d.moved && !d.pinch && !d.node) setSelected(null);
     };
 
-    if (error) return html`<div class="page"><section class="card"><p class="form-error">${error}</p></section></div>`;
+    if (!pid || error) {
+        return html`<div class="page"><section class="card">
+            <h1>Citation graph</h1>
+            ${pid ? html`<p class="form-error">${error}</p>` : html`<p class="muted">Which paper's graph should it show?</p>`}
+            <${OpenPaper} />
+        </section></div>`;
+    }
     const g = gRef.current;
     const v = view.current;
     const center = g && g.nodes.get(pid);
@@ -469,7 +502,7 @@ export const GraphPage = () => {
     return html`
     <div class="graph-page">
         <section class="graph-head">
-            <div class="graph-kicker">Citation graph</div>
+            <div class="graph-head-row"><div class="graph-kicker">Citation graph</div><${OpenPaper} /></div>
             <h1>${center ? html`<a href=${'https://arxiv.org/abs/' + pid}><${MathText} text=${center.title || pid} /></a>` : pid}</h1>
             <p class="muted small">Where this paper comes from, where it went, and what stands next to it. Time runs left to right
                 ${' '}(what a paper cites lies to its left, what cites it to its right), height is topic, from the papers' embeddings.

@@ -32,6 +32,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 from aslite import db, digest, mail, metrics, summary, thumbs
 from aslite.spell import Speller
+from aslite.refs import may_reread
 from aslite.db import get_papers_db, get_secret_key, load_features, features_exist, PAPERS_DB_FILE
 from aslite.arxiv import find_arxiv_id, fetch_papers_by_id, OLD_ARXIV_ID_RE, categories_text
 from aslite.rank import (
@@ -1686,10 +1687,12 @@ def graph_nodes(ids):
     out = []
     for p in ids:
         d, st = found.get(p), status.get(p)
-        if st and st[0] == 'ok':
-            state = 'analyzed'
-        elif p in asked:
+        if p in asked:
             state = 'queued'
+        elif st and st[0] == 'ok' and not may_reread(st):
+            state = 'analyzed'
+        elif st and st[0] == 'ok':  # no list found by an older parser: may be asked for again
+            state = 'new'
         elif st and st[2] >= 3:  # enrich_daemon.MAX_TRIES
             state = 'failed'
         else:
@@ -1875,7 +1878,7 @@ def graph_analyze():
         return {'error': 'Not an arXiv id.'}, 400
     rdb = _refs_db()
     st = rdb.status_of([pid]).get(pid)
-    if st and st[0] == 'ok':
+    if st and st[0] == 'ok' and not may_reread(st):
         return {'state': 'analyzed'}
     if pid in rdb.requested():
         return {'state': 'queued'}

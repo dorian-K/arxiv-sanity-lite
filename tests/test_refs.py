@@ -73,6 +73,30 @@ def test_parse_pdf_reads_numbered_lists_only():
     assert refs.parse_pdf('no heading at all [1] x [2] y [3] z') == []
 
 
+def test_parse_pdf_splits_author_year_lists():
+    head = 'Published as a conference paper at ICLR 2015'  # a running head on every page
+    entries = [
+        'Amari, Shun-Ichi. Natural gradient works efficiently in learning. Neural computation, 1998.',
+        'Duchi, John, Hazan, Elad, and Singer, Yoram. Adaptive subgradient methods for online learning and stochastic\noptimization. JMLR, 2011.',
+        'Hinton, G.E. and Salakhutdinov, R.R. Reducing the dimensionality of data with neural networks. Science, 313\n(5786):504–507, 2006.',
+        'Hinton, Geoffrey E, Srivastava, Nitish, and Salakhutdinov, Ruslan R. Im\ufffeproving neural networks by\npreventing co-adaptation of feature detectors. arXiv preprint arXiv:1207.0580, 2012b.',
+        'van der Maaten, Laurens and Hinton, Geoffrey. Visualizing data using t-SNE. JMLR, 2008.',
+        'Zeiler, Matthew D. Adadelta: An adaptive learning rate method. arXiv preprint arXiv:1212.5701, 2012.',
+    ]
+    text = (
+        f'{head}\n1 Introduction\nblah\n9\n{head}\nREFERENCES\n'
+        + '\n'.join(entries[:3])
+        + f'\n10\n{head}\n'
+        + '\n'.join(entries[3:])
+        + f'\n11\n{head}'
+    )
+    got = [r['raw'] for r in refs.parse_pdf(text)]
+    assert got == [' '.join(e.replace('Im\ufffeproving', 'Improving').split()) for e in entries]
+    assert refs.PDF_END.search('\n10 APPENDIX\n') and refs.PDF_END.search('\nAppendix A\n')  # where the list ends
+    # prose after a references heading is no list
+    assert refs.parse_pdf('References\n' + 'We thank, Someone. For help.\nAnd more text here.\n' * 4) == []
+
+
 def test_references_are_matched_by_id_title_table_and_our_titles(corpus):
     pid, paper = next(iter(corpus.items()))
     with db.get_papers_db() as pdb, db.get_refs_db() as rdb:
@@ -316,6 +340,32 @@ def test_the_citation_graph_and_asking_for_papers(client, corpus, monkeypatch):
         assert enrich_daemon.queue(pdb, rdb)[:2] == [c, d]
         rdb.put_refs(c, 'ok', [], 'html')
         assert enrich_daemon.requested_due(pdb, rdb) == [] and rdb.requested() == []
+
+
+def test_papers_whose_list_an_older_parser_missed_may_be_read_again(client, corpus, monkeypatch):
+    import enrich_daemon
+    import serve
+
+    a, b = sorted(corpus)[:2]
+    monkeypatch.setattr(serve, 'ENRICH_ON', True)
+    with db.get_refs_db() as rdb:
+        rdb.put_refs(a, 'ok', [], '')  # read, no list found
+        rdb.put_refs(b, 'ok', [], '')
+        rdb.con.execute(
+            'UPDATE fetched SET t = ? WHERE pid = ?', (refs.PDF_AUTHOR_YEAR_SINCE - 1, a)
+        )  # before the parser change
+        rdb.con.commit()
+    states = {n['id']: n['state'] for n in client.get(f'/ui/graph?pid={a}').get_json()['nodes']}
+    assert states[a] == 'new'
+    login(client)
+    assert client.post('/graph/analyze', data={'pid': a}).get_json() == {'state': 'queued'}
+    assert client.post('/graph/analyze', data={'pid': b}).get_json() == {
+        'state': 'analyzed'
+    }  # the new parser found none
+    with db.get_refs_db() as rdb, db.get_papers_db() as pdb:
+        assert enrich_daemon.requested_due(pdb, rdb) == [a]
+        rdb.put_refs(a, 'ok', [], '')  # read again, still nothing: done for good
+        assert enrich_daemon.requested_due(pdb, rdb) == [] and not refs.may_reread(rdb.status_of([a])[a])
 
 
 def test_a_refs_db_without_the_requests_table_gets_it(tmp_path):

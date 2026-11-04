@@ -1744,11 +1744,11 @@ class RefsDB:
         return self.con.execute(q, pids + pids).fetchall()
 
     def status_of(self, pids):
-        """{pid: (status, refs_from, tries)} of the papers enrich_daemon.py has tried"""
+        """{pid: (status, refs_from, tries, t)} of the papers enrich_daemon.py has tried"""
         out, pids = {}, list(dict.fromkeys(pids))
         for i in range(0, len(pids), 500):
             chunk = pids[i : i + 500]
-            q = f'SELECT pid, status, refs_from, tries FROM fetched WHERE pid IN ({",".join("?" * len(chunk))})'
+            q = f'SELECT pid, status, refs_from, tries, t FROM fetched WHERE pid IN ({",".join("?" * len(chunk))})'
             out.update({r[0]: r[1:] for r in self.con.execute(q, chunk)})
         return out
 

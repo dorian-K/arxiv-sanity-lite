@@ -778,6 +778,10 @@ details.danger form { margin-top: 10px; }
 .graph-page { margin-top: 16px; --g-past: #3a6fd8; --g-future: #d9822b; --g-other: #8a8f98; --g-saved: #2a9d55; --g-ghost: #8e5bd0; }
 @media (prefers-color-scheme: dark) { .graph-page { --g-past: #7ea3ff; --g-future: #f0a35a; --g-other: #8c8f96; } }
 .graph-kicker { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.graph-head-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.graph-open { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.graph-open input { width: 240px; max-width: 60vw; }
+.graph-open .form-error { flex-basis: 100%; margin: 0; }
 .graph-head h1 { font-size: 21px; margin: 2px 0 6px; line-height: 1.3; }
 .graph-head h1 a { color: var(--text); }
 .graph-head p { margin: 0 0 12px; max-width: 80ch; }

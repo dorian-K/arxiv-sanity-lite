@@ -1,56 +1,83 @@
-// the citation graph (/graph?pid=), drawn as a river of time: every paper sits at its year, oldest
+// the citation graph (/graph?pid=). What a reader wants from it, and so what it is built around:
+// what to read first to understand a paper (its foundations: what it and its neighbours keep citing),
+// what came after it (papers citing it, or newer ones alike in content, since a recent paper has
+// barely been cited yet), and its siblings (papers sharing its references, or its content without
+// a citation between them). Those three are the lenses of the side panel; the graph is the map
+// they are shown on: the papers a lens picks are lit and numbered, the rest fade.
+// Drawn as a river of time: every paper sits near its year, oldest
 // on the left, so a paper's references lie to its left and the papers citing it to its right, and
 // an area's foundations collect on the left as it is explored. Papers many others here cite grow.
 // Hovering traces a paper's lineage (everything it builds on and everything building on it).
 // Clicking a paper whose references are known spreads them out; one that hasn't been read is asked
 // for (/graph/analyze) and spreads out once the server has read it. Height is topic: the main
 // direction in which the embeddings of the paper's neighbourhood differ, so threads of related work
-// form bands. Faint "ghosts" are papers closest to it in content that no citation links to it:
-// related work it missed, or that missed it. A force layout in SVG, no library
+// form bands. Faint "ghosts" are the papers closest in content to the selected one that no
+// citation links to it (/ui/graph/alike): related work it missed, or that missed it. A force layout in SVG, no library
 import { html, useState, useEffect, useRef, me, api, location, Err } from 'app/lib';
 import { MathText } from 'app/math';
 
 const YEAR_GAP = 120; // graph units between two years that have papers
-const TOPIC_GAP = 90; // graph units per standard deviation on the topic axis
+const TOPIC_GAP = 150; // graph units per standard deviation on the topic axis
 const POLL = 6000; // ms between looks at papers waiting to be read
 const SECONDS_PER_PAPER = 60; // enrich_daemon.py: up to three requests to arxiv.org, 20 s apart
 
 // the graph's state outside Preact: positions change every frame
 class Graph {
-    constructor() {
+    constructor(root) {
+        this.root = root;
         this.nodes = new Map(); // id -> {id, title, ..., x, y, vx, vy, expanded, born}
         this.edges = new Map(); // 'a>b' -> [a, b]: a cites b
         this.alpha = 1;
         this.years = [];
+        this.yearW = new Map();
     }
 
     // a response of /ui/graph: new papers sprout from the one they came from
     merge(res, from) {
         const origin = this.nodes.get(from) || { x: 0, y: 0 };
-        const add = (n, ghost) => {
+        for (const n of res.nodes) {
             const old = this.nodes.get(n.id);
-            if (old) {
-                if (ghost) return; // already on the graph for real
-                Object.assign(old, n, { expanded: old.expanded, ghost: false });
-            } else {
-                const y = n.topic !== undefined ? n.topic * TOPIC_GAP : origin.y;
-                this.nodes.set(n.id, { ...n, ghost, x: origin.x + (Math.random() - 0.5) * 20, y: y + (Math.random() - 0.5) * 30, vx: 0, vy: 0, born: performance.now() });
-            }
-        };
-        for (const n of res.nodes) add(n, false);
-        for (const n of res.ghosts || []) add(n, true);
+            if (old) Object.assign(old, n, { expanded: old.expanded, ghost: false });
+            else this.place(n, origin, false);
+        }
         for (const [a, b] of res.edges) if (!this.edges.has(a + '>' + b)) this.edges.set(a + '>' + b, [a, b]);
         const self = this.nodes.get(res.pid);
         self.expanded = true;
         self.ghost = false;
-        this.years = [...new Set([...this.nodes.values()].map(n => n.year).filter(Boolean))].sort();
+        this.layoutYears();
         this.alpha = Math.max(this.alpha, 0.9);
     }
 
-    // where a year sits: years with papers side by side, gaps in time don't take room
+    place(n, origin, ghost) {
+        const y = n.topic !== undefined ? n.topic * TOPIC_GAP : origin.y;
+        this.nodes.set(n.id, { ...n, ghost, x: origin.x + (Math.random() - 0.5) * 60, y: y + (Math.random() - 0.5) * 30, vx: 0, vy: 0, born: performance.now() });
+    }
+
+    // the papers alike to one paper (/ui/graph/alike) float around it as ghosts, replacing the last
+    // paper's; those already on the graph for real stay as they are
+    setGhosts(of, list) {
+        for (const [id, n] of this.nodes) if (n.ghost) this.nodes.delete(id);
+        const origin = this.nodes.get(of) || { x: 0, y: 0 };
+        for (const n of list) if (!this.nodes.has(n.id)) this.place(n, origin, true);
+        this.layoutYears();
+        this.alpha = Math.max(this.alpha, 0.5);
+    }
+
+    // years with papers side by side (gaps in time take no room), each as wide as it is crowded
+    layoutYears() {
+        const count = new Map();
+        for (const n of this.nodes.values()) if (n.year) count.set(n.year, (count.get(n.year) || 0) + 1);
+        this.years = [...count.keys()].sort();
+        this.yearW = new Map(this.years.map(y => [y, YEAR_GAP * Math.max(1, Math.sqrt(count.get(y) / 5))]));
+        this.yearC = new Map();
+        let x = 0;
+        for (const y of this.years) { this.yearC.set(y, x + this.yearW.get(y) / 2); x += this.yearW.get(y); }
+        for (const y of this.years) this.yearC.set(y, this.yearC.get(y) - x / 2);
+    }
+
+    // the middle of a year's band (a paper without a year goes in the middle of all)
     yearX(year) {
-        const i = this.years.indexOf(year);
-        return (i < 0 ? this.years.length / 2 : i) * YEAR_GAP - ((this.years.length - 1) * YEAR_GAP) / 2;
+        return this.yearC && this.yearC.has(year) ? this.yearC.get(year) : 0;
     }
 
     // how often each paper is cited here, and who cites whom
@@ -68,6 +95,27 @@ class Graph {
 
     // one step of the layout: each paper is pulled to its year, papers push each other apart
     // vertically, and citations pull related papers to similar heights
+    // push apart any two papers whose dots overlap, whatever the forces say: no paper may hide another
+    collide(ns, cited) {
+        const r = n => (n.ghost ? 7 : radius(n.id, cited, n.id === this.root)) + 5;
+        for (let pass = 0; pass < 2; pass++) {
+            for (let i = 0; i < ns.length; i++) {
+                const a = ns[i], ra = r(a);
+                for (let j = i + 1; j < ns.length; j++) {
+                    const b = ns[j], min = ra + r(b);
+                    let dx = a.x - b.x, dy = a.y - b.y;
+                    if (Math.abs(dx) > min || Math.abs(dy) > min) continue;
+                    let d = Math.hypot(dx, dy);
+                    if (d >= min) continue;
+                    if (d < 0.01) { dx = Math.random() - 0.5; dy = Math.random() - 0.5; d = Math.hypot(dx, dy); }
+                    const push = (min - d) / d / 2; // half each, mostly sideways in time, a bit in topic
+                    a.x += dx * push; a.y += dy * push * 0.7;
+                    b.x -= dx * push; b.y -= dy * push * 0.7;
+                }
+            }
+        }
+    }
+
     tick(dragging, cited) {
         if (this.alpha < 0.005) return false;
         const ns = [...this.nodes.values()];
@@ -76,15 +124,17 @@ class Graph {
             const a = ns[i];
             for (let j = i + 1; j < ns.length; j++) {
                 const b = ns[j];
-                const dx = a.x - b.x;
-                if (Math.abs(dx) > YEAR_GAP) continue;
+                let dx = a.x - b.x;
+                if (Math.abs(dx) > 1.5 * YEAR_GAP) continue;
+                if (Math.abs(dx) < 0.5) dx = Math.random() - 0.5;
                 let dy = a.y - b.y;
                 if (Math.abs(dy) < 0.5) dy = Math.random() - 0.5;
                 const d2 = dx * dx + dy * dy;
                 if (d2 > 40000) continue;
                 const f = (700 * k) / Math.max(d2, 30);
-                a.vx += dx * f; a.vy += dy * f;
-                b.vx -= dx * f; b.vy -= dy * f;
+                // twice as hard sideways: a crowded year spreads out along time rather than into a tall column
+                a.vx += 2 * dx * f; a.vy += dy * f;
+                b.vx -= 2 * dx * f; b.vy -= dy * f;
             }
         }
         for (const [ia, ib] of this.edges.values()) {
@@ -94,14 +144,16 @@ class Graph {
         }
         for (const n of ns) {
             const yx = this.yearX(n.year);
-            n.vx += (yx - n.x) * 0.02 * k;
+            n.vx += (yx - n.x) * 0.006 * k; // the year is a suggestion: a gentle pull, so crowded years spread sideways
             if (n.topic !== undefined) n.vy += (n.topic * TOPIC_GAP - n.y) * 0.03 * k; // its topic's height
             else n.vy -= n.y * 0.004 * k;
             if (n === dragging) { n.vx = 0; n.vy = 0; continue; }
             n.vx *= 0.6; n.vy *= 0.6;
             n.x += n.vx; n.y += n.vy;
-            n.x = Math.max(yx - YEAR_GAP * 0.42, Math.min(yx + YEAR_GAP * 0.42, n.x)); // within its year
+            const half = (this.yearW.get(n.year) || YEAR_GAP) / 2 + YEAR_GAP * 0.3; // but never far into the next year
+            n.x = Math.max(yx - half, Math.min(yx + half, n.x));
         }
+        this.collide(ns, cited);
         this.alpha *= 0.985;
         return true;
     }
@@ -132,6 +184,38 @@ const rulerYears = (g, v) => {
     }
     return out;
 };
+const LENSES = {
+    first: ['Read first', 'What this paper builds on, most cited around here first: the foundations to know before reading it.'],
+    next: ['Came after', 'Papers citing it, newest first, then newer papers alike in content that don\'t cite it (a recent paper has barely been cited yet).'],
+    siblings: ['Siblings', 'Papers working on the same thing: sharing the most of its references, or close in content with no citation between them.'],
+};
+const LENS_MAX = 10;
+
+// the papers each lens picks, best first, each with why
+const lensPicks = (lens, { g, pid, cited, out, ancestors, descendants, alike: alikeList, sim }) => {
+    const center = g.nodes.get(pid);
+    const alike = n => ({ n, why: Math.round(100 * sim.get(n.id)) + '% alike, not linked' });
+    if (lens === 'first') {
+        return [...ancestors].filter(id => id !== pid).map(id => g.nodes.get(id))
+            .sort((a, b) => (cited.get(b.id) || 0) - (cited.get(a.id) || 0) || (a.year || 0) - (b.year || 0))
+            .slice(0, LENS_MAX).map(n => ({ n, why: 'cited ' + (cited.get(n.id) || 0) + '× here' }));
+    }
+    if (lens === 'next') {
+        const citing = [...descendants].filter(id => id !== pid).map(id => g.nodes.get(id))
+            .sort((a, b) => (b.year || 0) - (a.year || 0) || (cited.get(b.id) || 0) - (cited.get(a.id) || 0))
+            .map(n => ({ n, why: (out.get(n.id) || []).includes(pid) ? 'cites it' : 'builds on a paper citing it' }));
+        const newer = alikeList.filter(n => center && n.year >= center.year).map(alike);
+        return [...citing, ...newer].slice(0, LENS_MAX);
+    }
+    const mine = new Set(out.get(pid) || []);
+    const sharing = [...g.nodes.values()].filter(n => !n.ghost && n.id !== pid)
+        .map(n => ({ n, k: (out.get(n.id) || []).filter(x => mine.has(x)).length })).filter(x => x.k >= 2)
+        .sort((a, b) => b.k - a.k).map(({ n, k }) => ({ n, why: 'shares ' + k + ' references' }));
+    const seen = new Set(sharing.map(x => x.n.id));
+    const content = alikeList.filter(n => !seen.has(n.id)).map(alike);
+    return [...sharing.slice(0, LENS_MAX - Math.min(4, content.length)), ...content].slice(0, LENS_MAX);
+};
+
 const short = (t, n = 38) => (t.length > n ? t.slice(0, n - 1) + '…' : t);
 const STATE_TEXT = {
     analyzed: 'References read',
@@ -151,6 +235,9 @@ export const GraphPage = () => {
     const [error, setError] = useState('');
     const [selected, setSelected] = useState(pid);
     const [hover, setHover] = useState(null);
+    const [lens, setLens] = useState('first');
+    const alikeOf = useRef(new Map()); // pid -> the papers alike to it, from the server
+    const [, setAlikeTick] = useState(0);
     const [busy, setBusy] = useState(false);
     const [actionError, setActionError] = useState('');
     const view = useRef({ x: 0, y: 0, k: 1 }); // pan and zoom
@@ -211,7 +298,7 @@ export const GraphPage = () => {
 
     // a new center: a new graph
     useEffect(() => {
-        gRef.current = new Graph();
+        gRef.current = new Graph(pid);
         fitted.current = true;
         setRes(null); setError(''); setSelected(pid); setActionError('');
         fetchAround(pid).then(r => {
@@ -220,12 +307,26 @@ export const GraphPage = () => {
             setRes(r);
             const c = g.nodes.get(pid);
             c.x = g.yearX(c.year); c.y = 0;
+            alikeOf.current = new Map([[pid, r.ghosts || []]]);
+            g.setGhosts(pid, r.ghosts || []);
             // the paper this graph is about: read it right away if it hasn't been yet
             if (c.state === 'new' && r.enrich_on && me.get().logged_in) analyze(pid);
             run();
         }).catch(e => setError(e.message));
         return () => { gRef.current = null; };
     }, [pid]);
+
+    // the selected paper's alike papers float around it (asked for once per paper)
+    useEffect(() => {
+        const g = gRef.current;
+        const id = selected || pid;
+        const n = g && g.nodes.get(id);
+        if (!n || n.ghost || !res) return;
+        const show = () => { if (gRef.current === g) { g.setGhosts(id, alikeOf.current.get(id) || []); run(); setAlikeTick(t => t + 1); } };
+        if (alikeOf.current.has(id)) { show(); return; }
+        api('/ui/graph/alike?pid=' + encodeURIComponent(id) + '&root=' + encodeURIComponent(pid))
+            .then(r => { alikeOf.current.set(id, r.ghosts); show(); }).catch(() => {});
+    }, [selected, res !== null]);
 
     // papers waiting to be read: looked at every few seconds, and spread out once they are
     useEffect(() => {
@@ -326,26 +427,31 @@ export const GraphPage = () => {
     const v = view.current;
     const center = g && g.nodes.get(pid);
     const { cited, out, inn } = g ? g.stats() : { cited: new Map(), out: new Map(), inn: new Map() };
-    // the lineage of the hovered (else the selected) paper: what it builds on, what builds on it
-    const focus = hover || selected;
-    const up_ = focus && g ? reach(focus, out) : null;
-    const down_ = focus && g ? reach(focus, inn) : null;
-    const lit = id => !focus || up_.has(id) || down_.has(id);
     // which side of the center a paper is on, for its color
     const ancestors = g ? reach(pid, out) : new Set(), descendants = g ? reach(pid, inn) : new Set();
     const side = id => (id === pid ? 'center' : ancestors.has(id) ? 'past' : descendants.has(id) ? 'future' : 'other');
     const all = g ? [...g.nodes.values()] : [];
     const nodes = all.filter(n => !n.ghost);
-    const ghostList = all.filter(n => n.ghost).sort((a, b) => b.similarity - a.similarity);
+    // the lenses look at the selected paper (else this page's): what to read before it, after it, beside it
+    const subject = g && selected && g.nodes.get(selected) && !g.nodes.get(selected).ghost ? selected : pid;
+    const sim = new Map((alikeOf.current.get(subject) || []).map(x => [x.id, x.similarity]));
+    const alike = g ? [...sim.keys()].map(id => g.nodes.get(id)).filter(Boolean) : [];
+    const ghostList = all.filter(n => n.ghost);
+    const picks = g ? lensPicks(lens, { g, pid: subject, cited, out, ancestors: reach(subject, out), descendants: reach(subject, inn), alike, sim }) : [];
+    const rank = new Map(picks.map((p, i) => [p.n.id, i + 1]));
+    const focus = hover;
+    const up_ = focus && g ? reach(focus, out) : null;
+    const down_ = focus && g ? reach(focus, inn) : null;
+    const lit = id => (focus ? up_.has(id) || down_.has(id) : id === pid || id === subject || rank.has(id));
     const top = nodes.filter(n => (cited.get(n.id) || 0) >= 2 && n.id !== pid).sort((a, b) => cited.get(b.id) - cited.get(a.id));
     // labels: the paper itself, the hovered and selected ones, then the most cited, then (zoomed in)
     // any; one is left out where it would cover a label already placed, so they never pile up
-    const want = [pid, hover, selected, ...top.map(n => n.id), ...(v.k > 1.2 ? nodes.map(n => n.id) : [])];
+    const want = [pid, hover, selected, ...picks.map(p => p.n.id), ...top.map(n => n.id), ...(v.k > 1.2 ? nodes.map(n => n.id) : [])];
     const labeled = new Set(), boxes = [];
     for (const id of want) {
         const n = id && g && g.nodes.get(id);
-        if (!n || labeled.has(id)) continue;
-        const w = Math.min(n.title.length || 10, id === pid ? 60 : 38) * 6.6, sx = n.x * v.k + v.x, sy = n.y * v.k + v.y - 18;
+        if (!n || labeled.has(id) || !lit(id)) continue; // faded papers keep quiet
+        const w = (Math.min(n.title.length || 10, id === pid ? 60 : 38) + (rank.has(id) ? 3 : 0)) * 6.6, sx = n.x * v.k + v.x, sy = n.y * v.k + v.y - 18;
         const box = [sx - w / 2, sy - 8, sx + w / 2, sy + 8];
         const free = !boxes.some(b => b[0] < box[2] && box[0] < b[2] && b[1] < box[3] && box[1] < b[3]);
         if (free || id === hover || id === selected) { labeled.add(id); boxes.push(box); }
@@ -365,8 +471,9 @@ export const GraphPage = () => {
         <section class="graph-head">
             <div class="graph-kicker">Citation graph</div>
             <h1>${center ? html`<a href=${'https://arxiv.org/abs/' + pid}><${MathText} text=${center.title || pid} /></a>` : pid}</h1>
-            <p class="muted small">Time runs left to right: what a paper cites lies to its left, what cites it to its right.
-                ${' '}Height is topic, from the papers' embeddings: related work forms bands. Hover a paper to trace its lineage; click one to spread out its citations${res && res.enrich_on && m.logged_in
+            <p class="muted small">Where this paper comes from, where it went, and what stands next to it. Time runs left to right
+                ${' '}(what a paper cites lies to its left, what cites it to its right), height is topic, from the papers' embeddings.
+                ${' '}Pick a question (Read first, Came after, Siblings) to light up its answers; hover a paper to trace its lineage, click one to spread out its citations${res && res.enrich_on && m.logged_in
                 ? ', or to have the server read its references if nobody has yet (about a minute)' : ''}.</p>
         </section>
         <div class="graph-wrap">
@@ -376,26 +483,26 @@ export const GraphPage = () => {
                      onPointerDown=${e => down(e, null)} role="img" aria-label="citation graph">
                     <g transform=${`translate(${v.x},${v.y}) scale(${v.k})`}>
                         ${g ? g.years.map((y, i) => html`<rect key=${'b' + y} class=${'graph-band' + (i % 2 ? ' odd' : '')}
-                            x=${g.yearX(y) - YEAR_GAP / 2} y="-20000" width=${YEAR_GAP} height="40000" />`) : null}
+                            x=${g.yearX(y) - g.yearW.get(y) / 2} y="-20000" width=${g.yearW.get(y)} height="40000" />`) : null}
                         ${g ? [...g.edges.values()].map(([ia, ib]) => {
                             const a = g.nodes.get(ia), b = g.nodes.get(ib);
                             const mx = (a.x + b.x) / 2;
                             const onPath = focus && lit(ia) && lit(ib) && (up_.has(ia) && up_.has(ib) || down_.has(ia) && down_.has(ib));
-                            const cls = 'graph-edge ' + side(ia === pid ? ib : ia) + (onPath ? ' on' : focus ? ' dim' : '');
+                            const cls = 'graph-edge ' + side(ia === pid ? ib : ia) + (focus ? (onPath ? ' on' : ' dim') : lit(ia) && lit(ib) ? '' : ' dim');
                             return html`<path key=${ia + '>' + ib} class=${cls} pathLength="1"
                                 d=${`M${a.x},${a.y} C${mx},${a.y} ${mx},${b.y} ${b.x},${b.y}`} />`;
                         }) : null}
-                        ${g ? ghostList.map(n => {
-                            const a = g.nodes.get(pid);
-                            return a ? html`<line key=${'~' + n.id} class=${'graph-thread' + (focus && focus !== n.id && focus !== pid ? ' dim' : '')}
+                        ${g ? alike.map(n => {
+                            const a = g.nodes.get(subject);
+                            return a ? html`<line key=${'~' + n.id} class=${'graph-thread' + (lit(n.id) ? '' : ' dim')}
                                 x1=${a.x} y1=${a.y} x2=${n.x} y2=${n.y} />` : null;
                         }) : null}
-                        ${ghostList.map(n => html`<g key=${n.id} class=${'graph-node graph-ghost' + (focus && focus !== n.id && focus !== pid ? ' dim' : '') + (n.id === selected ? ' selected' : '')}
+                        ${ghostList.map(n => html`<g key=${n.id} class=${'graph-node graph-ghost' + (lit(n.id) ? '' : ' dim') + (n.id === selected ? ' selected' : '')}
                                 transform=${`translate(${n.x},${n.y})`} onPointerDown=${e => down(e, n)}
                                 onPointerEnter=${() => setHover(n.id)} onPointerLeave=${() => setHover(x => (x === n.id ? null : x))}>
                             <circle class="graph-dot" r=${7 * grow} />
                             ${labeled.has(n.id) ? html`<text class="graph-label" y=${-7 * grow - 6 / v.k}
-                                style=${{ fontSize: 12 / v.k + 'px' }}>${short(n.title || n.id)}</text>` : null}
+                                style=${{ fontSize: 12 / v.k + 'px' }}>${rank.has(n.id) ? rank.get(n.id) + ' · ' : ''}${short(n.title || n.id)}</text>` : null}
                         </g>`)}
                         ${nodes.map(n => {
                             const r = radius(n.id, cited, n.id === pid) * grow;
@@ -408,7 +515,7 @@ export const GraphPage = () => {
                                 <circle class="graph-dot" r=${r} />
                                 ${n.state === 'queued' ? html`<circle class="graph-scan" r=${r + 4} pathLength="1" />` : null}
                                 ${labeled.has(n.id) ? html`<text class="graph-label" y=${-r - 6 / v.k} style=${{ fontSize: 12 / v.k + 'px' }}>
-                                    ${short(n.title || n.id, n.id === pid ? 60 : 38)}</text>` : null}
+                                    ${rank.has(n.id) ? rank.get(n.id) + ' · ' : ''}${short(n.title || n.id, n.id === pid ? 60 : 38)}</text>` : null}
                             </g>`;
                         })}
                     </g>
@@ -422,7 +529,7 @@ export const GraphPage = () => {
                     top: Math.min(hov.y * v.k + v.y + 14, h - 90) + 'px' }}>
                     <b><${MathText} text=${hov.title || hov.id} /></b>
                     <div class="muted">${hov.year}${hov.authors ? ' · ' + hov.authors : ''} · ${STATE_TEXT[hov.state]}</div>
-                    <div class="muted">${hov.ghost ? Math.round(100 * hov.similarity) + '% alike in content, but no citation links it here. Click to add it.'
+                    <div class="muted">${hov.ghost ? Math.round(100 * (hov.similarity || 0)) + '% alike in content, but no citation links it here. Click to add it.'
                         : 'cited by ' + (cited.get(hov.id) || 0) + ' here' + ((out.get(hov.id) || []).length ? ' · cites ' + out.get(hov.id).length + ' here' : '')}</div>
                 </div>` : null}
                 <div class="graph-zoom">
@@ -442,23 +549,21 @@ export const GraphPage = () => {
             ${res && g ? html`<aside class="graph-side">
                 ${sel ? html`<${Selected} n=${sel} res=${res} m=${m} queue=${queue} cited=${cited} out=${out} busy=${busy} error=${actionError}
                     onExpand=${expand} onAnalyze=${analyze} isCenter=${sel.id === pid} />` : null}
-                ${ghostList.length ? html`<div class="card graph-top graph-ghosts">
-                    <h3>Alike, but not linked</h3>
-                    <p class="muted small">Closest to this paper in content (by their embeddings), yet no citation connects them:
-                        related work it missed, or that missed it.</p>
-                    <ol>${ghostList.map(n => html`<li key=${n.id}>
+                <div class="card graph-top graph-lens">
+                    <div class="graph-lenses" role="tablist">
+                        ${Object.entries(LENSES).map(([key, [name, text]]) => html`<button key=${key} type="button" role="tab"
+                            aria-selected=${lens === key} class=${'btn btn-small' + (lens === key ? ' btn-primary' : '')} title=${text}
+                            onClick=${() => setLens(key)}>${name}</button>`)}
+                    </div>
+                    <p class="muted small">${LENSES[lens][1]}</p>
+                    ${picks.length ? html`<ol>${picks.map(({ n, why }) => html`<li key=${n.id} class=${n.ghost ? 'ghost' : ''}>
                         <button type="button" class="linkbtn" onClick=${() => clickNode(n)}
-                            onPointerEnter=${() => setHover(n.id)} onPointerLeave=${() => setHover(null)}>${short(n.title || n.id, 60)}</button>
-                        <div class="muted small">${n.year}${n.authors ? ' · ' + n.authors : ''} · ${Math.round(100 * n.similarity)}% alike</div></li>`)}</ol>
-                </div>` : null}
-                ${top.length ? html`<div class="card graph-top">
-                    <h3>Most cited here</h3>
-                    <p class="muted small">The papers this neighbourhood keeps citing: often the area's foundations.</p>
-                    <ol>${top.slice(0, 8).map(n => html`<li key=${n.id}>
-                        <button type="button" class="linkbtn" onClick=${() => clickNode(n)}
-                            onPointerEnter=${() => setHover(n.id)} onPointerLeave=${() => setHover(null)}>${short(n.title || n.id, 60)}</button>
-                        <span class="muted"> · ${n.year} · ×${cited.get(n.id)}</span></li>`)}</ol>
-                </div>` : null}
+                            onPointerEnter=${() => setHover(n.id)} onPointerLeave=${() => setHover(null)}>${short(n.title || n.id, 70)}</button>
+                        <div class="muted small">${n.year}${n.authors ? ' · ' + n.authors : ''} · ${why}${n.saved && n.saved.length ? ' · ★ yours' : ''}</div></li>`)}</ol>`
+                    : html`<p class="muted small"><i>${lens === 'next' ? 'Nothing here cites it yet, and no newer paper is close in content.'
+                        : lens === 'first' ? 'Its references haven\'t been read yet.'
+                        : 'No paper here shares its references yet: spread out a few of its references or citing papers to find some.'}</i></p>`}
+                </div>
             </aside>` : null}
         </div>
     </div>`;

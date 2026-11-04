@@ -350,3 +350,24 @@ def test_graph_topics_and_alike_papers(monkeypatch):
     serve.add_topics(features, nodes, serve.topic_axis(features, pids[0]))
     assert all(-3 <= n['topic'] <= 3 for n in nodes[:12]) and 'topic' not in nodes[-1]
     assert serve.topic_axis(features, pids[0]) is serve.topic_axis(features, pids[0])
+
+
+def test_the_alike_papers_of_any_paper_on_the_graph(client, corpus, monkeypatch):
+    import serve
+
+    a, b, c = sorted(corpus)[:3]
+    with db.get_refs_db() as rdb:
+        rdb.put_refs(a, 'ok', [(1, b, 'B', None, 'B')], 'html')
+    seen = {}
+
+    def fake(features, pid, skip):
+        seen[pid] = skip
+        return [(c, 0.9)]
+
+    monkeypatch.setattr(serve, 'ghosts', fake)
+    monkeypatch.setattr(serve, 'topic_axis', lambda features, root: None)
+    monkeypatch.setattr(serve, 'add_topics', lambda features, nodes, axis: None)
+    r = client.get(f'/ui/graph/alike?pid={b}&root={a}').get_json()
+    # the paper's own citations are left out: alike, but not linked
+    assert seen[b] == {a, b} and [(n['id'], n['similarity']) for n in r['ghosts']] == [(c, 0.9)]
+    assert client.get('/ui/graph/alike?pid=../x').status_code == 400

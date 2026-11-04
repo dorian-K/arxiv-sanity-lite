@@ -1538,6 +1538,7 @@ STAT_LABELS = {
     'ui_stats': 'Stats',
     'ui_page': 'About, privacy, imprint',
     'ui_graph': 'Citation graph',
+    'ui_graph_alike': 'Citation graph: alike papers',
     'graph_analyze': 'Citation graph: analyze a paper',
     'login': 'Log in',
     'logout': 'Log out',
@@ -1793,6 +1794,16 @@ def ghosts(features, pid, skip):
     return out[:GHOSTS]
 
 
+def alike_nodes(features, pid, skip, axis):
+    """ghosts() as graph nodes, with their similarity and their height on the topic axis"""
+    near = ghosts(features, pid, skip)
+    nodes = graph_nodes([p for p, _ in near])
+    for n, (_, sim) in zip(nodes, near, strict=True):
+        n['similarity'] = round(sim, 3)
+    add_topics(features, nodes, axis)
+    return nodes
+
+
 @app.route('/ui/graph')
 def ui_graph():
     """
@@ -1813,13 +1824,9 @@ def ui_graph():
         if features_exist():
             features = get_features()
             axis = topic_axis(features, root)
+            add_topics(features, nodes, axis)
             if pid == root and not rate_limited('rank'):  # reads every embedding once
-                near = ghosts(features, pid, set(ids))
-            ghost_nodes = graph_nodes([p for p, _ in near])
-            for n, (_, sim) in zip(ghost_nodes, near, strict=True):
-                n['similarity'] = round(sim, 3)
-            near = ghost_nodes
-            add_topics(features, nodes + near, axis)
+                near = alike_nodes(features, pid, set(ids), axis)
     except Exception as e:
         print("graph topics of %s: %s" % (pid, e))
     return {
@@ -1833,6 +1840,27 @@ def ui_graph():
         'queue': rdb.requested(),
         'enrich_on': ENRICH_ON,
     }
+
+
+@app.route('/ui/graph/alike')
+def ui_graph_alike():
+    """the papers closest to pid in content that it neither cites nor is cited by, for the graph's side panel"""
+    pid = request.args.get('pid', '').strip()
+    root = request.args.get('root', '').strip() or pid
+    if not PAPER_ID_RE.match(pid) or not PAPER_ID_RE.match(root):
+        return {'error': 'Not an arXiv id.'}, 400
+    if not features_exist():
+        return {'pid': pid, 'ghosts': []}
+    if rate_limited('rank'):
+        return too_many('rank')
+    cited, citing, _ = neighbours(pid)
+    features = get_features()
+    try:
+        near = alike_nodes(features, pid, {pid, *cited, *citing}, topic_axis(features, root))
+    except Exception as e:
+        print("graph alike of %s: %s" % (pid, e))
+        near = []
+    return {'pid': pid, 'ghosts': near}
 
 
 @app.route('/graph/analyze', methods=['POST'])

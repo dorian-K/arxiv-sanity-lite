@@ -858,6 +858,8 @@ details.danger form { margin-top: 10px; }
 .graph-top ol { margin: 0; padding-left: 20px; font-size: 13px; }
 .graph-top li { margin: 4px 0; }
 .graph-top li .muted.small { margin: 0; }
+.graph-lenses { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
+.graph-lens li.ghost .linkbtn { color: var(--g-ghost); }
 .graph-top .linkbtn { text-align: left; font-size: 13px; }
 @media (max-width: 760px) {
     .graph-wrap { grid-template-columns: 1fr; }

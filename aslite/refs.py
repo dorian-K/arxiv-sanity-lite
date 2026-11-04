@@ -99,8 +99,10 @@ def parse(html):
 
 
 # PDFs (papers without an HTML version): the reference list after its heading, up to an
-# appendix. Numbered lists ([1] ...) split at their numbers; author-year ones (Adam, most ML papers
-# before 2018) where a line ending a sentence is followed by one starting with 'Surname, First'
+# appendix. Numbered lists ([1] ...) split at their numbers; author-year ones where a line ending a
+# sentence is followed by one starting an entry: 'Surname, First' (Adam, most ML papers before
+# 2018), or names followed by the year, 'First Last, and First Last. 2019.' (ACL) or
+# 'Last, F. and Last, G. (2019).' (APA)
 PDF_HEAD = re.compile(
     r'^\s*(?:\d+\.?\s*)?(references|bibliography|references and notes|literature cited)\s*$', re.I | re.M
 )
@@ -113,11 +115,15 @@ PDF_AUTHOR = re.compile(
     r"^(?:(?:van|von|de|der|den|la|le|da|di|del|du)\s+)*[A-Z][\w'’\-]+(?:\s[A-Z][\w'’\-]+)?,\s+[A-Z]"
 )
 YEAR = re.compile(r'\b(?:19|20)\d\d[a-z]?\b')
+# names (no full stop but after an initial) and then the year: 'Samuel R. Bowman, and Chris Potts. 2015.'
+NAMES_YEAR = re.compile(
+    r"^(?=[A-Z])(?:[^.()\d]|(?<![A-Za-z])[A-Z]\.|\bet al\.){2,400}?(?:\.\s+(?:19|20)\d\d[a-z]?\.|\s\((?:19|20)\d\d[a-z]?\)\.?)(?:\s|$)"
+)
 
 
 # when parse_pdf learned author-year lists: papers read before it without finding a list may be
 # read once more when someone asks for them on the graph page (may_reread)
-PDF_AUTHOR_YEAR_SINCE = 1793750400  # 2026-11-04
+PDF_AUTHOR_YEAR_SINCE = 1793836800  # 2026-11-05: author-year lists, also ACL and APA style
 
 
 def may_reread(st):
@@ -151,8 +157,8 @@ def _author_year(t, text):
     # page numbers and running heads ("Published as a conference paper at ...") are no part of any entry
     keep = [x.strip() for x in t.split('\n') if x.strip() and not x.strip().isdigit() and seen.get(x.strip(), 0) < 3]
     refs, cur = [], []
-    for line in keep:
-        if cur and cur[-1].endswith('.') and PDF_AUTHOR.match(line):
+    for i, line in enumerate(keep):
+        if cur and cur[-1].endswith('.') and (PDF_AUTHOR.match(line) or NAMES_YEAR.match(' '.join(keep[i : i + 4]))):
             refs.append(' '.join(cur))
             cur = []
         cur.append(line)

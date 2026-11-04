@@ -93,6 +93,19 @@ def test_parse_pdf_splits_author_year_lists():
     got = [r['raw'] for r in refs.parse_pdf(text)]
     assert got == [' '.join(e.replace('Im\ufffeproving', 'Improving').split()) for e in entries]
     assert refs.PDF_END.search('\n10 APPENDIX\n') and refs.PDF_END.search('\nAppendix A\n')  # where the list ends
+    # ACL style (names, then the year) and APA style (the year in parentheses)
+    acl = [
+        'Alan Akbik, Duncan Blythe, and Roland Vollgraf.\n2018. Contextual string embeddings for sequence\nlabeling. In COLING, pages\n1638–1649.',
+        'Rie Kubota Ando and Tong Zhang. 2005. A framework\nfor learning predictive structures. JMLR.',
+        'Samuel R. Bowman, Gabor Angeli, Christopher Potts,\nand Christopher D. Manning. 2015. A large annotated corpus. In EMNLP.',
+        'Ciprian Chelba and Tony Robinson. 2013. One billion word benchmark. arXiv preprint arXiv:1312.3005.',
+        'Z. Chen, H. Zhang, and L. Zhao. 2018. Quora question pairs.',
+        'Wilson L Taylor. 1953. Cloze procedure. Journalism Bulletin.',
+    ]
+    got = [r['raw'] for r in refs.parse_pdf('References\n' + '\n'.join(acl))]
+    assert got == [' '.join(e.split()) for e in acl]
+    apa = [f'Person{i}, A. B. and Other, C. ({2010 + i}). Paper number {i}.\nSome Journal, 3:1-2.' for i in range(6)]
+    assert len(refs.parse_pdf('References\n' + '\n'.join(apa))) == 6
     # prose after a references heading is no list
     assert refs.parse_pdf('References\n' + 'We thank, Someone. For help.\nAnd more text here.\n' * 4) == []
 
@@ -348,23 +361,24 @@ def test_papers_whose_list_an_older_parser_missed_may_be_read_again(client, corp
 
     a, b = sorted(corpus)[:2]
     monkeypatch.setattr(serve, 'ENRICH_ON', True)
-    with db.get_refs_db() as rdb:
-        rdb.put_refs(a, 'ok', [], '')  # read, no list found
-        rdb.put_refs(b, 'ok', [], '')
-        rdb.con.execute(
-            'UPDATE fetched SET t = ? WHERE pid = ?', (refs.PDF_AUTHOR_YEAR_SINCE - 1, a)
-        )  # before the parser change
+    since = refs.PDF_AUTHOR_YEAR_SINCE
+
+    def read(rdb, pid, t):  # read at time t, no list found
+        rdb.put_refs(pid, 'ok', [], '')
+        rdb.con.execute('UPDATE fetched SET t = ? WHERE pid = ?', (t, pid))
         rdb.con.commit()
+
+    with db.get_refs_db() as rdb:
+        read(rdb, a, since - 1)  # by the older parser
+        read(rdb, b, since + 1)  # by the current one
     states = {n['id']: n['state'] for n in client.get(f'/ui/graph?pid={a}').get_json()['nodes']}
     assert states[a] == 'new'
     login(client)
     assert client.post('/graph/analyze', data={'pid': a}).get_json() == {'state': 'queued'}
-    assert client.post('/graph/analyze', data={'pid': b}).get_json() == {
-        'state': 'analyzed'
-    }  # the new parser found none
+    assert client.post('/graph/analyze', data={'pid': b}).get_json() == {'state': 'analyzed'}
     with db.get_refs_db() as rdb, db.get_papers_db() as pdb:
         assert enrich_daemon.requested_due(pdb, rdb) == [a]
-        rdb.put_refs(a, 'ok', [], '')  # read again, still nothing: done for good
+        read(rdb, a, since + 2)  # read again, still nothing: done for good
         assert enrich_daemon.requested_due(pdb, rdb) == [] and not refs.may_reread(rdb.status_of([a])[a])
 
 

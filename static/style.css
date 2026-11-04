@@ -773,47 +773,95 @@ details.danger form { margin-top: 10px; }
 /* the next list is on its way (the app keeps the current one until it is there) */
 #wrap.stale { opacity: .55; transition: opacity .2s .15s; }
 
-/* the citation graph (static/app/graph.js) */
-.graph-page { margin-top: 16px; }
-.graph-head h1 { font-size: 20px; margin: 0 0 6px; }
-.graph-head p { margin: 0 0 8px; max-width: 75ch; }
-.graph-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-bottom: 10px; }
-.graph-legend span { display: inline-flex; align-items: center; gap: 5px; }
-.lg { display: inline-block; width: 11px; height: 11px; border-radius: 50%; border: 2px solid var(--muted); }
-.lg-center { background: var(--accent); border-color: var(--accent); }
-.lg-analyzed { background: var(--link); border-color: var(--link); }
-.lg-new { background: var(--surface); }
-.lg-saved { background: var(--link); border-color: #2a9d55; box-shadow: 0 0 0 2px #2a9d55; }
-.lg-away { background: var(--surface); border-style: dashed; }
-.graph-wrap { display: grid; grid-template-columns: 1fr 320px; gap: 12px; align-items: start; }
-.graph-canvas { position: relative; height: 72vh; min-height: 360px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); overflow: hidden; }
+/* the citation graph (static/app/graph.js): a river of time. past (what a paper builds on) in
+   blue, future (what builds on it) in amber, the paper itself in the site's red */
+.graph-page { margin-top: 16px; --g-past: #3a6fd8; --g-future: #d9822b; --g-other: #8a8f98; --g-saved: #2a9d55; --g-ghost: #8e5bd0; }
+@media (prefers-color-scheme: dark) { .graph-page { --g-past: #7ea3ff; --g-future: #f0a35a; --g-other: #8c8f96; } }
+.graph-kicker { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.graph-head h1 { font-size: 21px; margin: 2px 0 6px; line-height: 1.3; }
+.graph-head h1 a { color: var(--text); }
+.graph-head p { margin: 0 0 12px; max-width: 80ch; }
+.graph-wrap { display: grid; grid-template-columns: 1fr 300px; gap: 12px; align-items: start; }
+.graph-canvas { position: relative; height: 74vh; min-height: 380px; border: 1px solid var(--border); border-radius: 14px;
+    background: radial-gradient(ellipse at 50% 45%, var(--surface), var(--bg)); overflow: hidden; }
 .graph-svg { width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; user-select: none; }
 .graph-svg:active { cursor: grabbing; }
 .graph-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
-.graph-zoom { position: absolute; right: 8px; top: 8px; display: flex; gap: 4px; }
-.graph-count { position: absolute; left: 10px; bottom: 8px; }
-.graph-edge { stroke: var(--muted); stroke-opacity: .35; stroke-width: 1; }
-.graph-edge.on { stroke: var(--accent); stroke-opacity: .9; stroke-width: 1.6; }
-.graph-arrow { fill: var(--muted); fill-opacity: .5; }
-.graph-arrow.on { fill: var(--accent); fill-opacity: 1; }
-.graph-node { cursor: pointer; }
-.graph-node circle { fill: var(--surface); stroke: var(--muted); stroke-width: 1.5; }
-.graph-node.analyzed circle { fill: var(--link); stroke: var(--link); }
-.graph-node.away circle { stroke-dasharray: 3 2; }
-.graph-node.failed circle { stroke-opacity: .4; }
-.graph-node.saved circle { stroke: #2a9d55; stroke-width: 3; }
-.graph-node.center circle { fill: var(--accent); stroke: var(--accent); }
-.graph-node.selected circle { stroke: var(--text); stroke-width: 3; }
-.graph-node.queued circle { animation: graphwait 1.2s ease-in-out infinite; }
-@keyframes graphwait { 50% { stroke-width: 5; stroke: var(--link); } }
-.graph-node text { fill: var(--text); paint-order: stroke; stroke: var(--surface); stroke-width: 3px; pointer-events: none; }
-.graph-panel { margin: 0; }
-.graph-panel-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px; font-size: 13px; }
-.graph-saved { color: #2a9d55; font-size: 13px; }
+.graph-band { fill: transparent; }
+.graph-band.odd { fill: var(--text); fill-opacity: .025; }
+.graph-ruler { fill: var(--surface); fill-opacity: .85; }
+.graph-years text { font-size: 11px; fill: var(--muted); text-anchor: middle; font-variant-numeric: tabular-nums; }
+.graph-zoom { position: absolute; right: 8px; top: 30px; display: flex; gap: 4px; }
+.graph-count { position: absolute; left: 10px; right: 10px; bottom: 8px; display: flex; flex-wrap: wrap; gap: 2px 12px;
+    font-size: 12px; align-items: center; pointer-events: none; }
+.graph-count .muted { margin-left: auto; }
+.lg { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; vertical-align: -1px; }
+.lg.past { background: var(--g-past); }
+.lg.center { background: var(--accent); }
+.lg.future { background: var(--g-future); }
+.lg.hollow { border: 2px solid var(--g-other); width: 6px; height: 6px; }
+.lg.saved { border: 2px solid var(--g-saved); background: var(--surface); width: 6px; height: 6px; }
+.lg.ghost { border: 2px dashed var(--g-ghost); width: 6px; height: 6px; }
+
+.graph-edge { fill: none; stroke: var(--g-other); stroke-opacity: .28; stroke-width: 1.1; stroke-dasharray: 1; stroke-dashoffset: 0;
+    animation: graphdraw .9s ease-out; transition: stroke-opacity .2s; }
+.graph-edge.past { stroke: var(--g-past); }
+.graph-edge.future { stroke: var(--g-future); }
+.graph-edge.on { stroke-opacity: .9; stroke-width: 2; }
+.graph-edge.dim { stroke-opacity: .06; }
+@keyframes graphdraw { from { stroke-dashoffset: 1; } }
+
+.graph-node { cursor: pointer; transition: opacity .2s; }
+.graph-node.dim { opacity: .18; }
+.graph-node.fresh .graph-dot { transform-box: fill-box; transform-origin: center; animation: graphsprout .6s cubic-bezier(.2, 1.5, .4, 1); }
+@keyframes graphsprout { from { transform: scale(0); } }
+.graph-dot { fill: var(--g-other); stroke: var(--surface); stroke-width: 2; transition: r .3s; }
+.graph-node.past .graph-dot { fill: var(--g-past); }
+.graph-node.future .graph-dot { fill: var(--g-future); }
+.graph-node.center .graph-dot { fill: var(--accent); stroke-width: 3; filter: drop-shadow(0 0 6px var(--accent)); }
+/* not read yet: a hollow ring of its color */
+.graph-node.new .graph-dot, .graph-node.queued .graph-dot, .graph-node.failed .graph-dot { fill: var(--surface); stroke-width: 2.2; }
+.graph-node.new.past .graph-dot, .graph-node.queued.past .graph-dot { stroke: var(--g-past); }
+.graph-node.new.future .graph-dot, .graph-node.queued.future .graph-dot { stroke: var(--g-future); }
+.graph-node.new.other .graph-dot, .graph-node.failed .graph-dot { stroke: var(--g-other); }
+.graph-node.new.center .graph-dot { stroke: var(--accent); }
+.graph-node.away .graph-dot { stroke-dasharray: 3 2; }
+.graph-node.selected .graph-dot { stroke: var(--text); stroke-width: 3; }
+/* ghosts: alike in content, no citation between them and the paper */
+.graph-ghost .graph-dot { fill: var(--g-ghost); fill-opacity: .22; stroke: var(--g-ghost); stroke-dasharray: 3 2; stroke-width: 2; }
+/* a ghost hangs on a thread from the paper it is alike to */
+.graph-thread { stroke: var(--g-ghost); stroke-width: 1.2; stroke-dasharray: 2 4; opacity: .55; vector-effect: non-scaling-stroke; }
+.graph-thread.dim { opacity: .12; }
+.graph-ghost:hover .graph-dot { fill-opacity: .35; }
+.graph-ghosts h3 { color: var(--g-ghost); }
+.graph-halo { fill: none; stroke: var(--g-saved); stroke-width: 2.5; }
+/* being read: a light running around it */
+.graph-scan { fill: none; stroke: var(--link); stroke-width: 2.5; stroke-dasharray: .25 .75; animation: graphscan 1.4s linear infinite; }
+@keyframes graphscan { to { stroke-dashoffset: -1; } }
+.graph-label { fill: var(--text); text-anchor: middle; paint-order: stroke; stroke: var(--surface); stroke-width: 4px;
+    stroke-linejoin: round; pointer-events: none; font-weight: 500; }
+.graph-node.center .graph-label { font-weight: 700; }
+.graph-tip { position: absolute; max-width: 250px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 10px;
+    background: var(--surface); box-shadow: 0 6px 24px rgba(0, 0, 0, .14); font-size: 13px; line-height: 1.35; pointer-events: none; }
+.graph-tip .muted { font-size: 12px; margin-top: 3px; }
+
+.graph-side { display: flex; flex-direction: column; gap: 12px; }
+.graph-side .card { margin: 0; }
+.graph-panel { border-left: 4px solid var(--g-other); }
+.graph-panel.analyzed { border-left-color: var(--link); }
+.graph-panel-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px; }
+.graph-saved { color: var(--g-saved); }
 .graph-title { font-size: 16px; margin: 6px 0; line-height: 1.35; }
 .graph-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.graph-top h3 { margin: 0 0 4px; font-size: 15px; }
+.graph-top p { margin: 0 0 6px; }
+.graph-top ol { margin: 0; padding-left: 20px; font-size: 13px; }
+.graph-top li { margin: 4px 0; }
+.graph-top li .muted.small { margin: 0; }
+.graph-top .linkbtn { text-align: left; font-size: 13px; }
 @media (max-width: 760px) {
     .graph-wrap { grid-template-columns: 1fr; }
-    .graph-canvas { height: 60vh; }
+    .graph-canvas { height: 62vh; }
+    .graph-tip { display: none; }
 }
-@media (prefers-reduced-motion: reduce) { .graph-node.queued circle { animation-duration: 3s; } }
+@media (prefers-reduced-motion: reduce) { .graph-scan { animation-duration: 4s; } .graph-edge, .graph-node.fresh .graph-dot { animation: none; } }

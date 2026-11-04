@@ -328,3 +328,25 @@ def test_a_refs_db_without_the_requests_table_gets_it(tmp_path):
     with db.get_refs_db(path) as rdb:
         rdb.request('2601.00001')
         assert rdb.requested() == ['2601.00001'] and rdb.status_of(['2601.00001']) == {}
+
+
+def test_graph_topics_and_alike_papers(monkeypatch):
+    import numpy as np
+
+    import serve
+
+    rng = np.random.default_rng(0)
+    x = rng.normal(size=(50, 8)).astype(np.float32)
+    x /= np.linalg.norm(x, axis=1, keepdims=True)
+    pids = [f'2601.{i:05d}' for i in range(50)]
+    features = {'x_emb': x, 'pids': pids, 'ptoi': {p: i for i, p in enumerate(pids)}, '_version': 'test'}
+    monkeypatch.setattr(serve, 'neighbours', lambda pid: (pids[1:10], pids[10:12], 9))
+    # the papers nearest in content that aren't linked already, best first
+    near = serve.ghosts(features, pids[0], set(pids[:12]))
+    sims = x @ x[0]
+    assert [p for p, _ in near] == [pids[i] for i in np.argsort(-sims) if i >= 12][: serve.GHOSTS]
+    # every paper with an embedding gets a height on the root's topic axis, the same on every call
+    nodes = [{'id': p} for p in pids[:12]] + [{'id': '2601.99999'}]
+    serve.add_topics(features, nodes, serve.topic_axis(features, pids[0]))
+    assert all(-3 <= n['topic'] <= 3 for n in nodes[:12]) and 'topic' not in nodes[-1]
+    assert serve.topic_axis(features, pids[0]) is serve.topic_axis(features, pids[0])

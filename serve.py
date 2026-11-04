@@ -1710,22 +1710,124 @@ def graph_nodes(ids):
     return out
 
 
-@app.route('/ui/graph')
-def ui_graph():
-    """one paper's neighbourhood: the papers it cites and the analyzed ones citing it, with the links among them"""
-    pid = request.args.get('pid', '').strip()
-    if not PAPER_ID_RE.match(pid):
-        return {'error': 'Not an arXiv id.'}, 400
+def neighbours(pid):
+    """(the papers pid cites, the analyzed papers citing it, how many references it has)"""
     rdb = _refs_db()
     _, _, rows = rdb.references_of(pid)
     cited = [c for c in dict.fromkeys(r[1] for r in rows if r[1]) if c != pid]
     citing = [c for c in rdb.citing(pid) if c != pid]
+    return cited, citing, len(rows)
+
+
+# the graph's second axis, topic: the main direction in which the embeddings of the root paper's
+# neighbourhood differ (their first principal component). papers on similar topics then sit at
+# similar heights, so threads of work show up as bands. fixed per root and features, so papers
+# added later land on the same scale. ~1 ms for a few hundred papers
+_axes = OrderedDict()
+TOPIC_NEIGHBOURS = 300
+
+
+def topic_axis(features, root):
+    key = (root, features['_version'])
+    if key in _axes:
+        return _axes[key]
+    cited, citing, _ = neighbours(root)
+    rows = emb_rows(features, [root] + cited + citing)
+    axis = None
+    if len(rows) >= 4:
+        x = np.asarray(features['x_emb'][sorted(rows.values())[:TOPIC_NEIGHBOURS]], dtype=np.float32)
+        mean = x.mean(axis=0)
+        pc = np.linalg.svd(x - mean, full_matrices=False)[2][0]
+        proj = (x - mean) @ pc
+        if proj.max() < -proj.min():  # a fixed sign: the longer tail goes down
+            pc, proj = -pc, -proj
+        axis = (mean, pc, float(proj.std()) or 1.0)
+    _axes[key] = axis
+    while len(_axes) > 200:
+        _axes.popitem(last=False)
+    return axis
+
+
+def emb_rows(features, pids):
+    """{pid: row} of the papers that have an embedding"""
+    if not has_embeddings(features):
+        return {}
+    mask = features.get('emb_mask')
+    ptoi = features['ptoi']
+    return {p: ptoi[p] for p in dict.fromkeys(pids) if p in ptoi and (mask is None or mask[ptoi[p]])}
+
+
+def add_topics(features, nodes, axis):
+    """each node's height on the topic axis, about -3 to 3; none for papers without an embedding"""
+    rows = emb_rows(features, [n['id'] for n in nodes])
+    if axis is None or not rows:
+        return
+    mean, pc, scale = axis
+    ids = list(rows)
+    proj = (np.asarray(features['x_emb'][[rows[p] for p in ids]], dtype=np.float32) - mean) @ pc / scale
+    topic = dict(zip(ids, np.clip(proj, -3, 3).astype(float).round(3).tolist(), strict=True))
+    for n in nodes:
+        if n['id'] in topic:
+            n['topic'] = topic[n['id']]
+
+
+GHOSTS = 8  # papers close in content to the root paper, but not linked to it by a citation
+
+
+def ghosts(features, pid, skip):
+    """the papers whose embeddings are nearest to pid's, leaving out skip: related work nobody cited"""
+    rows = emb_rows(features, [pid])
+    if pid not in rows:
+        return []
+    x = features['x_emb']
+    q = np.asarray(x[rows[pid]], dtype=np.float32)
+    sims = np.empty(x.shape[0], dtype=np.float32)
+    for i in range(0, x.shape[0], 65536):  # in chunks: never a float copy of the whole matrix
+        sims[i : i + 65536] = np.asarray(x[i : i + 65536], dtype=np.float32) @ q
+    mask = features.get('emb_mask')
+    if mask is not None:
+        sims[~np.asarray(mask, dtype=bool)] = -1
+    top = np.argpartition(-sims, GHOSTS + len(skip) + 1)[: GHOSTS + len(skip) + 1]
+    pids = features['pids']
+    out = [(pids[i], float(sims[i])) for i in top[np.argsort(-sims[top])] if pids[i] not in skip and pids[i] != pid]
+    return out[:GHOSTS]
+
+
+@app.route('/ui/graph')
+def ui_graph():
+    """
+    one paper's neighbourhood: the papers it cites and the analyzed ones citing it, with the links
+    among them, each with its height on the root paper's topic axis; for the root itself also the
+    papers closest to it in content that no citation links to it
+    """
+    pid = request.args.get('pid', '').strip()
+    root = request.args.get('root', '').strip() or pid
+    if not PAPER_ID_RE.match(pid) or not PAPER_ID_RE.match(root):
+        return {'error': 'Not an arXiv id.'}, 400
+    rdb = _refs_db()
+    cited, citing, n_refs = neighbours(pid)
     ids = [pid] + cited[:GRAPH_MAX] + citing[:GRAPH_MAX]
+    nodes = graph_nodes(ids)
+    near = []
+    try:  # the topic axis and the related papers only decorate the graph
+        if features_exist():
+            features = get_features()
+            axis = topic_axis(features, root)
+            if pid == root and not rate_limited('rank'):  # reads every embedding once
+                near = ghosts(features, pid, set(ids))
+            ghost_nodes = graph_nodes([p for p, _ in near])
+            for n, (_, sim) in zip(ghost_nodes, near, strict=True):
+                n['similarity'] = round(sim, 3)
+            near = ghost_nodes
+            add_topics(features, nodes + near, axis)
+    except Exception as e:
+        print("graph topics of %s: %s" % (pid, e))
     return {
         'pid': pid,
-        'nodes': graph_nodes(ids),
+        'nodes': nodes,
+        'ghosts': near,
         'edges': rdb.edges_among(ids),
-        'n_refs': len(rows),
+        'n_refs': n_refs,
         'n_cited': len(cited),
         'n_citing': len(citing),
         'queue': rdb.requested(),

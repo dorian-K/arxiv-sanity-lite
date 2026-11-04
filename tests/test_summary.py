@@ -108,7 +108,7 @@ def test_saved_papers_are_summarized_from_their_text(client, corpus, monkeypatch
     assert len(asked) == n and len(summaries_on) == 2  # done is done
 
     # cards carry it
-    saved = {p['id']: p for p in client.get('/?rank=saved&tags=cv&format=json').get_json()['papers']}
+    saved = {p['id']: p for p in client.get('/ui/list?rank=saved&tags=cv').get_json()['papers']}
     assert saved[with_html]['ai']['problem'].startswith('About')
     # and agents get it
     r = client.get(f'/api/get_papers?ids={with_html}').get_json()
@@ -147,9 +147,9 @@ def test_pages_get_summaries_from_the_abstract_in_the_background(client, corpus,
     pids = sorted(corpus)[:3]
     # visitors who aren't logged in never start a model call
     assert client.post('/summaries', data={'pids': ','.join(pids)}).get_json() == {'summaries': {}, 'pending': []}
-    assert b'var summariesAsk = false' in client.get('/').data
+    assert client.get('/ui/me').get_json()['summaries_ask'] is False
     login(client)
-    assert b'var summariesAsk = true' in client.get('/').data
+    assert client.get('/ui/me').get_json()['summaries_ask'] is True
     r = client.post('/summaries', data={'pids': ','.join(pids + ['nope'])}).get_json()
     assert r['summaries'] == {} and sorted(r['pending']) == pids  # being made
     assert wait_for(lambda: len(summaries_on) == 3)
@@ -158,7 +158,7 @@ def test_pages_get_summaries_from_the_abstract_in_the_background(client, corpus,
     r = client.post('/summaries', data={'pids': ','.join(pids)}).get_json()
     assert r['pending'] == [] and r['summaries'][pids[0]]['source'] == 'abstract'
     assert len(summaries_on) == 3  # made once
-    papers = client.get('/?rank=time&format=json').get_json()['papers']
+    papers = client.get('/ui/list?rank=time').get_json()['papers']
     assert {p['id']: p['ai'] for p in papers if p['ai']}.keys() == set(pids)
 
     # a failure is tried again a day later, at most three times
@@ -177,7 +177,7 @@ def test_pages_get_summaries_from_the_abstract_in_the_background(client, corpus,
     # off: nothing at all
     monkeypatch.setenv('SUMMARIES_ENABLED', '0')
     assert client.post('/summaries', data={'pids': ','.join(pids)}).get_json() == {'summaries': {}, 'pending': []}
-    assert all(p['ai'] is None for p in client.get('/?rank=time&format=json').get_json()['papers'])
+    assert all(p['ai'] is None for p in client.get('/ui/list?rank=time').get_json()['papers'])
 
 
 def test_every_paper_in_the_digest_mail_has_a_summary(features, corpus, monkeypatch, tmp_path, summaries_on):
@@ -242,13 +242,12 @@ def test_a_refs_db_without_the_summaries_table_opens(tmp_path):
 
 def test_which_tab_cards_open_on_is_a_setting(client, monkeypatch, summaries_on):
     login(client)
-    page = client.get('/profile').data
-    assert b'Paper cards' in page and b'var cardTab = "summary"' in page
+    me = lambda: client.get('/ui/me').get_json()
+    assert me()['card_tab'] == 'summary' and me()['summaries_on']
     client.post('/card_tab', data={'tab': 'abstract'})
-    assert db.get_user('alice')['card_tab'] == 'abstract'
-    assert b'var cardTab = "abstract"' in client.get('/').data
+    assert db.get_user('alice')['card_tab'] == 'abstract' and me()['card_tab'] == 'abstract'
     assert db.export_user('alice')['paper_cards_open_on'] == 'abstract'
-    assert client.post('/card_tab', data={'tab': 'summary', 'ajax': '1'}).data == b'ok'  # a card's suggestion
+    assert client.post('/card_tab', data={'tab': 'summary'}).get_json() == {'ok': True}  # a card's suggestion
     assert db.get_user('alice')['card_tab'] == ''
     monkeypatch.setenv('SUMMARIES_ENABLED', '0')
-    assert b'Paper cards' not in client.get('/profile').data
+    assert not me()['summaries_on']  # the profile leaves the setting out then

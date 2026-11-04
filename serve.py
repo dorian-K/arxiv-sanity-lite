@@ -11,6 +11,7 @@ import os
 import sys
 import re
 import json
+import base64
 import hashlib
 from urllib.parse import urlparse, quote
 import time
@@ -137,8 +138,19 @@ def rate_limited(kind, client=None):
         return False
 
 
+def wants_json():
+    """
+    a request of the app (static/app): its data (/ui/...) and the actions it posts with
+    Accept: application/json. the few pages still made here (oauth consent, email links) post
+    plain forms and get pages back
+    """
+    return request.path.startswith('/ui/') or request.accept_mimetypes.best == 'application/json'
+
+
 def error_page(title, message, code):
-    """an error as a page of the site, for requests a person made (not the page's own fetches)"""
+    """an error: {error, title} for the app, which shows it in place, else a page of the site"""
+    if wants_json():
+        return {'error': message, 'title': title}, code
     return render_template('error.html', title=title, message=message, **default_context()), code
 
 
@@ -147,10 +159,8 @@ def too_many(kind):
     window = f"{per // 60} minutes" if per >= 120 else f"{per} seconds"
     msg = f"Too many requests ({n} per {window} for this kind of request), please wait a bit."
     headers = {'Retry-After': str(max(1, per // n))}
-    if request.args.get('format') == 'json' or request.endpoint == 'tag_check':
-        return msg, 429, headers  # shown by the page that asked
-    page, code = error_page('Slow down a little', msg, 429)
-    return page, code, headers
+    body, code = error_page('Slow down a little', msg, 429)
+    return body, code, headers
 
 
 # -----------------------------------------------------------------------------
@@ -308,7 +318,7 @@ def _start_session(user, readonly=False):
         session['readonly'] = True
 
 
-SHAREABLE = ('main', 'digest_page', 'digest_more', 'tag_check')  # pages a ?u= link can show for another user
+SHAREABLE = ('ui_list', 'ui_digest', 'digest_more', 'tag_check')  # data a ?u= link can show of another user
 AGENT_ENDPOINTS = (
     'agents.mcp',
     'agents.mcp_me',
@@ -404,10 +414,10 @@ def record_timing(resp):
 
 
 # everything comes from this server: no third party ever sees a visitor's ip (GDPR), and the
-# browser enforces it. inline scripts/styles: the templates pass data in <script> blocks and
-# KaTeX positions math with inline styles
+# browser enforces it. no inline scripts (the app is modules, its data comes from /ui/); inline
+# styles because KaTeX positions math with them
 CSP = (
-    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
     "img-src 'self' data:; font-src 'self'; connect-src 'self'; form-action 'self'; "
     "frame-ancestors 'none'; base-uri 'self'"
 )
@@ -661,29 +671,6 @@ def _model_key(features, user, tags, pos, neg, feats, model, C):
     feats, model = resolve_feats(features, feats), resolve_model(features, model)
     stored = not tags.startswith('pid:')
     return (user if stored else '', tags, f'{feats}|{model}|{C}', fingerprint(pos, neg), features['_version'])
-
-
-def models_ready(tags, mix, C, feats, model):
-    """
-    whether ranking by these tags of the page's owner trains nothing: every model it needs is
-    in memory or models.sqlite (usually, after the refit that follows a vote). then the page
-    ranks right away (~15 ms for 30 days) instead of sending a placeholder and a second request
-    """
-    features = get_features()
-    tags_db, neg_db = get_tags(), get_neg_tags()
-    names = (own_tags(tags_db) if tags == 'all' else {t for t in tags.split(',') if t}) if mix == 'turns' else set()
-    if len(names) < 2:  # as in _ranked: turns need two tags
-        names = {tags}
-    for t in names:
-        pos, neg = training_set(tags_db, neg_db, t)
-        key = _model_key(features, g.owner or '', t, pos, neg, feats, model, C)
-        with _models_lock:
-            if key in _models:
-                continue
-        if not (pos & features['ptoi'].keys()) or db.has_model(*key):  # nothing to train, or stored
-            continue
-        return False
-    return True
 
 
 def get_model(features, user, tags, pos, neg, feats='auto', model='auto', C=None):
@@ -972,8 +959,8 @@ def default_context():
 
 
 RANKS = ('search', 'tags', 'saved', 'unread', 'down', 'cited', 'pid', 'time', 'random')
-# training a model over every paper takes seconds on a big corpus: the page comes back at
-# once with a placeholder and fetches these results in the background (?format=json)
+# rankings that train a model, seconds on a big corpus unless it is cached: the app shows a
+# skeleton of the list meanwhile (static/app/papers.js)
 SLOW_RANKS = ('tags', 'pid')
 # results are cached per user and query, so paging, going back and reloading are instant.
 # a vote changes the user's tags and with them the key; the TTL covers "last N days"
@@ -1174,18 +1161,18 @@ def _notice(opt_rank, opt_pid, res, features_ok):
     )
 
 
-@app.route('/', methods=['GET'])
-def main():
+@app.route('/ui/list')
+def ui_list():
+    """a list of papers, the app's main page (/ and its ?rank=... in the address bar): the same query"""
 
     # default settings
     default_rank = 'time'
     default_tags = ''
     default_time_filter = ''
     default_skip_have = 'no'
-    # (format, page_number, u and published don't count: the page fetches its results as
-    # /?format=json, page 2 of the default is /?page_number=2, ?u= is a shared link, and
-    # published=yes a filter on top; all stay "For you")
-    if not (set(request.args) - {'format', 'page_number', 'u', 'published'}) and get_tags():
+    # (page_number, u and published don't count: page 2 of the default is /?page_number=2, ?u=
+    # is a shared link, and published=yes a filter on top; all stay "For you")
+    if not (set(request.args) - {'page_number', 'u', 'published'}) and get_tags():
         # the main use: a user with tags lands on the best recent papers for them (FOR_YOU_DAYS)
         default_rank, default_tags, default_time_filter, default_skip_have = 'tags', 'all', str(FOR_YOU_DAYS), 'yes'
 
@@ -1202,7 +1189,6 @@ def main():
     opt_mix = request.args.get('mix', 'one')  # several tags: one model on all of them, or one per tag taking turns
     opt_published = request.args.get('published') == 'yes'  # only papers accepted/published somewhere
     opt_page_number = request.args.get('page_number', '1')  # page number for pagination
-    want_json = request.args.get('format') == 'json'  # the page fetching slow results, see SLOW_RANKS
 
     # if a query is given, override rank to be of type "search"
     # this allows the user to simply hit ENTER in the search field and have the correct thing happen
@@ -1267,13 +1253,7 @@ def main():
     cacheable = opt_rank in ('search', 'tags', 'pid') and page_number * RET_NUM <= RANK_CACHE_RESULTS
     key = (g.owner, query, features_ok and db.features_version(), db.db_mtime(PAPERS_DB_FILE), _tags_fingerprint())
     res = _rank_cache_get(key) if cacheable else None
-    pending = res is None and opt_rank in SLOW_RANKS and features_ok and not want_json
-    if pending and opt_rank == 'tags':
-        try:
-            pending = not models_ready(opt_tags, opt_mix, C, opt_feats, opt_model)
-        except Exception as e:  # only a shortcut: the placeholder path still works
-            print("checking for cached models failed: %s" % (e,))
-    if res is None and not pending:
+    if res is None:
         if opt_rank in ('tags', 'pid', 'search') and rate_limited('search' if opt_rank == 'search' else 'rank'):
             return too_many('search' if opt_rank == 'search' else 'rank')
         # enough for the cache, or for this page and whether there is a next one
@@ -1285,30 +1265,24 @@ def main():
             _rank_cache_put(key, res)
 
     # the requested page, rendered to just the information the UI needs
-    papers, has_next, words = [], False, []
-    notice = _notice(opt_rank, opt_pid, res, features_ok) if res is not None else ''
-    if res is not None and res.get('cited'):
-        notice = _cited_notice(res['cited'])
-    if res is not None:
-        start_index = (page_number - 1) * RET_NUM
-        pids = res['pids'][start_index : start_index + RET_NUM]
-        has_next = len(res['pids']) > start_index + RET_NUM
-        found = get_papers().get_many(pids)
-        for i, pid in enumerate(pids, start=start_index):
-            if pid not in found:
-                continue  # e.g. a paper gone from the database: skip it, keeping scores aligned
-            p = render_pid(pid, found[pid])
-            p['weight'] = res['scores'][i]
-            if res['pct']:
-                p['pct'] = res['pct'][i]
-            if res['for_tag']:
-                p['for_tag'] = res['for_tag'][i]  # picked by this tag (see _ranked_tags_in_turns)
-            papers.append(p)
-        words = res['words']
-    # the kind of list, for /stats: the first response of a slow one is just the placeholder
-    g.metric_name = f"list:{opt_rank}" + (':results' if want_json else ':placeholder' if pending else '')
-    if want_json:
-        return {'papers': papers, 'words': words, 'has_next': has_next, 'notice': notice}
+    papers = []
+    notice = _cited_notice(res['cited']) if res.get('cited') else _notice(opt_rank, opt_pid, res, features_ok)
+    start_index = (page_number - 1) * RET_NUM
+    pids = res['pids'][start_index : start_index + RET_NUM]
+    has_next = len(res['pids']) > start_index + RET_NUM
+    found = get_papers().get_many(pids)
+    for i, pid in enumerate(pids, start=start_index):
+        if pid not in found:
+            continue  # e.g. a paper gone from the database: skip it, keeping scores aligned
+        p = render_pid(pid, found[pid])
+        p['weight'] = res['scores'][i]
+        if res['pct']:
+            p['pct'] = res['pct'][i]
+        if res['for_tag']:
+            p['for_tag'] = res['for_tag'][i]  # picked by this tag (see _ranked_tags_in_turns)
+        papers.append(p)
+    words = res['words']
+    g.metric_name = f"list:{opt_rank}"  # the kind of list, for /stats
 
     # the user's tags, and 'all' for all of them together (the "For you" page)
     tags = get_tags()
@@ -1316,8 +1290,7 @@ def main():
     if rtags:
         rtags.insert(0, {'name': 'all'})
 
-    # build the page context information and render
-    context = default_context()
+    context = page_info()
     context['papers'] = papers
     context['tags'] = rtags
     context['words'] = words
@@ -1376,15 +1349,15 @@ def main():
     )
     context['gvars']['has_emb'] = features_ok and has_embeddings(load_features())
     context['gvars']['page_number'] = str(page_number)
-    context['gvars']['has_next'] = has_next
-    context['gvars']['pending'] = pending
-    context['gvars']['notice'] = notice
+    context['has_next'] = has_next
+    context['notice'] = notice
     context['for_you_days'] = FOR_YOU_DAYS
-    return render_template('index.html', **context)
+    return context
 
 
-@app.route('/inspect', methods=['GET'])
-def inspect():
+@app.route('/ui/inspect')
+def ui_inspect():
+    """one paper and the words it is indexed by (/inspect?pid=)"""
 
     # fetch the paper of interest based on the pid
     pid = request.args.get('pid', '')
@@ -1422,22 +1395,37 @@ def inspect():
         )
     words.sort(key=lambda w: w['weight'], reverse=True)
 
-    # package everything up and render
-    paper = render_pid(pid)
-    context = default_context()
-    context['paper'] = paper
-    context['words'] = words
-    context['words_desc'] = (
-        "The following are the tokens and their (tfidf) weight in the paper vector. This is the actual summary that feeds into the SVM to power recommendations, so hopefully it is good and representative!"
-    )
-    return render_template('inspect.html', **context)
+    return {
+        'paper': render_pid(pid),
+        'words': words,
+        'words_desc': (
+            "The following are the tokens and their (tfidf) weight in the paper vector. This is the actual summary "
+            "that feeds into the SVM to power recommendations, so hopefully it is good and representative!"
+        ),
+    }
 
 
-@app.route('/profile')
-def profile(error=''):
+def me():
+    """who is looking and what they may do: the app asks once (/ui/me), and again after logging in or out"""
     context = default_context()
-    context['error'] = error
+    del context['not_shared']  # per page: /ui/list and /ui/digest say it
     context['allow_signup'] = ALLOW_SIGNUP
+    return context
+
+
+@app.route('/ui/me')
+def ui_me():
+    return me()
+
+
+def page_info():
+    """whose tags a shared page (?u=) shows, for its banner"""
+    return {'owner': g.owner or '', 'viewing': g.viewing, 'not_shared': g.not_shared}
+
+
+@app.route('/ui/profile')
+def ui_profile():
+    context = {}
     user = db.get_user(g.user) if g.user and not g.readonly else None  # the email stays private
     context['email'] = user['email'] if user else ''
     context['pending_email'] = user['pending_email'] if user else ''
@@ -1445,7 +1433,6 @@ def profile(error=''):
         time.strftime('%b %d %Y', time.localtime(user['email_confirmed'])) if user and user['email_confirmed'] else ''
     )
     context['public'] = bool(user and user['public'])
-    context['summaries_on'] = summary.enabled()
     sizes = db.get_digest_sizes(g.user) if user else {}
     context['digest_tags'] = (
         [{'name': t, 'n': sizes.get(t, digest.default_size(t))} for t in sorted(get_tags())] if user else []
@@ -1453,15 +1440,18 @@ def profile(error=''):
     context['max_per_tag'] = digest.MAX_PER_TAG
     context['digest_days'] = db.get_digest_days(g.user) if user else db.DIGEST_DAYS
     context['max_digest_days'] = db.DIGEST_DAYS_MAX
-    context['saved_sizes'] = request.args.get('saved') == '1'
-    return render_template('profile.html', **context)
+    return context
+
+
+def not_logged_in():
+    return {'error': 'Please log in first.'}, 403
 
 
 @app.route('/digest_sizes', methods=['POST'])
 def digest_sizes():
     """papers per tag in the user's digest (0 = leave the tag out)"""
     if g.user is None:
-        return redirect(url_for('profile'))
+        return not_logged_in()
     try:
         db.set_digest_days(g.user, request.form.get('days', ''))
     except ValueError:
@@ -1475,7 +1465,7 @@ def digest_sizes():
         except ValueError:
             continue
         db.set_digest_size(g.user, tag, None if n == digest.default_size(tag) else n)
-    return redirect(url_for('profile', saved=1, _anchor='digest-sizes'))
+    return {'ok': True}
 
 
 def _local_url(url):
@@ -1487,32 +1477,26 @@ def _local_url(url):
 def card_tab():
     """what the user's paper cards open on: the AI summary or the abstract (also from a card's suggestion)"""
     if g.user is None:
-        return redirect(url_for('profile'))
+        return not_logged_in()
     db.set_card_tab(g.user, request.form.get('tab', ''))
-    if request.form.get('ajax'):
-        return 'ok'
-    return redirect(url_for('profile', _anchor='cards'))
+    return {'ok': True}
 
 
 @app.route('/sharing', methods=['POST'])
 def sharing():
     """the user's choice whether others may view their tags read-only, without the password"""
     if g.user is None:
-        return redirect(url_for('profile'))
+        return not_logged_in()
     db.set_public(g.user, request.form.get('public') == '1')
-    if session.pop('ask_public', None):  # answered the question after signing up: back where they were
-        nxt = request.form.get('next', '')
-        return redirect(nxt if _local_url(nxt) else url_for('main'))
-    return redirect(url_for('profile'))
+    session.pop('ask_public', None)  # the question after signing up is answered
+    return {'ok': True}
 
 
 # what the kinds of pages on /stats are (aslite/metrics.py names them by endpoint or list)
 STAT_LABELS = {
-    'list:tags': 'Recommendations, with results right away',
-    'list:tags:placeholder': 'Recommendations, placeholder first (a model to train)',
-    'list:tags:results': 'Recommendations, the results after the placeholder',
-    'list:pid:placeholder': 'Similar papers, placeholder first',
-    'list:pid:results': 'Similar papers, the results',
+    'shell': 'The app (the same html for every address)',
+    'ui_me': 'Who is logged in (once per visit)',
+    'list:tags': 'Recommendations',
     'list:pid': 'Similar papers',
     'list:search': 'Search',
     'list:time': 'Newest',
@@ -1537,20 +1521,20 @@ STAT_LABELS = {
     'delete_tag': 'Delete a tag',
     'copy_tag': 'Copy a tag',
     'import_papers': 'Import papers',
-    'digest_page': 'Digest',
+    'ui_import': 'Import page',
+    'ui_digest': 'Digest',
+    'make_digest': 'Digest: make a fresh one',
     'digest_more': 'Digest: load more',
     'digest_sizes': 'Digest settings',
     'card_tab': 'Card setting (summary or abstract)',
     'summaries': 'AI summaries a page asks for',
     'thumb': 'Thumbnails',
-    'inspect': 'Paper details',
+    'ui_inspect': 'Paper details',
     'tag_check': 'Tag check',
-    'profile': 'Profile',
+    'ui_profile': 'Profile',
     'sharing': 'Public profile setting',
-    'stats': 'Stats',
-    'about': 'About',
-    'privacy': 'Privacy',
-    'imprint': 'Imprint',
+    'ui_stats': 'Stats',
+    'ui_page': 'About, privacy, imprint',
     'login': 'Log in',
     'logout': 'Log out',
     'agents.agents_page': 'Agents page',
@@ -1584,9 +1568,9 @@ def fmt_ago(t):
     return fmt_seconds(max(0.0, time.time() - t)) + ' ago'
 
 
-@app.route('/stats')
-def stats():
-    context = default_context()
+@app.route('/ui/stats')
+def ui_stats():
+    context = {}
     tarr = get_times()[2]  # newest first
     tstr = lambda t: time.strftime('%b %d %Y', time.localtime(t))
     context['num_papers'] = len(tarr)
@@ -1660,7 +1644,7 @@ def stats():
         enrich['day'] = sum(j[3].get('papers', 0) for j in day)
         enrich['left'] = runs('enrich')[-1][3].get('left') if runs('enrich') else None
     context['enrich'] = enrich
-    return render_template('stats.html', **context)
+    return context
 
 
 @app.route('/health')
@@ -1669,10 +1653,49 @@ def health():
     return 'ok'
 
 
-@app.route('/about')
-def about():
-    context = default_context()
-    return render_template('about.html', categories=categories_text(), **context)
+# operator details for the privacy policy and imprint, from the environment (see .env.example)
+OPERATOR = {k: os.environ.get('OPERATOR_' + k.upper(), '') for k in ('name', 'address', 'email', 'hosting')}
+TEXT_PAGES = ('about', 'privacy', 'imprint')
+
+
+@app.route('/ui/page/<name>')
+def ui_page(name):
+    """the text pages, as html the app shows: they stay templates (templates/pages/), the legal ones checked in with the code"""
+    if name not in TEXT_PAGES:
+        return {'error': 'no such page'}, 404
+    return {'html': render_template(f'pages/{name}.html', operator=OPERATOR, categories=categories_text())}
+
+
+# every page of the site is the app (static/app): one html file that loads its modules, which
+# then fetch the page's data from /ui/. the addresses stay what they were, so links and
+# bookmarks keep working
+APP_PAGES = ('/', '/digest', '/profile', '/import', '/inspect', '/stats', '/agents') + tuple(
+    '/' + p for p in TEXT_PAGES
+)
+SHELL_FILE = os.path.join(app.static_folder, 'app', 'index.html')
+STATIC_REF = re.compile(r'"/static/([^"?]+\.(?:js|css))"')
+IMPORT_MAP = re.compile(r'<script type="importmap">(.*?)</script>', re.S)
+
+
+def shell():
+    """
+    the app's html: every /static url in it gets its file's mtime (?v=), like url_for does, so
+    the modules can be cached for good and an update still reaches everyone. the CSP allows
+    the one inline script, the import map, by its hash
+    """
+    with open(SHELL_FILE) as f:
+        text = f.read()
+    text = STATIC_REF.sub(lambda m: '"' + url_for('static', filename=m.group(1)) + '"', text)
+    m = IMPORT_MAP.search(text)
+    digest_ = base64.b64encode(hashlib.sha256(m.group(1).encode()).digest()).decode() if m else ''
+    resp = app.response_class(text, mimetype='text/html')
+    resp.headers['Cache-Control'] = 'no-cache'
+    resp.headers['Content-Security-Policy'] = CSP.replace("script-src 'self'", f"script-src 'self' 'sha256-{digest_}'")
+    return resp
+
+
+for _path in APP_PAGES:
+    app.add_url_rule(_path, 'shell', shell, methods=['GET'])
 
 
 # -----------------------------------------------------------------------------
@@ -1809,7 +1832,7 @@ def delete_tag(tag=None):
 def copy_tag():
     """takes over a tag someone shares: its papers and downvotes, into one of the user's own tags"""
     if g.user is None:
-        return redirect(url_for('profile'))
+        return not_logged_in()
     owner, tag = request.form.get('owner', ''), request.form.get('tag', '')
     new = request.form.get('as', '').strip() or tag
     o = db.get_user(owner) if owner != g.user else None
@@ -1828,7 +1851,7 @@ def copy_tag():
         db.tag_paper(g.user, pid, new, neg=True)  # downvotes too, unless the user likes the paper there
     prefit_later(g.user, new, 'all')
     print("user %s copied tag %s of %s as %s" % (g.user, tag, owner, new))
-    return redirect('/?rank=tags&tags=%s&skip_have=yes' % quote(new, safe=''))
+    return {'ok': True, 'url': '/?rank=tags&tags=%s&skip_have=yes' % quote(new, safe='')}
 
 
 def fetch_missing(wanted):
@@ -1862,30 +1885,30 @@ def fetch_missing(wanted):
     return have, fetched, over, failed
 
 
-@app.route('/import', methods=['GET', 'POST'])
+@app.route('/ui/import')
+def ui_import():
+    """the add page: its limits, and the user's tags, suggested by the tag field (a new name creates a tag)"""
+    user_tags = sorted(set(db.get_tags(g.user)) | set(db.get_tags(g.user, neg=True))) if g.user else []
+    return {'limit': FETCH_LIMIT_USER, 'max_lines': IMPORT_MAX_LINES, 'user_tags': user_tags}
+
+
+@app.route('/import', methods=['POST'])
 def import_papers():
     """add papers by arXiv url or id, one per line, fetching the ones we don't have"""
-    context = default_context()
-    context.update(results=[], text='', tag='', error='', limit=FETCH_LIMIT_USER, max_lines=IMPORT_MAX_LINES)
-    # the user's tags, suggested by the tag field (a new name creates a tag)
-    context['user_tags'] = sorted(set(db.get_tags(g.user)) | set(db.get_tags(g.user, neg=True))) if g.user else []
-    if request.method == 'GET' or g.user is None:
-        return render_template('import.html', **context)
+    if g.user is None:
+        return not_logged_in()
     if rate_limited('import'):
         return too_many('import')
 
     text = request.form.get('text', '')
     tag = request.form.get('tag', '').strip()
-    context.update(text=text, tag=tag)
     # a tag is required: untagged papers would only sit in the database, found by search alone
     err = _check_tag(tag) if tag else "Pick a tag for these papers, or type a new one."
     if err:
-        context['error'] = err
-        return render_template('import.html', **context), 400
+        return {'error': err}, 400
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     if len(lines) > IMPORT_MAX_LINES:
-        context['error'] = f"At most {IMPORT_MAX_LINES} lines at a time."
-        return render_template('import.html', **context), 400
+        return {'error': f"At most {IMPORT_MAX_LINES} lines at a time."}, 400
 
     # one result per line: (input, pid or None, status)
     results, wanted = [], []
@@ -1921,13 +1944,21 @@ def import_papers():
             db.tag_paper(g.user, pid, tag)
     prefit_later(g.user, tag, 'all')
     found = pdb.get_many([r[1] for r in results if r[1]])
-    context['results'] = [
-        {'line': line, 'pid': pid, 'status': status, 'title': found[pid]['title'] if pid in found else ''}
-        for line, pid, status in results
-    ]
-    context['n_new'] = len(fetched)
-    context['features'] = load_features()['ptoi'] if features_exist() else {}
-    return render_template('import.html', **context)
+    indexed = load_features()['ptoi'] if features_exist() else {}
+    return {
+        'results': [
+            {
+                'line': line,
+                'pid': pid,
+                'status': status,
+                'title': found[pid]['title'] if pid in found else '',
+                'indexed': pid in indexed,  # else it counts for recommendations after the next update
+            }
+            for line, pid, status in results
+        ],
+        'n_new': len(fetched),
+        'tag': tag,
+    }
 
 
 # results of /tag_check per (user, tag, its papers, features version); a tag's check only
@@ -1973,27 +2004,29 @@ def tag_check():
     }
 
 
-@app.route('/digest', methods=['GET', 'POST'])
-def digest_page():
+@app.route('/digest', methods=['POST'])
+def make_digest():
+    """a fresh digest, e.g. before the first email or after a lot of rating"""
+    if g.user is None:
+        return not_logged_in()
+    if rate_limited('digest'):
+        return too_many('digest')
+    if not features_exist():
+        return {'error': "No features yet, run compute.py first."}, 400
+    days = db.get_digest_days(g.user)
+    sections = digest.compute_for(g.user, load_features(), get_times()[0], days)
+    db.save_digest(g.user, sections, days)
+    return {'ok': True}
+
+
+@app.route('/ui/digest')
+def ui_digest():
     """the user's latest digest (what the email showed), with thumbs up/down per tag"""
-    context = default_context()
-    context.update(
-        sections=[], digest_time='', digest_days=db.get_digest_days(g.owner) if g.owner else db.DIGEST_DAYS, error=''
-    )
+    context = page_info()
+    context.update(sections=[], digest_time='', digest_days=db.get_digest_days(g.owner) if g.owner else db.DIGEST_DAYS)
     context['tags'] = [{'name': t} for t in get_tags()]  # suggestions in the tag editor
     if g.owner is None:
-        return render_template('digest.html', **context)
-    if request.method == 'POST':
-        # make a fresh one, e.g. before the first email or after a lot of rating
-        if rate_limited('digest'):
-            return too_many('digest')
-        if not features_exist():
-            context['error'] = "No features yet, run compute.py first."
-            return render_template('digest.html', **context)
-        days = db.get_digest_days(g.user)
-        sections = digest.compute_for(g.user, load_features(), get_times()[0], days)
-        db.save_digest(g.user, sections, days)
-        return redirect(url_for('digest_page'))
+        return context
 
     d = db.get_digest(g.owner)
     if d:
@@ -2010,7 +2043,7 @@ def digest_page():
             digest_time=time.strftime('%b %d', time.localtime(d['time'])),
             digest_days=d['days'],
         )
-    return render_template('digest.html', **context)
+    return context
 
 
 DIGEST_MORE = 5  # papers per "load more" on the digest page
@@ -2082,6 +2115,15 @@ def unsubscribe():
 # endpoints to log in and out
 
 
+def login_failed(message, code):
+    """the app shows it on its login form; the oauth consent page (a plain form) gets an error page"""
+    return error_page("Couldn't log in", message, code)
+
+
+def logged_in(nxt):
+    return {'ok': True, 'next': nxt} if wants_json() else redirect(nxt)
+
+
 @app.route('/login', methods=['POST'])
 def login():
     username = request.form.get('username', '').strip()
@@ -2089,9 +2131,9 @@ def login():
     # every attempt counts per ip; failures also per account and ip (below), so nobody can
     # lock a user out by failing logins under their name from somewhere else
     if rate_limited('login', 'ip:' + str(request.remote_addr)):
-        return profile(error="Too many login attempts, please wait a few minutes."), 429
+        return login_failed("Too many login attempts, please wait a few minutes.", 429)
     if not USERNAME_RE.match(username):
-        return profile(error="Usernames are 1-40 letters, digits, '.', '_' or '-'."), 400
+        return login_failed("Usernames are 1-40 letters, digits, '.', '_' or '-'.", 400)
 
     user = db.get_user(username)
     nxt = request.form.get('next', '')
@@ -2100,38 +2142,38 @@ def login():
         # no password: a read-only view, if this user's profile is public
         if user and user['public']:
             _start_session(user, readonly=True)
-            return redirect(url_for('main'))
-        return profile(error="Enter the password. (Without one you can only view accounts that are shared.)"), 403
+            return logged_in('/')
+        return login_failed("Enter the password. (Without one you can only view accounts that are shared.)", 403)
     legacy = user['pw_hash'] is None if user else bool(db.get_tags(username) or db.get_tags(username, neg=True))
     if legacy:
         # made before passwords existed (tags, but no password): claiming it by just picking a password would let
         # anyone take it over, so only the admin can give it one (`flask set-password`)
-        return profile(error="This account has no password yet. Ask the admin of this site to set one."), 403
+        return login_failed("This account has no password yet. Ask the admin of this site to set one.", 403)
     if user is None:
         # a new account. with signups closed, only `flask set-password` can create accounts
         if not ALLOW_SIGNUP:
-            return profile(error="Signups are closed on this server."), 403
+            return login_failed("Signups are closed on this server.", 403)
         if len(password) < MIN_PASSWORD:
-            return profile(error=f"Choose a password of at least {MIN_PASSWORD} characters."), 400
+            return login_failed(f"Choose a password of at least {MIN_PASSWORD} characters.", 400)
         db.set_password(username, generate_password_hash(password))
         print("registered user %s" % (username,))
     elif not check_password_hash(user['pw_hash'], password):
         if rate_limited('login', f'fail:{username}:{request.remote_addr}'):
-            return profile(error="Too many login attempts, please wait a few minutes."), 429
-        return profile(error="Wrong username or password."), 403
+            return login_failed("Too many login attempts, please wait a few minutes.", 429)
+        return login_failed("Wrong username or password.", 403)
 
     _start_session(db.get_user(username))
     if user is None:
         # a new account starts private; the first page asks whether to make it public, with
         # the box ticked (the operator's choice, see CLAUDE.md about Art. 25(2) GDPR)
         session['ask_public'] = True
-    return redirect(nxt or url_for('main'))
+    return logged_in(nxt or '/')
 
 
 @app.route('/logout', methods=['POST'])
 def logout():
     session.clear()
-    return redirect(url_for('profile'))
+    return {'ok': True}
 
 
 @app.cli.command('set-password')
@@ -2165,15 +2207,15 @@ def register_email():
     """
     email = request.form.get('email', '').strip()
     if g.user is None:
-        return redirect(url_for('profile'))
+        return not_logged_in()
     if email == '':
         db.set_email(g.user, '')
-        return redirect(url_for('profile'))
+        return {'ok': True}
     if not EMAIL_RE.match(email) or len(email) > 254:
-        return profile(error="That doesn't look like an email address."), 400
+        return {'error': "That doesn't look like an email address."}, 400
     # per user and per address, so nobody can make the server mail someone over and over
     if rate_limited('confirm') or rate_limited('confirm', 'to:' + email.lower()):
-        return profile(error="Too many confirmation mails today, please try again tomorrow."), 429
+        return {'error': "Too many confirmation mails today, please try again tomorrow."}, 429
     db.request_email(g.user, email)
     token = _confirm_serializer().dumps([g.user, email])
     # PUBLIC_URL, not the request's Host header, which a client could set to their own domain
@@ -2187,8 +2229,8 @@ def register_email():
         mail.send(mail.message(email, 'Confirm your email for Arxiv Resanity', text))
     except Exception as e:  # no mail server configured or reachable
         print("confirmation mail to %s failed: %s" % (email, e))
-        return profile(error="The confirmation mail couldn't be sent. Please try again later."), 503
-    return redirect(url_for('profile'))
+        return {'error': "The confirmation mail couldn't be sent. Please try again later."}, 503
+    return {'ok': True}
 
 
 @app.route('/confirm_email', methods=['GET', 'POST'])
@@ -2210,7 +2252,7 @@ def confirm_email():
 def export_data():
     """everything stored about the logged-in user, as a json download"""
     if g.user is None or g.readonly:
-        return redirect(url_for('profile'))
+        return redirect('/profile')
     resp = app.response_class(json.dumps(db.export_user(g.user), indent=2), mimetype='application/json')
     resp.headers['Content-Disposition'] = f'attachment; filename="arxiv-resanity-{g.user}.json"'
     return resp
@@ -2220,28 +2262,14 @@ def export_data():
 def delete_account():
     """erases the account and everything stored about it, after the password is confirmed"""
     if g.user is None:
-        return redirect(url_for('profile'))
+        return not_logged_in()
     user = db.get_user(g.user)
     if not user or not user['pw_hash'] or not check_password_hash(user['pw_hash'], request.form.get('password', '')):
-        return profile(error="Wrong password, the account was not deleted."), 403
+        return {'error': "Wrong password, the account was not deleted."}, 403
     db.delete_user(g.user)
     print("deleted user %s" % (g.user,))
     session.clear()
-    return render_template('deleted.html', **dict(default_context(), user=''))
-
-
-# operator details for the privacy policy and imprint, from the environment (see .env.example)
-OPERATOR = {k: os.environ.get('OPERATOR_' + k.upper(), '') for k in ('name', 'address', 'email', 'hosting')}
-
-
-@app.route('/privacy')
-def privacy():
-    return render_template('privacy.html', operator=OPERATOR, **default_context())
-
-
-@app.route('/imprint')
-def imprint():
-    return render_template('imprint.html', operator=OPERATOR, **default_context())
+    return {'ok': True}
 
 
 # the tools for AI agents (/mcp, /api, /llms.txt, /agents): registers its routes on app

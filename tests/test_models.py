@@ -27,7 +27,7 @@ def counting_fit(monkeypatch, delay=0.0):
 
 
 def rank_json(client, url):
-    return client.get(url + '&format=json').get_json()['papers']
+    return client.get('/ui/list' + url[1:]).get_json()['papers']
 
 
 def test_a_model_is_trained_once_per_training_set(client, corpus, monkeypatch):
@@ -222,7 +222,7 @@ def test_a_vote_during_a_background_fit_gets_its_own(client, corpus, monkeypatch
     assert len(calls) == n  # the model of the state after the second vote was ready
 
 
-def test_a_page_with_its_models_cached_comes_with_its_results(client, corpus):
+def test_a_page_with_its_models_stored_trains_nothing(client, corpus, monkeypatch):
     import serve
 
     login(client)
@@ -232,11 +232,11 @@ def test_a_page_with_its_models_cached_comes_with_its_results(client, corpus):
     client.post(f'/add/{vision[6]}/more')  # two tags: turns has a model per tag
     for mix in ('one', 'turns'):
         url = f'/?rank=tags&tags=all&mix={mix}&skip_have=yes'
-        assert b'"pending": true' in client.get(url).data  # nothing trained yet: placeholder
-        rank_json(client, url)
+        first = rank_json(client, url)
         serve._rank_cache.clear()
         serve._models.clear()  # another worker: the model is in models.sqlite
-        r = client.get(url)
-        assert b'"pending": false' in r.data and b'2601.' in r.data
+        calls = counting_fit(monkeypatch)
+        assert rank_json(client, url) == first and calls == []
     client.post(f'/add/{vision[4]}/cv')  # a new training set, not trained yet (PREFIT=0)
-    assert b'"pending": true' in client.get('/?rank=tags&tags=all&skip_have=yes').data
+    rank_json(client, '/?rank=tags&tags=all&skip_have=yes')
+    assert calls == [1]

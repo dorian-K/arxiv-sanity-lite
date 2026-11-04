@@ -157,7 +157,7 @@ def test_saved_papers_get_references_and_thumbnails_with_fallbacks(client, corpu
     login(client)
     for p in (with_html, without_html, default_license):
         client.post(f'/add/{p}/cv')
-    r = client.get('/?rank=cited&tags=cv&format=json').get_json()
+    r = client.get('/ui/list?rank=cited&tags=cv').get_json()
     assert "aren't known yet" in r['notice']  # nothing fetched yet: say so
 
     with db.get_refs_db() as rdb:  # from the snapshot (import_snapshot.py --titles); without_html is too new
@@ -193,14 +193,14 @@ def test_saved_papers_get_references_and_thumbnails_with_fallbacks(client, corpu
     run_daemon(monkeypatch)
     assert asked == []  # done is done
 
-    got = client.get('/?rank=cited&tags=cv&format=json').get_json()
+    got = client.get('/ui/list?rank=cited&tags=cv').get_json()
     assert [(p['id'], p['weight']) for p in got['papers']][:2] == [(cited[0], 2), (cited[2], 2)]
     assert {p['id'] for p in got['papers']} == set(cited)
     assert 'From the references of 3 of the 3 papers' in got['notice']
-    assert b'Cited (3)' in client.get('/?rank=saved&tags=cv').data
+    assert client.get('/ui/list?rank=saved&tags=cv').get_json()['n_cited'] == 3
 
     # cards show the figure, or the first page where there is no figure, with the license
-    saved = {p['id']: p for p in client.get('/?rank=saved&tags=cv&format=json').get_json()['papers']}
+    saved = {p['id']: p for p in client.get('/ui/list?rank=saved&tags=cv').get_json()['papers']}
     assert saved[with_html]['thumb_url'] == f'/thumb/figure/{with_html}'
     assert saved[with_html]['thumb_license'] == 'CC BY 4.0'
     assert saved[without_html]['thumb_url'] == f'/thumb/page/{without_html}'

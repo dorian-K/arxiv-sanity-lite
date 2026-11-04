@@ -851,41 +851,37 @@ def llms_txt():
 # the page where users make and revoke tokens
 
 
-@bp.route('/agents')
-def agents_page(new_token='', error=''):
-    context = site.default_context()
+@bp.route('/ui/agents')
+def agents_page():
+    """the agents page of the app (/agents): its tools and the user's tokens"""
     mine = g.user and not g.readonly and not g.token
-    context.update(
-        tokens=db.list_tokens(g.user) if mine else [],
-        can_make=bool(mine),
-        new_token=new_token,
-        error=error,
-        base=site.PUBLIC_URL or request.host_url.rstrip('/'),
-        tools=[(n, t['access'], t['description']) for n, t in TOOLS.items()],
-        scope_labels=SCOPE_LABELS,
-        categories=categories_text(),
-        fmt=lambda t: time.strftime('%b %d %Y', time.localtime(t)) if t else 'never',
-    )
-    return render_template('agents.html', **context)
+    return {
+        'tokens': db.list_tokens(g.user) if mine else [],
+        'can_make': bool(mine),
+        'base': site.PUBLIC_URL or request.host_url.rstrip('/'),
+        'tools': [(n, t['access'], t['description']) for n, t in TOOLS.items()],
+        'scope_labels': SCOPE_LABELS,
+        'categories': categories_text(),
+    }
 
 
 @bp.route('/agents/token', methods=['POST'])
 def make_token():
     if not g.user or g.readonly or g.token:  # a token can't make tokens
-        return redirect(url_for('agents.agents_page'))
+        return {'error': 'Log in with your password to make a token.'}, 403
     name = ' '.join(request.form.get('name', '').split())[:60] or 'agent'
     if len(db.list_tokens(g.user)) >= db.TOKENS_MAX:
-        return agents_page(error=f'At most {db.TOKENS_MAX} tokens: revoke one first.'), 400
-    scope = request.form.get('scope', 'read')
-    token = db.create_token(g.user, name, scope if scope in db.TOKEN_SCOPES else 'read')
-    return agents_page(new_token=token)
+        return {'error': f'At most {db.TOKENS_MAX} tokens: revoke one first.'}, 400
+    # the page's radios are named access (as on the consent page); scope is what the tests send
+    scope = request.form.get('access') or request.form.get('scope', 'read')
+    return {'token': db.create_token(g.user, name, scope if scope in db.TOKEN_SCOPES else 'read')}
 
 
 @bp.route('/agents/revoke', methods=['POST'])
 def revoke_token():
     if g.user and not g.readonly and not g.token:
         db.revoke_token(g.user, request.form.get('id', ''))
-    return redirect(url_for('agents.agents_page'))
+    return {'ok': True}
 
 
 # -----------------------------------------------------------------------------

@@ -1,8 +1,6 @@
 {% extends "base.html" %}
 {% from "_access.html" import access_choice %}
 
-{% block variables %}
-{% endblock %}
 
 {% block content %}
 <div id="authorizewrap" class="page">
@@ -18,13 +16,6 @@
         <pre class="codeblock">curl -s '{{ done }}'</pre>
         <p class="muted">Within 10 minutes. The address works once, and only for the app that asked, so
             showing it here is safe.</p>
-        <script>
-        document.getElementById('copy-callback').addEventListener('click', () => {
-            navigator.clipboard.writeText(document.getElementById('callback').textContent.trim())
-                .then(() => { document.getElementById('copied').hidden = false; })
-                .catch(() => { window.getSelection().selectAllChildren(document.getElementById('callback')); });
-        });
-        </script>
         {% elif error %}
         <h1>Can't connect this app</h1>
         <p class="form-error">{{ error }}</p>
@@ -67,4 +58,5 @@
 {% endblock %}
 
 {% block elements %}
+{% if done %}<script src="{{ url_for('static', filename='authorize.js') }}"></script>{% endif %}
 {% endblock %}

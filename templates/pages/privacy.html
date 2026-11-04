@@ -1,5 +1,4 @@
-{% extends "base.html" %}
-{% block content %}
+{# shown by the app (static/app), /ui/page/privacy #}
 <div class="page"><section class="card prose">
     <h1>Privacy policy</h1>
     {% if not operator.name or not operator.address or not operator.email %}
@@ -66,8 +65,10 @@
         the service (§ 25(2) TDDDG, Art. 5(3) ePrivacy Directive), so no consent is asked for. There is no
         tracking, no analytics, no advertising, and no third-party content: scripts and fonts come from
         this server, so your browser contacts no one else. Links to arXiv lead to arXiv's own site.
-        The one other thing kept in your browser is whether you picked the "Cards" or "Titles only" view
-        (local storage, never sent to the server), a setting you asked for (§ 25(2) TDDDG).</p>
+        The other things kept in your browser are display choices you made: the "Cards" or "Titles only"
+        view, which digest tags you collapsed, how often you switched a card between the AI summary and the
+        abstract (to offer making that the default), and, when you're not logged in, which of the two cards
+        open on (local storage, never sent to the server), settings you asked for (§ 25(2) TDDDG).</p>
 
     <h2>Who receives your data</h2>
     <p>No one, apart from the hosting provider{{ ' (' + operator.hosting + ')' if operator.hosting }}, which
@@ -85,4 +86,3 @@
         Write to the address above for anything else. You can also complain to a data protection
         supervisory authority, for example the one where you live.</p>
 </section></div>
-{% endblock %}

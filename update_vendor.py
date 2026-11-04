@@ -17,9 +17,9 @@ import tarfile
 import urllib.request
 
 PACKAGES = {
-    'react': ('18.3.1', ['umd/react.production.min.js', 'LICENSE']),
-    'react-dom': ('18.3.1', ['umd/react-dom.production.min.js', 'LICENSE']),
-    'htm': ('3.1.1', ['dist/htm.umd.js', 'LICENSE']),
+    # ES modules, loaded through the import map in static/app/index.html (no build step)
+    'preact': ('10.29.8', ['dist/preact.module.js', 'hooks/dist/hooks.module.js', 'LICENSE']),
+    'htm': ('3.1.1', ['dist/htm.module.js', 'LICENSE']),
     # the css refers to fonts/ next to it; woff2 is what every current browser picks
     'katex': ('0.16.11', ['dist/katex.min.css', 'dist/katex.min.js', 'dist/contrib/auto-render.min.js', 'LICENSE']),
 }

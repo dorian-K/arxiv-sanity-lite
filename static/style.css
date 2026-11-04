@@ -518,7 +518,7 @@ textarea.form-control {
 
 /* digest */
 /* a clear gap and a rule between tags, and the current tag's heading stays under the header
-   while its papers scroll by (--header-h is the header's height, set by common.js) */
+   while its papers scroll by (--header-h is the header's height, set by static/app/app.js) */
 .digest-section { margin-top: 48px; padding-top: 4px; border-top: 2px solid var(--border); }
 .digest-section:first-child { margin-top: 24px; border-top: 0; }
 .digest-tag {
@@ -582,7 +582,7 @@ details.danger form { margin-top: 10px; }
 /* ---------------------------------------------------------------------------
    waiting: results computed in the background, and the next page on its way */
 
-/* the blanked list while results load (Skeleton in paper_list.js): grey bars where the text
+/* the blanked list while results load (Skeleton in static/app/papers.js): grey bars where the text
    will be, with a light sweeping across them */
 .skel-caption { margin: 4px 0 10px; font-size: 14px; color: var(--muted); }
 .skel { pointer-events: none; }
@@ -769,3 +769,6 @@ details.danger form { margin-top: 10px; }
 #askpublic .check { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 18px; }
 #askpublic .check input { margin-top: 4px; }
 .smallcaps { font-variant: small-caps; }
+
+/* the next list is on its way (the app keeps the current one until it is there) */
+#wrap.stale { opacity: .55; transition: opacity .2s .15s; }

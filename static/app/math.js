@@ -1,15 +1,6 @@
-'use strict';
-// shared helpers for the React components: htm instead of JSX, and lazy LaTeX rendering
-
-const html = htm.bind(React.createElement);
-const { useState, useEffect, useRef } = React;
-
-function mount(component, elementId) {
-    const elt = document.getElementById(elementId);
-    if (elt) {
-        ReactDOM.createRoot(elt).render(component);
-    }
-}
+// LaTeX in titles, abstracts and summaries: text-mode LaTeX turned into html, and math typeset by
+// KaTeX, which is only downloaded once the first piece of math scrolls into view
+import { h, useRef, useEffect } from 'app/lib';
 
 // -----------------------------------------------------------------------------
 // lazy LaTeX: KaTeX is only downloaded once the first piece of text containing math
@@ -80,7 +71,7 @@ for (const [cmd, ch] of Object.entries(SYMBOLS)) {
 }
 const mathUnicode = m => m.replace(/[^\x00-\x7f]/g, ch => MATH_UNICODE[ch] ?? ch);
 const escapeHtml = t => t.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
-function textLatex(text) {
+export function textLatex(text) {
     return text.split(MATH_PIECES).map((piece, i) => {
         if (i % 2) return escapeHtml(mathUnicode(piece)); // math, typeset by KaTeX afterwards
         let t = piece.replace(/\\([`'"^~=]|[cvuH](?=\{))\{?([a-zA-Z])\}?/g, (m, a, ch) => (ACCENTS[a] ? (ch + ACCENTS[a]).normalize('NFC') : m));
@@ -106,9 +97,9 @@ function textLatex(text) {
     }).join('');
 }
 
-// text that may contain LaTeX. React never manages the children of the span, because
+// text that may contain LaTeX. Preact never manages the children of the span, because
 // KaTeX replaces them, so the text is set by hand and typeset lazily
-const MathText = ({ text, tag = 'span', className }) => {
+export const MathText = ({ text, tag = 'span', className }) => {
     const ref = useRef(null);
     useEffect(() => {
         const elt = ref.current;
@@ -121,129 +112,5 @@ const MathText = ({ text, tag = 'span', className }) => {
         }
         typeset(elt);
     }, [text]);
-    return React.createElement(tag, { ref, className });
+    return h(tag, { ref, className });
 };
-
-// -----------------------------------------------------------------------------
-// a loading indicator while the next page is on its way: the old page stays usable, and
-// after a moment a bar and a line about what is happening show up. a form can say what
-// it is waiting for with data-busy="…"
-
-let busyTimer = null;
-
-function showBusy(msg) {
-    clearTimeout(busyTimer);
-    busyTimer = setTimeout(() => {
-        let elt = document.getElementById('busy');
-        if (!elt) {
-            elt = document.createElement('div');
-            elt.id = 'busy';
-            elt.setAttribute('role', 'status');
-            elt.innerHTML = '<div class="busy-bar"></div><div class="busy-msg"></div>';
-            document.body.appendChild(elt);
-        }
-        elt.querySelector('.busy-msg').textContent = msg;
-        elt.hidden = false;
-    }, 300); // fast pages come back before anything flashes
-}
-
-function hideBusy() {
-    clearTimeout(busyTimer);
-    const elt = document.getElementById('busy');
-    if (elt) elt.hidden = true;
-}
-
-function busyMessage(url) {
-    const q = url.searchParams;
-    if (url.pathname === '/' && q.get('q')) return 'Searching…';
-    if (url.pathname === '/digest') return 'Loading your digest…';
-    return 'Loading…';
-}
-
-// links that leave the site (arXiv abstracts and pdfs, code, licenses) open in a new tab, so
-// the list stays where it was. set on click, so it covers templates and React alike
-document.addEventListener('click', e => {
-    const a = e.target.closest('a[href]');
-    if (!a || a.target) return;
-    const url = new URL(a.href, window.location.href);
-    if (!url.protocol.startsWith('http') || url.origin === window.location.origin) return;
-    a.target = '_blank';
-    a.rel = 'noopener noreferrer'; // the new page gets no handle on this one, and no referrer
-}, true); // capture: before the busy indicator below looks at a.target
-
-// -----------------------------------------------------------------------------
-// shared links: ?u=<name> shows that user's tags, if they share them. on one's own pages with
-// sharing on, the address carries ?u= too, so any url can be copied and sent; on someone
-// else's, links within the site keep the ?u=
-
-const SHARED_PATHS = ['/', '/digest'];
-
-function withOwner(url) {
-    if (owner && SHARED_PATHS.includes(url.pathname) && !url.searchParams.has('u')) url.searchParams.set('u', owner);
-    return url;
-}
-
-if (((viewing && owner) || sharing) && SHARED_PATHS.includes(window.location.pathname)) {
-    const here = withOwner(new URL(window.location.href));
-    if (here.href !== window.location.href) window.history.replaceState(null, '', here.href);
-}
-
-if (viewing && owner) {
-    document.addEventListener('click', e => {
-        const a = e.target.closest('a[href]');
-        if (!a) return;
-        const url = new URL(a.href, window.location.href);
-        if (url.origin === window.location.origin) a.href = withOwner(url).href;
-    }, true);
-}
-
-document.addEventListener('click', e => {
-    const btn = e.target.closest('#share');
-    if (!btn) return;
-    if (!viewing && !sharing) {
-        if (confirm('Your profile is private, so a link to your pages shows nothing to others. Make it public in your profile?')) {
-            window.location.href = '/profile#sharing';
-        }
-        return;
-    }
-    const done = () => { btn.textContent = '✓ Link copied'; setTimeout(() => { btn.textContent = '🔗 Share'; }, 2000); };
-    const url = withOwner(new URL(window.location.href));
-    url.searchParams.delete('format');
-    if (navigator.clipboard) navigator.clipboard.writeText(url.href).then(done, () => window.prompt('Copy this link:', url.href));
-    else window.prompt('Copy this link:', url.href);
-});
-
-// back/forward restores the page from the cache as it was left, indicator included
-window.addEventListener('pageshow', hideBusy);
-
-document.addEventListener('click', e => {
-    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-    const a = e.target.closest('a[href]');
-    if (!a || a.target || a.hasAttribute('download')) return;
-    const url = new URL(a.href, window.location.href);
-    if (url.origin !== window.location.origin || url.pathname.startsWith('/static/')) return;
-    if (url.hash && url.pathname === window.location.pathname && url.search === window.location.search) return;
-    showBusy(busyMessage(url));
-});
-
-document.addEventListener('submit', e => {
-    const form = e.target;
-    // React forms (tag picker) handle their submit themselves
-    if (e.defaultPrevented || form.target) return;
-    const url = new URL(form.action, window.location.href);
-    if (form.method.toLowerCase() === 'get') {
-        url.search = new URLSearchParams(new FormData(form)).toString();
-    }
-    showBusy(form.dataset.busy || busyMessage(url));
-});
-
-// the sticky header's height as --header-h, for things that stick just below it (the digest's
-// tag headings); it changes when the nav wraps on narrow screens
-(() => {
-    const header = document.getElementById('header');
-    if (!header) return;
-    const set = () => document.documentElement.style.setProperty('--header-h', header.offsetHeight + 'px');
-    set();
-    if ('ResizeObserver' in window) new ResizeObserver(set).observe(header);
-    else window.addEventListener('resize', set);
-})();

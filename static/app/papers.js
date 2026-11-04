@@ -1,38 +1,18 @@
-'use strict';
+// paper cards and what goes with them: votes, tags, notes, the AI summary tabs, the digest's
+// sections, the tag check and the model's words. used by the list, the digest and inspect
+import { html, useState, useEffect, useRef, useContext, createContext, store, api, tagRequest, me } from 'app/lib';
+import { MathText } from 'app/math';
 
-// the user's tag names, for autocompletion in the tag editor
-// logged in with the password (not a read-only view of a shared account)
-// (and not someone else's shared page, see viewing in base.html)
-const canEdit = Boolean(user) && !readonly && !viewing;
-const userTagNames = (typeof tags !== 'undefined' ? tags : []).map(t => t.name).filter(n => n !== 'all');
-
-// calls one of the tag endpoints; resolves on "ok...", otherwise shows the server's message.
-// one request at a time, in click order: votes show at once (before the server answers), so two
-// quick clicks must not reach the server the other way round
-let tagQueue = Promise.resolve();
-function tagRequest(path) {
-    const send = () => fetch(path, { method: 'POST' })
-        .catch(() => { throw new Error('Could not reach the server, so this was not saved.'); })
-        .then(r => r.text()).then(t => {
-            if (!t.startsWith('ok')) throw new Error(t);
-            return t;
-        });
-    const req = tagQueue.then(send, send).catch(e => { alert(e.message); throw e; });
-    tagQueue = req.catch(() => {});
-    return req;
-}
+// what the page around the cards is: its rank and tag, whose tags it shows (viewing someone's
+// shared page) and whether this user can vote there. userTags grows when a card makes a new tag
+export const Page = createContext({ rank: '', tags: '', viewing: false, owner: '', canEdit: false, userTags: [] });
 
 // a tag's page: its recommendations, minus the papers already saved (those are its "Saved" tab)
-const FOR_YOU_DAYS = 30; // as in serve.py
+export const FOR_YOU_DAYS = 30; // as in serve.py
 // venues are aslite.arxiv.venue() of what the authors wrote in the comment or journal reference
 const VENUE_NOTE = 'parsed from the arXiv metadata (the authors\' comment or journal reference), not verified';
-const tagUrl = (tag, days = FOR_YOU_DAYS) => '/?rank=tags&tags=' + encodeURIComponent(tag)
+export const tagUrl = (tag, days = FOR_YOU_DAYS) => '/?rank=tags&tags=' + encodeURIComponent(tag)
     + (days ? '&time_filter=' + days : '') + '&skip_have=yes';
-
-// a chip in the tag row switches the tag and keeps what is shown: the same tab, the same time window
-const chipUrl = tag => (['saved', 'unread', 'down', 'cited'].includes(gvars.rank)
-    ? '/?rank=' + gvars.rank + '&tags=' + encodeURIComponent(tag)
-    : tagUrl(tag, gvars.rank === 'tags' ? gvars.time_filter : FOR_YOU_DAYS)) + (gvars.published ? '&published=yes' : '');
 
 // a tag the paper is in: the name links to the tag's page, x takes the paper out of it
 const UTag = ({ tag, onRemove }) => html`
@@ -51,6 +31,8 @@ const NTag = ({ tag, onUndo }) => html`
 // picks the tag for "save" / "not for this tag": the user's tags as one-tap chips, or a new name
 const TagPicker = ({ mode, tags, onPick, onCancel }) => {
     const [value, setValue] = useState('');
+    const input = useRef(null);
+    useEffect(() => { if (tags.length === 0) input.current.focus(); }, []);
     const submit = e => {
         e.preventDefault();
         const tag = value.trim();
@@ -65,7 +47,7 @@ const TagPicker = ({ mode, tags, onPick, onCancel }) => {
                 ${tags.map(t => html`<button key=${t} class="chip chip-pick" onClick=${() => onPick(t)}>${t}</button>`)}
             </div>` : null}
             <form class="tag-picker-new" onSubmit=${submit}>
-                <input autoFocus=${tags.length === 0} value=${value} onInput=${e => setValue(e.target.value)}
+                <input ref=${input} value=${value} onInput=${e => setValue(e.target.value)}
                        onKeyDown=${e => e.key === 'Escape' && onCancel()} maxLength="100"
                        placeholder=${tags.length ? 'or a new tag…' : 'name a tag, e.g. diffusion'} aria-label="new tag" />
                 <button type="submit" class="btn btn-small btn-primary" disabled=${!value.trim()}>${save ? 'Save' : 'OK'}</button>
@@ -74,7 +56,6 @@ const TagPicker = ({ mode, tags, onPick, onCancel }) => {
         </div>`;
 };
 
-// rankings whose scores mean something to show next to the title
 // a card's thumbnail, enlarged: one <dialog> for the page, closed by Escape or any click. It opens
 // with the card's image (already loaded) and swaps in the big one when that has arrived.
 let imageView = null;
@@ -109,13 +90,12 @@ const NoteBox = ({ pid, note, setNote, editing, setEditing }) => {
     }
     const save = () => {
         setBusy(true);
-        const body = new URLSearchParams({ text });
-        fetch('/note/' + pid, { method: 'POST', body })
-            .then(r => r.text()).then(t => {
-                if (!t.startsWith('ok')) throw new Error(t);
+        api('/note/' + pid, { text })
+            .then(t => {
+                if (!String(t).startsWith('ok')) throw new Error(t);
                 setNote(text.trim()); setEditing(false);
             })
-            .catch(e => alert(e.message || 'Could not reach the server, so the note was not saved.'))
+            .catch(e => alert(e.message))
             .finally(() => setBusy(false));
     };
     return html`<div class="rel_note_edit">
@@ -135,8 +115,8 @@ let aiWanted = new Set();
 let aiTimer = null;
 const aiNotify = () => aiListeners.forEach(f => f());
 const askSummaries = (pids, round) => {
-    fetch('/summaries', { method: 'POST', body: new URLSearchParams({ pids: pids.join(',') }) })
-        .then(r => r.json()).then(res => {
+    api('/summaries', { pids: pids.join(',') })
+        .then(res => {
             Object.assign(aiSummaries, res.summaries);
             const pending = res.pending.filter(p => !res.summaries[p]);
             pids.forEach(p => { if (!res.summaries[p] && !pending.includes(p)) aiSummaries[p] = 'none'; });
@@ -158,16 +138,17 @@ const wantSummary = pid => {
     }, 50); // the whole page's cards, in one request
 };
 const useAiSummary = p => {
+    const m = me.get();
     const [, bump] = useState(0);
     useEffect(() => {
         const f = () => bump(x => x + 1);
         aiListeners.add(f);
-        if (summariesAsk && !p.ai) wantSummary(p.id);
+        if (m.summaries_ask && !p.ai) wantSummary(p.id);
         return () => aiListeners.delete(f);
     }, [p.id]);
-    if (!summariesOn) return null;
+    if (!m.summaries_on) return null;
     // only logged-in users' pages ask for missing ones (each is a model call); others show what exists
-    return p.ai || aiSummaries[p.id] || (summariesAsk ? 'pending' : 'login');
+    return p.ai || aiSummaries[p.id] || (m.summaries_ask ? 'pending' : 'login');
 };
 const AI_FIELDS = [['problem', 'Problem'], ['approach', 'Approach'], ['result', 'Result'], ['caveat', 'Caveat']];
 const AiSummary = ({ s }) => {
@@ -179,21 +160,21 @@ const AiSummary = ({ s }) => {
 };
 // the AI summary and the abstract as two tabs: the card opens on the user's default, and while the
 // summary is being written it shows the abstract, and the Summary tab is grayed out with a light
-// sweeping across it
-// a visitor's (or a read-only viewer's) card for a paper without a summary: the tab is there but
-// grayed out, and a popover on hover (or tap, which focuses it) says that nothing is being written
-const NO_SUMMARY = !user
+// sweeping across it. a visitor's (or a read-only viewer's) card for a paper without a summary: the
+// tab is there but grayed out, and a popover on hover (or tap, which focuses it) says that nothing
+// is being written
+const noSummary = () => (!me.get().user
     ? 'No summary for this paper yet, and none is being generated: summaries are written only for logged-in users. Log in to get them.'
-    : "No summary for this paper yet, and none is being generated: summaries are written only on your own account's pages.";
+    : "No summary for this paper yet, and none is being generated: summaries are written only on your own account's pages.");
 const AboutTabs = ({ ai, tab, setTab }) => html`
     <div class="rel_tabs" role="tablist">
         <button type="button" role="tab" aria-selected=${tab === 'summary'} disabled=${ai === 'pending'}
                 class=${(tab === 'summary' ? 'on' : '') + (ai === 'pending' ? ' loading' : '') + (ai === 'login' ? ' unavailable' : '')}
-                onClick=${() => ai !== 'login' && setTab('summary')} aria-description=${ai === 'login' ? NO_SUMMARY : null}
+                onClick=${() => ai !== 'login' && setTab('summary')} aria-description=${ai === 'login' ? noSummary() : null}
                 title=${ai === 'pending' ? 'an AI model is summarizing this paper, a few seconds'
                     : ai === 'login' ? null : 'a short AI summary: problem, approach, result, caveat'}>
             <span class="ai-badge">AI</span><span class="tablabel">Summary</span>
-            ${ai === 'login' ? html`<span class="tabpop" role="tooltip">${NO_SUMMARY}</span>` : null}</button>
+            ${ai === 'login' ? html`<span class="tabpop" role="tooltip">${noSummary()}</span>` : null}</button>
         <button type="button" role="tab" aria-selected=${tab === 'abstract'} class=${tab === 'abstract' ? 'on' : ''}
                 onClick=${() => setTab('abstract')} title="the authors' abstract">Abstract</button>
     </div>`;
@@ -201,44 +182,21 @@ const AboutTabs = ({ ai, tab, setTab }) => html`
 const SHOW_SCORE = ['tags', 'pid']; // (search scores are raw text-match numbers, meaningless to read)
 
 // a rank fraction as people read it: 0.0031 -> "top 0.3%"
-const fmtPct = x => 'top ' + (x < 0.001 ? '0.1' : x < 0.1 ? (100 * x).toFixed(1) : Math.round(100 * x)) + '%';
+export const fmtPct = x => 'top ' + (x < 0.001 ? '0.1' : x < 0.1 ? (100 * x).toFixed(1) : Math.round(100 * x)) + '%';
 
 // held-out ranks of the current tag's papers, filled in by a tag check (see TagCheck)
-const heldout = { tag: null, ranks: {}, misfit: 0.1 };
-const useHeldout = () => {
-    const [, bump] = useState(0);
-    useEffect(() => {
-        const f = () => bump(n => n + 1);
-        window.addEventListener('heldout', f);
-        return () => window.removeEventListener('heldout', f);
-    }, []);
-    return heldout;
-};
+const heldout = store({ tag: null, ranks: {}, misfit: 0.1 });
 
-// cards (everything) or compact (one line per paper), chosen with the #viewswitch buttons and
+// cards (everything) or compact (one line per paper), chosen with the view buttons and
 // remembered in this browser only (a display preference, nothing is sent anywhere)
 const VIEW_KEY = 'resanity-view';
-const view = { mode: 'cards' };
-try { view.mode = localStorage.getItem(VIEW_KEY) === 'compact' ? 'compact' : 'cards'; } catch (e) { /* storage blocked */ }
-const useView = () => {
-    const [mode, setMode] = useState(view.mode);
-    useEffect(() => {
-        const f = () => setMode(view.mode);
-        window.addEventListener('view', f);
-        return () => window.removeEventListener('view', f);
-    }, []);
-    return mode;
-};
-function setView(mode) {
-    view.mode = mode;
+let initialView = 'cards';
+try { initialView = localStorage.getItem(VIEW_KEY) === 'compact' ? 'compact' : 'cards'; } catch (e) { /* storage blocked */ }
+export const view = store(initialView);
+export function setView(mode) {
+    view.set(mode);
     try { localStorage.setItem(VIEW_KEY, mode); } catch (e) { /* storage blocked: this page only */ }
-    document.querySelectorAll('#viewswitch [data-view]').forEach(b => b.setAttribute('aria-pressed', b.dataset.view === mode));
-    window.dispatchEvent(new Event('view'));
 }
-document.querySelectorAll('#viewswitch [data-view]').forEach(b => {
-    b.setAttribute('aria-pressed', b.dataset.view === view.mode);
-    b.addEventListener('click', () => setView(b.dataset.view));
-});
 
 // what cards with an AI summary open on: the summary or the abstract. a setting on the profile
 // (this browser's choice for visitors); each card's tabs switch only that card, but whoever keeps
@@ -246,29 +204,24 @@ document.querySelectorAll('#viewswitch [data-view]').forEach(b => {
 const ABOUT_KEY = 'resanity-about';
 const SWITCH_KEY = 'resanity-about-switches';
 const SWITCHES_TO_ASK = 3;
-const about = { tab: 'summary' };
-try { about.tab = cardTab || (localStorage.getItem(ABOUT_KEY) === 'abstract' ? 'abstract' : 'summary'); } catch (e) { about.tab = cardTab || 'summary'; }
-const useAbout = () => {
-    const [tab, setTab] = useState(about.tab);
-    useEffect(() => {
-        const f = () => setTab(about.tab);
-        window.addEventListener('about', f);
-        return () => window.removeEventListener('about', f);
-    }, []);
-    return tab;
-};
+export const about = store('summary');
+// the default for this user (me.card_tab) or, for visitors, this browser's
+export function initAbout(cardTab) {
+    let tab = cardTab;
+    if (!tab) try { tab = localStorage.getItem(ABOUT_KEY) === 'abstract' ? 'abstract' : 'summary'; } catch (e) { tab = 'summary'; }
+    about.set(tab);
+}
 const switches = n => {
     try {
         if (n !== undefined) localStorage.setItem(SWITCH_KEY, String(n));
         return +(localStorage.getItem(SWITCH_KEY) || 0);
     } catch (e) { return 0; }
 };
-function setAboutDefault(tab) {
-    about.tab = tab;
+export function setAboutDefault(tab) {
     switches(0);
-    if (loggedIn) fetch('/card_tab', { method: 'POST', body: new URLSearchParams({ tab, ajax: '1' }) }).catch(() => {});
+    if (me.get().logged_in) api('/card_tab', { tab }).then(() => me.set({ ...me.get(), card_tab: tab })).catch(() => {});
     else try { localStorage.setItem(ABOUT_KEY, tab); } catch (e) { /* storage blocked: this page only */ }
-    window.dispatchEvent(new Event('about'));
+    about.set(tab);
 }
 
 // one-click votes for a given tag (the digest page): like, neutral (seen, no opinion: hidden
@@ -296,7 +249,10 @@ const QuickVote = ({ pid, tag, state, onChange, compact }) => {
         </div>`;
 };
 
-const Paper = ({ paper: p, quickTag }) => {
+export const Paper = ({ paper: p, quickTag }) => {
+    const page = useContext(Page);
+    const canEdit = page.canEdit;
+    const m = me.use();
     const [utags, setUtags] = useState(p.utags);
     const [ntags, setNtags] = useState(p.ntags);
     const [stags, setStags] = useState(p.stags || []);
@@ -306,9 +262,9 @@ const Paper = ({ paper: p, quickTag }) => {
     const [picker, setPicker] = useState(null); // null | 'add' | 'neg'
     const [open, setOpen] = useState(false);
     const [expanded, setExpanded] = useState(false); // one paper opened in the compact view
-    const compactView = useView() === 'compact';
+    const compactView = view.use() === 'compact';
     const ai = useAiSummary(p);
-    const aboutTab = useAbout();
+    const aboutTab = about.use();
     const [chosenTab, setChosenTab] = useState(null);
     const [askDefault, setAskDefault] = useState(false);
     const hasAi = ai && ai !== 'none';
@@ -349,15 +305,15 @@ const Paper = ({ paper: p, quickTag }) => {
             <input type="checkbox" checked=${read} onChange=${toggleRead} /> read</label>` : null;
     const unsave = tag => change('/sub/' + enc(tag), () => setUtags(u => without(u, tag)));
     const undoNeg = tag => change('/subneg/' + enc(tag), () => setNtags(n => without(n, tag)));
-    const toggle = mode => setPicker(m => (m === mode ? null : mode));
+    const toggle = mode => setPicker(x => (x === mode ? null : mode));
     // offer the tags this paper isn't in yet; new tags typed here join the list for the next paper
     // (on a tag's own page, that tag has its 👍 / 👎 buttons: the pickers are for the others)
-    const pickable = userTagNames.filter(t => t !== quickTag && !(picker === 'add' ? utags : ntags).includes(t));
-    const ho = useHeldout();
+    const pickable = page.userTags.filter(t => t !== quickTag && !(picker === 'add' ? utags : ntags).includes(t));
+    const ho = heldout.use();
     const fit = ho.tag && utags.includes(ho.tag) ? ho.ranks[p.id] : undefined;
     const long = p.summary.length > 360;
-    const showScore = SHOW_SCORE.includes(gvars.rank);
-    const score = gvars.rank === 'cited'
+    const showScore = SHOW_SCORE.includes(page.rank);
+    const score = page.rank === 'cited'
         ? html`<span class="rel_score" title=${'cited by ' + p.weight + ' of the papers you saved here'}>cited ×${p.weight}</span>`
         : html`${p.pct !== undefined
         ? html`<span class="rel_score" title=${'rank among all papers (model score ' + p.weight.toFixed(2) + ')'}>${fmtPct(p.pct)}</span>`
@@ -421,13 +377,13 @@ const Paper = ({ paper: p, quickTag }) => {
             ${ntags.filter(t => t !== quickTag).map(t => html`<${NTag} key=${'n' + t} tag=${t} onUndo=${() => undoNeg(t)} />`)}
         </div>` : null}
         ${picker ? html`<${TagPicker} mode=${picker} tags=${pickable}
-            onPick=${t => { if (!userTagNames.includes(t)) userTagNames.push(t); (picker === 'add' ? save : notFor)(t); }}
+            onPick=${t => { if (!page.userTags.includes(t)) page.userTags.push(t); (picker === 'add' ? save : notFor)(t); }}
             onCancel=${() => setPicker(null)} />` : null}
         ${hasAi ? html`<${AboutTabs} ai=${ai} tab=${tab} setTab=${pickTab} />` : null}
         ${askDefault && tab !== aboutTab ? html`<div class="rel_tabhint" role="note">
             <span aria-hidden="true">💡</span>
             <button class="linkbtn" onClick=${() => { setAboutDefault(tab); setAskDefault(false); setChosenTab(null); }}
-                    title=${loggedIn ? 'every card opens on it from now on; saved in your settings (profile), where you can change it back' : 'every card opens on it from now on; remembered in this browser'}>
+                    title=${m.logged_in ? 'every card opens on it from now on; saved in your settings (profile), where you can change it back' : 'every card opens on it from now on; remembered in this browser'}>
                 Show ${tab === 'abstract' ? 'abstract' : 'summary'} by default</button>
             <span class="muted">or</span>
             <button class="linkbtn" onClick=${() => { switches(-2 * SWITCHES_TO_ASK); setAskDefault(false); }}
@@ -459,33 +415,27 @@ const EMPTY = {
     search: 'No papers match this search.',
 };
 
-// on a single tag's recommendations, 👍 / – / 👎 vote for that tag directly
-const quickTagOf = () => (canEdit && gvars.rank === 'tags' && userTagNames.includes(gvars.tags) ? gvars.tags : null);
-
-const PaperList = ({ papers }) => {
+export const PaperList = ({ papers }) => {
+    const page = useContext(Page);
     if (papers.length === 0) {
-        return html`<div class="empty">${EMPTY[gvars.rank] || 'No papers here. Try another search or a longer time window.'}</div>`;
+        return html`<div class="empty">${EMPTY[page.rank] || 'No papers here. Try another search or a longer time window.'}</div>`;
     }
-    const quickTag = quickTagOf();
+    // on a single tag's recommendations, 👍 / – / 👎 vote for that tag directly
+    const quickTag = page.canEdit && page.rank === 'tags' && page.userTags.includes(page.tags) ? page.tags : null;
     // on "For you", each paper was picked by one tag: its votes go to that tag
-    const voteTag = p => (canEdit && p.for_tag ? p.for_tag : quickTag);
+    const voteTag = p => (page.canEdit && p.for_tag ? p.for_tag : quickTag);
     return html`<div id="paperList" class="rel_papers">${papers.map(p => html`<${Paper} key=${p.id} paper=${p} quickTag=${voteTag(p)} />`)}</div>`;
 };
-
-// what the page waits for when the results are computed in the background (see SLOW_RANKS)
-const waitingFor = () => (gvars.rank === 'pid' ? 'Finding similar papers…'
-    : gvars.tags === 'all' ? 'Finding the best new papers for you…'
-    : 'Ranking papers for "' + gvars.tags + '"…');
 
 // what the list will look like, blanked, while the results are on their way: cards or lines
 // in the current view, so nothing jumps when they arrive. widths vary like real titles do
 const SKELETON_WIDTHS = [92, 74, 86, 65, 80, 70, 88, 60, 78, 84, 68, 90];
-const Skeleton = ({ count, caption }) => {
-    const compact = useView() === 'compact';
+export const Skeleton = ({ count, caption }) => {
+    const compact = view.use() === 'compact';
     const w = i => ({ width: SKELETON_WIDTHS[i % SKELETON_WIDTHS.length] + '%' });
     const rows = Array.from({ length: count || (compact ? 12 : 5) }, (_, i) => i);
     return html`<div class="rel_papers skeleton" role="status" aria-busy="true" aria-live="polite">
-        <div class="skel-caption">${caption || waitingFor()}</div>
+        <div class="skel-caption">${caption}</div>
         ${rows.map(i => compact ? html`
         <div key=${i} class="rel_paper rel_compact skel" aria-hidden="true">
             <span class="sk sk-score"></span><span class="sk sk-line" style=${w(i)}></span>
@@ -500,93 +450,67 @@ const Skeleton = ({ count, caption }) => {
     </div>`;
 };
 
-// the paper list. slow rankings arrive after the page: until then, a blanked copy of it (Skeleton)
-const Results = () => {
-    const [data, setData] = useState(gvars.pending ? null : { papers, notice: gvars.notice });
-    const [error, setError] = useState(null);
-    useEffect(() => {
-        if (!gvars.pending) return;
-        const q = new URLSearchParams(window.location.search);
-        q.set('format', 'json');
-        fetch('/?' + q.toString())
-            .then(r => (r.ok ? r.json() : r.text().then(t => Promise.reject(new Error(t)))))
-            .then(d => {
-                setData(d);
-                document.getElementById('link-next-page').disabled = !d.has_next;
-                window.dispatchEvent(new CustomEvent('words', { detail: d.words }));
-            })
-            .catch(e => setError(e.message || 'Loading failed.'));
-    }, []);
-    if (error) {
-        return html`<div class="empty"><span class="form-error">${error}</span>
-            ${' '}<a href="" onClick=${() => window.location.reload()}>Try again</a></div>`;
-    }
-    if (!data) return html`<${Skeleton} />`;
-    // search fixed a typo: say so, with a way back to exactly what was typed
-    const exact = new URLSearchParams(window.location.search);
-    exact.set('exact', 'yes');
-    exact.delete('page_number');
+// cards with everything, or one line per paper (remembered in this browser); Share copies a link
+// to the page that others can open, if the profile is public
+export const ViewSwitch = ({ share }) => {
+    const mode = view.use();
+    const [copied, setCopied] = useState(false);
+    const page = useContext(Page);
+    const m = me.use();
+    const doShare = () => {
+        if (!page.viewing && !m.sharing) {
+            if (confirm('Your profile is private, so a link to your pages shows nothing to others. Make it public in your profile?')) {
+                window.location.assign('/profile#sharing');
+            }
+            return;
+        }
+        const url = new URL(window.location.href);
+        if (!url.searchParams.has('u')) url.searchParams.set('u', page.viewing ? page.owner : m.user);
+        const done = () => { setCopied(true); setTimeout(() => setCopied(false), 2000); };
+        if (navigator.clipboard) navigator.clipboard.writeText(url.href).then(done, () => window.prompt('Copy this link:', url.href));
+        else window.prompt('Copy this link:', url.href);
+    };
     return html`
-        ${gvars.corrected ? html`<div class="notice">Showing results for <b>${gvars.corrected}</b>.
-            ${' '}<a href=${'/?' + exact.toString()}>Search for “${gvars.search_query}” instead</a></div>` : null}
-        ${data.notice ? html`<div class="notice">${data.notice}</div>` : null}
-        <${PaperList} papers=${data.papers} />`;
-};
-
-// deleting a tag is on the tag's own page (#deltag), not on the chips used to get around
-document.addEventListener('click', e => {
-    const btn = e.target.closest('#deltag');
-    if (!btn) return;
-    const name = btn.dataset.tag;
-    if (!confirm("Delete the tag '" + name + "'? Its saved papers and downvotes are forgotten (the papers stay in the database).")) return;
-    tagRequest('/del/' + encodeURIComponent(name)).then(() => { window.location.href = '/'; }).catch(() => {});
-});
-
-const Tag = ({ tag: t }) => {
-    const active = ['tags', 'saved', 'unread', 'down', 'cited'].includes(gvars.rank) && gvars.tags === t.name;
-    return html`
-        <span class=${'chip chip-tag chip-count' + (t.name === 'all' ? ' rel_utag_all' : '') + (active ? ' active' : '')}>
-            <a href=${chipUrl(t.name)}>${t.name === 'all' ? 'All tags' : t.name}${t.n !== undefined ? html` <small>${t.n}</small>` : null}</a>
-        </span>`;
-};
-
-const TagList = ({ tags }) => html`
-    <div id="tagList">
-        <span class="taglabel">${viewing ? '@' + owner + "'s tags" : 'Your tags'}</span>
-        ${tags.map(t => html`<${Tag} key=${t.name} tag=${t} />`)}
+    <div id="viewswitch" role="group" aria-label="view">
+        ${share ? html`<button type="button" class="btn btn-small" onClick=${doShare}
+                title="copy a link to this page that others can open">${copied ? '✓ Link copied' : '🔗 Share'}</button>` : null}
+        <button type="button" class="btn btn-small" aria-pressed=${mode === 'cards'} onClick=${() => setView('cards')}
+                title="Title, authors, abstract and buttons">Cards</button>
+        <button type="button" class="btn btn-small" aria-pressed=${mode === 'compact'} onClick=${() => setView('compact')}
+                title="One line per paper; ▸ opens one">Titles only</button>
     </div>`;
+};
 
-// "why these papers?": the model's top words, once a ranking has some (also when they arrive later)
-(() => {
-    const btn = document.getElementById('inspect_svm');
-    const box = document.getElementById('wordwrap');
-    if (!btn || !box) return;
-    const show = w => { btn.hidden = !(w && w.length); };
-    show(typeof words !== 'undefined' ? words : []);
-    window.addEventListener('words', e => show(e.detail));
-    btn.addEventListener('click', () => {
-        box.hidden = !box.hidden;
-        btn.textContent = box.hidden ? 'why these papers?' : 'hide the words';
-    });
-})();
+// the most positive / negative tfidf words of the ranking model
+const Word = ({ word: w }) => html`
+    <span class=${'rel_word ' + (w.weight >= 0 ? 'pos' : 'neg')} title=${'weight ' + w.weight.toFixed(3)}>
+        <span class="rel_word_txt">${w.word}</span>
+        <span class="rel_word_weight">${w.weight.toFixed(2)}</span>
+    </span>`;
+
+export const WordList = ({ words, desc }) => html`
+    <div class="card">
+        <p class="muted">${desc}</p>
+        <div id="wordList" class="rel_words">${words.map((w, ix) => html`<${Word} key=${ix} word=${w} />`)}</div>
+    </div>`;
 
 // the digest page: one section per tag, with quick votes for that tag. a click on a tag's
 // heading folds it away; which tags are folded is remembered in this browser. "load more"
 // fetches the tag's next best papers of the same days (/digest/more)
 const FOLDED_KEY = 'digest-folded';
 const DigestSection = ({ s, open, onToggle }) => {
+    const page = useContext(Page);
     const [extra, setExtra] = useState([]);
     const [state, setState] = useState('idle'); // idle | loading | done | error message
     const papers = s.papers.concat(extra);
     const more = () => {
         setState('loading');
         const q = new URLSearchParams({ tag: s.tag, skip: extra.map(p => p.id).join(',') });
-        if (viewing) q.set('u', owner);
-        fetch('/digest/more?' + q).then(r => r.json()).then(res => {
-            if (res.error) { setState(res.error); return; }
+        if (page.viewing) q.set('u', page.owner);
+        api('/digest/more?' + q).then(res => {
             setExtra(x => x.concat(res.papers));
             setState(res.more ? 'idle' : 'done');
-        }).catch(() => setState('loading failed, try again'));
+        }).catch(e => setState(e.message || 'loading failed, try again'));
     };
     return html`
     <section class=${'digest-section' + (open ? '' : ' folded')}>
@@ -612,7 +536,7 @@ const DigestSection = ({ s, open, onToggle }) => {
         </div>` : null}
     </section>`;
 };
-const Digest = ({ sections }) => {
+export const DigestSections = ({ sections }) => {
     const [folded, setFolded] = useState(() => {
         try { return JSON.parse(localStorage.getItem(FOLDED_KEY)) || []; } catch (e) { return []; }
     });
@@ -621,22 +545,21 @@ const Digest = ({ sections }) => {
         setFolded(next);
         try { localStorage.setItem(FOLDED_KEY, JSON.stringify(next)); } catch (e) { /* storage blocked: this page only */ }
     };
-    return html`${sections.map(s => html`
-        <${DigestSection} key=${s.tag} s=${s} open=${!folded.includes(s.tag)} onToggle=${() => toggle(s.tag)} />`)}`;
+    return html`<div id="digestwrap">${sections.map(s => html`
+        <${DigestSection} key=${s.tag} s=${s} open=${!folded.includes(s.tag)} onToggle=${() => toggle(s.tag)} />`)}</div>`;
 };
 
 // "check this tag": how well the tag's papers predict each other, and which don't fit
-const TagCheck = ({ tag }) => {
+export const TagCheck = ({ tag }) => {
+    const page = useContext(Page);
     const [state, setState] = useState(null); // null | 'loading' | result | {error}
+    useEffect(() => { setState(null); heldout.set({ tag: null, ranks: {}, misfit: 0.1 }); }, [tag]);
     const run = () => {
         setState('loading');
-        fetch('/tag_check?tag=' + encodeURIComponent(tag) + (viewing ? '&u=' + encodeURIComponent(owner) : '')).then(r => r.json()).then(res => {
+        api('/tag_check?tag=' + encodeURIComponent(tag) + (page.viewing ? '&u=' + encodeURIComponent(page.owner) : '')).then(res => {
             setState(res);
-            if (res.ranks) {
-                Object.assign(heldout, { tag, ranks: res.ranks, misfit: res.misfit_threshold });
-                window.dispatchEvent(new Event('heldout'));
-            }
-        }).catch(() => setState({ error: 'the check failed, try again' }));
+            if (res.ranks) heldout.set({ tag, ranks: res.ranks, misfit: res.misfit_threshold });
+        }).catch(e => setState({ error: e.message || 'the check failed, try again' }));
     };
     if (state === null || state === 'loading') {
         return html`<div class="tagcheck">
@@ -671,11 +594,12 @@ const TagCheck = ({ tag }) => {
         </div>`;
 };
 
-if (typeof digest !== 'undefined') {
-    mount(html`<${Digest} sections=${digest} />`, 'digestwrap');
-} else {
-    mount(html`<${Results} />`, 'wrap');
-    mount(html`<${TagList} tags=${tags} />`, 'tagwrap');
-    const single = gvars.rank === 'tags' && !gvars.tags.includes(',') && userTagNames.includes(gvars.tags);
-    if (single) mount(html`<${TagCheck} tag=${gvars.tags} />`, 'tagcheckwrap');
-}
+// someone else's shared page, or a link to a profile that isn't public
+export const ViewBanner = ({ info }) => {
+    const m = me.use();
+    if (info.not_shared) return html`<div id="log-fun-warn">@${info.not_shared}'s profile isn't public (or there is no such user).</div>`;
+    if (!info.viewing) return null;
+    return html`<div id="log-fun-warn">👁 You're viewing <b>@${info.owner}</b>'s tags, read-only.
+        ${' '}${m.user && !m.readonly ? html`To vote or change something, copy a tag to your own account from its page.
+        ${' '}<a href=${'/?u=' + encodeURIComponent(m.user)}>Back to your own tags</a>` : html`<a href="/profile">Log in</a> to copy a tag to your own account.`}</div>`;
+};

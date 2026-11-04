@@ -53,15 +53,16 @@ def test_digest_page_and_votes(client, corpus):
 
     v = vision(corpus)
     login(client)
-    assert b'No digest yet' in client.get('/digest').data
+    page = client.get('/ui/digest').get_json()
+    assert page['sections'] == [] and page['digest_time'] == ''  # no digest yet
     for p in v[:4]:
         client.post(f'/add/{p}/cv')
-    assert client.post('/digest').status_code == 302  # make one now
+    assert client.post('/digest').get_json() == {'ok': True}  # make one now
     d = db.get_digest('alice')
     assert d['days'] == 7 and d['sections'][0]['tag'] == 'cv'
-    page = client.get('/digest').data.decode()
+    page = client.get('/ui/digest').get_json()
     first = d['sections'][0]['papers'][0][0]
-    assert first in page and 'var digest' in page
+    assert page['sections'][0]['papers'][0]['id'] == first
 
 
 def test_emails_and_unsubscribe(features, corpus, monkeypatch, tmp_path):
@@ -188,7 +189,7 @@ def test_double_opt_in(client, corpus, monkeypatch):
     sent = []
     monkeypatch.setattr(mail, 'send', sent.append)
     login(client)
-    assert client.post('/register_email', data={'email': 'alice@example.org'}).status_code == 302
+    assert client.post('/register_email', data={'email': 'alice@example.org'}).status_code == 200
     assert db.get_emails() == {}  # nothing goes out before the owner confirms
     assert db.get_user('alice')['pending_email'] == 'alice@example.org'
     (msg,) = sent
@@ -224,19 +225,26 @@ def test_export_and_delete_account(client, corpus):
     assert 'pw_hash' not in r.data.decode() and 'scrypt' not in r.data.decode()
     assert client.post('/delete_account', data={'password': 'wrong one'}).status_code == 403
     assert db.get_user('alice') is not None
-    assert b'Account deleted' in client.post('/delete_account', data={'password': 'correct horse'}).data
+    assert client.post('/delete_account', data={'password': 'correct horse'}).get_json() == {'ok': True}
     assert db.get_user('alice') is None and db.get_tags('alice') == {} and db.get_digest('alice') is None
     assert client.post(f'/add/{pid}/cv').data.startswith(b'error, not logged in')  # logged out too
 
 
 def test_legal_pages_and_no_third_parties(client):
-    for url in ['/privacy', '/imprint']:
-        assert client.get(url).status_code == 200
+    import glob
+    import os
+
+    for name in ['privacy', 'imprint']:
+        assert client.get('/' + name).status_code == 200 and client.get('/ui/page/' + name).status_code == 200
     page = client.get('/').data.decode()
     assert 'cdn' not in page and 'jsdelivr' not in page and '/static/vendor/' in page
     csp = client.get('/').headers['Content-Security-Policy']
     assert "default-src 'self'" in csp and 'http' not in csp
-    assert '/privacy' in page and '/imprint' in page  # linked from every page
+    # the app loads nothing from elsewhere either, and links the legal pages from every page
+    here = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'static', 'app')
+    app = ''.join(open(f).read() for f in glob.glob(os.path.join(here, '*.js')))
+    assert 'https://cdn' not in app and 'jsdelivr' not in app and 'unpkg' not in app
+    assert 'href="/privacy"' in app and 'href="/imprint"' in app
 
 
 def test_papers_per_tag_in_the_digest(client, corpus):
@@ -249,9 +257,9 @@ def test_papers_per_tag_in_the_digest(client, corpus):
         client.post(f'/add/{p}/cv')
     for p in lang[:4]:
         client.post(f'/add/{p}/nlp')
-    assert b'Papers per tag' in client.get('/profile').data
+    assert [t['name'] for t in client.get('/ui/profile').get_json()['digest_tags']] == ['cv', 'nlp']
     r = client.post('/digest_sizes', data={'tag': ['cv', 'nlp', 'nope'], 'n': ['5', '0', '5']})
-    assert r.status_code == 302 and db.get_digest_sizes('alice') == {'cv': 5, 'nlp': 0}  # unknown tags ignored
+    assert r.status_code == 200 and db.get_digest_sizes('alice') == {'cv': 5, 'nlp': 0}  # unknown tags ignored
     client.post('/digest')
     d = db.get_digest('alice')
     assert [(s['tag'], len(s['papers'])) for s in d['sections']] == [('cv', 5)]  # 0 leaves nlp out
@@ -274,10 +282,10 @@ def test_digest_window_is_the_users_pick(client, corpus, tmp_path, monkeypatch):
         client.post(f'/add/{p}/cv')
     assert db.get_digest_days('alice') == db.DIGEST_DAYS
     client.post('/digest_sizes', data={'days': '14', 'tag': ['cv'], 'n': ['3']})
-    assert db.get_digest_days('alice') == 14 and b'value="14"' in client.get('/profile').data
+    assert db.get_digest_days('alice') == 14 and client.get('/ui/profile').get_json()['digest_days'] == 14
     client.post('/digest')
     assert db.get_digest('alice')['days'] == 14
-    assert b'14 days before' in client.get('/digest').data
+    assert client.get('/ui/digest').get_json()['digest_days'] == 14
     assert db.export_user('alice')['digest_days'] == 14
     client.post('/digest_sizes', data={'days': '9999'})
     assert db.get_digest_days('alice') == db.DIGEST_DAYS_MAX
@@ -326,7 +334,7 @@ def test_agent_tags_stay_out_of_the_digest_unless_given_a_number(client, corpus)
     login(client)
     for p in v[:4]:
         client.post(f'/add/{p}/agent:cv')
-    assert b'value="0"' in client.get('/profile').data
+    assert client.get('/ui/profile').get_json()['digest_tags'] == [{'name': 'agent:cv', 'n': 0}]
     client.post('/digest')
     assert db.get_digest('alice')['sections'] == []
     client.post('/digest_sizes', data={'tag': ['agent:cv'], 'n': ['2']})

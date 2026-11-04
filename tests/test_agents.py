@@ -115,7 +115,7 @@ def test_a_token_reads_and_organizes_the_users_papers(client, corpus):
 
     # the note is on the card, for the user only; read marks too
     login(client)
-    card = {p['id']: p for p in client.get('/?rank=saved&tags=cv&format=json').get_json()['papers']}
+    card = {p['id']: p for p in client.get('/ui/list?rank=saved&tags=cv').get_json()['papers']}
     assert card[vision[2]]['note'] == 'the segmentation baseline' and card[vision[0]]['read']
     client.post(f'/note/{vision[2]}', data={'text': ''})
     assert db.get_notes('alice') == {}
@@ -436,11 +436,11 @@ def test_all_tags_leaves_out_the_agent_tags(client, corpus):
     login(client)
 
     def ids(url):
-        return {p['id'] for p in client.get(url + '&format=json').get_json()['papers']}
+        return {p['id'] for p in client.get('/ui/list' + url[1:]).get_json()['papers']}
 
     assert ids('/?rank=saved&tags=all') == set(vision[:3]) and ids('/?rank=unread&tags=all') == set(vision[:3])
     assert ids('/?rank=saved&tags=agent:nlp') == set(language[:4])  # the agent's tag itself works as usual
-    assert 'Saved (3)' in client.get('/?rank=saved&tags=all').data.decode()
+    assert client.get('/ui/list?rank=saved&tags=all').get_json()['n_saved'] == 3
     # the All tags model trains on the user's own tags only
     pos, _ = serve.training_set(db.get_tags('alice'), db.get_tags('alice', neg=True), 'all')
     assert pos == set(vision[:3])

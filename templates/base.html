@@ -1,6 +1,7 @@
 <!DOCTYPE HTML>
 <html lang="en">
-
+{# the few pages still made on the server: the oauth consent page, the links in emails and errors.
+   everything else is the app (static/app/index.html) #}
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -8,22 +9,6 @@
 <title>Arxiv Resanity</title>
 <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
 <link rel="shortcut icon" type="image/png" href="{{ url_for('static', filename='favicon.png') }}" />
-
-<script>
-var user = {{ user | tojson }};
-var readonly = {{ readonly | default(false) | tojson }};
-// whose tags this page shows: someone else's on a shared link (?u=), without edit controls then
-var owner = {{ owner | default('') | tojson }};
-var summariesOn = {{ summaries_on | default(false) | tojson }};
-var summariesAsk = {{ summaries_ask | default(false) | tojson }};
-var cardTab = {{ card_tab | default('') | tojson }};
-var loggedIn = {{ logged_in | default(false) | tojson }};
-var viewing = {{ viewing | default(false) | tojson }};
-var sharing = {{ sharing | default(false) | tojson }};
-</script>
-{% block variables %}
-{% endblock %}
-
 </head>
 
 <body>
@@ -32,59 +17,20 @@ var sharing = {{ sharing | default(false) | tojson }};
     <nav>
         <a href="/?rank=time" class="nav-secondary" title="every paper, newest first">newest</a>
         <a href="/agents" title="how to use this site with Claude and other AI agents">agents</a>
-        {% if user %}<a href="/?rank=unread&tags=all" title="saved papers you haven't marked as read">to read</a><a href="/digest">digest</a>{% endif %}{% if user and not readonly %}<a href="/import" title="add papers by arXiv link">add</a>{% endif %}
-        <a href="/profile" class="{{ 'nav-user' if user else 'nav-login' }}" {% if readonly %}title="read-only view"{% endif %}>{{ ('👁 ' + user) if readonly else (user if user else 'log in') }}</a>
+        <a href="/profile" class="{{ 'nav-user' if user else 'nav-login' }}">{{ user if user else 'log in' }}</a>
     </nav>
 </header>
 
 <main>
-{% if not_shared %}
-<div id="log-fun-warn">@{{ not_shared }}'s profile isn't public (or there is no such user).</div>
-{% elif viewing %}
-<div id="log-fun-warn">👁 You're viewing <b>@{{ owner }}</b>'s tags, read-only.
-    {% if user and not readonly %}To vote or change something, copy a tag to your own account from its page.
-    <a href="/?u={{ user }}">Back to your own tags</a>{% else %}<a href="/profile">Log in</a> to copy a tag to your own account.{% endif %}</div>
-{% endif %}
-{% if ask_public %}
-<!-- right after signing up: public profile or not (the account stays private until this is answered) -->
-<dialog id="askpublic" aria-labelledby="askpublic-title">
-    <form action="/sharing" method="post">
-        <input type="hidden" name="next" value="{{ request.full_path }}">
-        <h2 id="askpublic-title">Welcome, {{ user }}!</h2>
-        <label class="check" title="Anyone with a link to your pages (it contains your username) can see your tags, saved papers, recommendations and digest, read-only; never your email address">
-            <input type="checkbox" name="public" value="1" checked>
-            <span><b>Public profile</b><br><span class="muted small">Others with a link can view your tags and saved
-                papers read-only and copy a tag to their account. Never your email. You can change this any time on your profile.</span></span>
-        </label>
-        <button type="submit" class="btn btn-primary">Continue</button>
-    </form>
-</dialog>
-<script>
-    (function () {
-        var d = document.getElementById('askpublic');
-        d.showModal();
-        d.addEventListener('cancel', function (e) { e.preventDefault(); });  // Esc: it has to be answered
-    })();
-</script>
-{% endif %}
 {% block content %}
 {% endblock %}
 </main>
 
 <footer id="footer">
-    <a href="/about">about</a> · <a href="/?rank=time">newest</a> · <a href="/?rank=random&time_filter=7">random</a> ·
-    <a href="/stats">stats</a> · <a href="/agents" title="use this site from Claude and other AI agents">AI agents</a> · <a href="https://github.com/dorian-K/arxiv-sanity-lite" title="the source code of this site">source on GitHub</a> · <a href="/privacy">privacy</a> · <a href="/imprint">imprint</a>
+    <a href="/about">about</a> · <a href="/stats">stats</a> · <a href="/agents">AI agents</a> ·
+    <a href="https://github.com/dorian-K/arxiv-sanity-lite">source on GitHub</a> · <a href="/privacy">privacy</a> · <a href="/imprint">imprint</a>
 </footer>
-
-<!-- React without a build step: components are written with htm tagged templates
-     (static/common.js), so no in-browser JSX compiler is needed -->
-<!-- served from this server (update_vendor.py), so no visitor data goes to a CDN -->
-<script src="{{ url_for('static', filename='vendor/react-18.3.1/umd/react.production.min.js') }}"></script>
-<script src="{{ url_for('static', filename='vendor/react-dom-18.3.1/umd/react-dom.production.min.js') }}"></script>
-<script src="{{ url_for('static', filename='vendor/htm-3.1.1/htm.umd.js') }}"></script>
-<script src="{{ url_for('static', filename='common.js') }}"></script>
 {% block elements %}
 {% endblock %}
-
 </body>
 </html>

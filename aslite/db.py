@@ -33,7 +33,7 @@ import numpy as np
 import scipy.sparse as sp
 
 from aslite.arxiv import venue
-from aslite.sources import abs_url
+from aslite.sources import ARXIV, abs_url
 
 # -----------------------------------------------------------------------------
 # global configuration
@@ -263,6 +263,15 @@ class PapersDB:
 
     def keys(self):
         return [r[0] for r in self.con.execute('SELECT id FROM papers ORDER BY n')]
+
+    def not_arxiv(self):
+        """[(pid, title)] of the papers from other sites (aslite/sources.py), the few users added"""
+        rows = self.con.execute("SELECT id, title FROM papers WHERE id NOT GLOB '[0-9][0-9][0-9][0-9].[0-9]*'")
+        return [(p, t) for p, t in rows if not ARXIV.owns(p)]
+
+    def delete(self, pids):
+        with self.con:
+            self.con.executemany('DELETE FROM papers WHERE id = ?', [(p,) for p in pids])
 
     def items(self):
         """(pid, paper) for all papers, in insertion order, streamed"""
@@ -685,6 +694,28 @@ def tag_paper(user, pid, tag, neg=False):
         'INSERT INTO tags (user, tag, pid, neg) VALUES (?, ?, ?, ?) ON CONFLICT DO UPDATE SET neg = excluded.neg',
         (user, tag, pid, int(neg)),
     )
+
+
+def move_paper(old, new):
+    """
+    everything users have on paper old (saves, downvotes, read marks, notes) goes to paper new,
+    the same paper on arXiv (aslite/refs.merge_twins); what they already have on new stays
+    """
+    con = users_db()
+    try:
+        with con:
+            for table, cols in (
+                ('tags', 'user, tag, pid, neg'),
+                ('reads', 'user, pid, time'),
+                ('notes', 'user, pid, text, time'),
+            ):
+                sel = cols.replace('pid', '?')
+                con.execute(
+                    f'INSERT OR IGNORE INTO {table} ({cols}) SELECT {sel} FROM {table} WHERE pid = ?', (new, old)
+                )
+                con.execute(f'DELETE FROM {table} WHERE pid = ?', (old,))
+    finally:
+        con.close()
 
 
 def untag_paper(user, pid, tag, neg=False):
@@ -1715,6 +1746,13 @@ class RefsDB:
     def unmatched(self):
         """[(citing, pos, title, raw)] of the references no paper was found for"""
         return self.con.execute('SELECT citing, pos, title, raw FROM refs WHERE cited IS NULL').fetchall()
+
+    def move_paper(self, old, new):
+        """references to paper old now point to new (its twin on arXiv); old's own entries go"""
+        with self.con:
+            self.con.execute('UPDATE refs SET cited = ? WHERE cited = ?', (new, old))
+            for table, col in (('refs', 'citing'), ('fetched', 'pid'), ('requested', 'pid'), ('summaries', 'pid')):
+                self.con.execute(f'DELETE FROM {table} WHERE {col} = ?', (old,))
 
     def set_cited(self, rows):
         """(cited, citing, pos) for references matched later"""

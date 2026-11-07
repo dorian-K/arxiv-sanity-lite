@@ -452,18 +452,20 @@ def _check_new_tag(tag):
 def save_papers(ids, tag):
     tag = _check_new_tag(_writable_tag(tag))
     pids, bad = _norm_ids(ids)
-    have, fetched, over, failed = site.fetch_missing(pids)
+    have, fetched, over, failed, twins = site.fetch_missing(pids)
     status = {}
-    for p in pids:
+    for asked in pids:
+        p = twins.get(asked, asked)  # on arXiv too: saved as the arXiv paper
+        twin = f'on arXiv too, as {p}: ' if p != asked else ''
         if p in have or p in fetched:
             db.tag_paper(g.user, p, tag)
-            status[p] = 'saved' if p in have else f'fetched from {source_of(p).label} and saved'
+            status[asked] = twin + ('saved' if p in have else f'fetched from {source_of(p).label} and saved')
         elif p in over:
-            status[p] = 'over the daily fetch limit, try tomorrow'
+            status[asked] = twin + 'over the daily fetch limit, try tomorrow'
         elif p in failed:
-            status[p] = f'{source_of(p).label} could not be reached, try later'
+            status[asked] = twin + f'{source_of(p).label} could not be reached, try later'
         else:
-            status[p] = f'not found on {source_of(p).label}'
+            status[asked] = f'not found on {source_of(p).label}'
     site.prefit_later(g.user, tag, 'all')
     return {'tag': tag, 'status': status, **({'not_arxiv_ids': bad} if bad else {})}
 

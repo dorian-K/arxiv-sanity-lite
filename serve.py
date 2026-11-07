@@ -32,7 +32,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 from aslite import db, digest, mail, metrics, summary, thumbs
 from aslite.spell import Speller
-from aslite.refs import may_reread
+from aslite.refs import arxiv_twin, may_reread, same_paper
 from aslite.db import get_papers_db, get_secret_key, load_features, features_exist, PAPERS_DB_FILE
 from aslite.arxiv import OLD_ARXIV_ID_RE, categories_text
 from aslite import sources
@@ -1543,6 +1543,7 @@ STAT_LABELS = {
     'ui_page': 'About, privacy, imprint',
     'ui_graph': 'Citation graph',
     'ui_graph_alike': 'Citation graph: alike papers',
+    'ui_paper_id': 'Citation graph: reading a typed link',
     'graph_analyze': 'Citation graph: analyze a paper',
     'login': 'Log in',
     'logout': 'Log out',
@@ -1868,6 +1869,15 @@ def ui_graph_alike():
     return {'pid': pid, 'ghosts': near}
 
 
+@app.route('/ui/paper_id')
+def ui_paper_id():
+    """the paper id in a link or id someone typed (the graph's open box): every site's links are known here, never fetched"""
+    pid = find_paper_id(request.args.get('q', '')[:500])
+    if pid is None:
+        return {'error': 'That is no paper id or link we know (arXiv, ACL Anthology, PMLR, JMLR, CVF, NeurIPS).'}, 404
+    return {'pid': pid}
+
+
 @app.route('/graph/analyze', methods=['POST'])
 def graph_analyze():
     """asks enrich_daemon.py to read a paper's references next; one not on this site is fetched first"""
@@ -1889,7 +1899,15 @@ def graph_analyze():
     if rate_limited('analyze'):
         return too_many('analyze')
     if pid not in get_papers():  # cited, but outside this site's categories: its metadata first
-        _, fetched, over, failed = fetch_missing([pid])
+        _, fetched, over, failed, twins = fetch_missing([pid])
+        if pid in twins:  # on arXiv too: its references are read there, under the arXiv id
+            twin = twins[pid]
+            if twin not in get_papers():
+                return {'error': f"It is on arXiv too ({twin}), which could not be fetched now. Try again later."}, 503
+            st = rdb.status_of([twin]).get(twin)
+            if not (st and st[0] == 'ok' and not may_reread(st)) and twin not in rdb.requested():
+                rdb.request(twin)
+            return {'state': 'elsewhere', 'same_as': twin}
         if pid not in fetched:
             where = source_of(pid).label
             if pid in over:
@@ -2106,8 +2124,10 @@ def fetch_missing(wanted):
     """
     fetches the papers of `wanted` (ids of any source) that aren't here from where they live,
     within the user's and everyone's daily limits (one request per `batch` ids of a source,
-    through its slot, see aslite/sources.py). returns sets: (were here, fetched now, over the
-    limit, their site not reached); the rest weren't found
+    through its slot, see aslite/sources.py). A paper from another site that is on arXiv too
+    (same title) is stored as the arXiv one, so no paper is here twice: twins maps its id to
+    the arXiv id, which stands in for it in the sets. returns (were here, fetched now, over the
+    limit, their site not reached, twins); the rest weren't found
     """
     pdb = get_papers()
     have = set(pdb.get_many(wanted))
@@ -2115,26 +2135,81 @@ def fetch_missing(wanted):
     day_ago = time.time() - 86400
     budget = min(FETCH_LIMIT_USER - db.count_fetches(day_ago, g.user), FETCH_LIMIT_TOTAL - db.count_fetches(day_ago))
     to_fetch, over = missing[: max(0, budget)], set(missing[max(0, budget) :])
-    fetched, failed = set(), set()
-    batches = []
-    for src in sources.SOURCES:
-        mine = [p for p in to_fetch if source_of(p) is src]
-        batches += [(src, mine[i : i + src.batch]) for i in range(0, len(mine), src.batch)]
-    for src, batch in batches:
+    fetched, failed, twins = set(), set(), {}
+
+    def fetch(src, batch):
         try:
             with src.slot():
                 found = src.fetch(batch)
         except Exception as e:  # the site is down or rate limiting us: report it, don't retry here
             print("%s fetch failed: %s" % (src.name, e))
+            return None
+        finally:
+            for pid in batch:
+                db.log_fetch(g.user, pid)  # misses count too: each one was a request
+        return found
+
+    # the other sites first, one paper per request: their twins on arXiv then join arXiv's batches
+    arxiv_ids = [p for p in to_fetch if source_of(p) is sources.ARXIV]
+    budget -= len(to_fetch) - len(arxiv_ids)  # what the other sites take; arXiv's (and the twins) below
+    for src in sources.OTHERS:
+        mine = [p for p in to_fetch if source_of(p) is src]
+        for batch in (mine[i : i + src.batch] for i in range(0, len(mine), src.batch)):
+            found = fetch(src, batch)
+            if found is None:
+                failed |= set(batch)
+                continue
+            for pid, paper in found.items():
+                twin = arxiv_twin(pdb, _refs_db(), paper)
+                if twin is None and budget > 0:  # no titles table, or a paper newer than it: ask arXiv itself
+                    budget -= 1
+                    on_arxiv = search_arxiv(paper, pid)
+                    if on_arxiv is not None:  # the search answers with the whole paper
+                        twins[pid] = on_arxiv['_id']
+                        if on_arxiv['_id'] in pdb:
+                            have.add(on_arxiv['_id'])
+                        else:
+                            pdb.upsert([on_arxiv])
+                            fetched.add(on_arxiv['_id'])
+                        continue
+                if twin is None:
+                    pdb.upsert([paper])
+                    fetched.add(pid)
+                    continue
+                twins[pid] = twin
+                if twin in have or pdb.get_many([twin]):
+                    have.add(twin)
+                elif twin not in arxiv_ids:
+                    arxiv_ids.append(twin)
+    for i in range(0, len(arxiv_ids), sources.ARXIV.batch):
+        batch = arxiv_ids[i : i + sources.ARXIV.batch]
+        if budget <= 0:
+            over |= set(batch)
+            continue
+        batch, over_now = batch[:budget], batch[budget:]
+        over |= set(over_now)
+        budget -= len(batch)
+        found = fetch(sources.ARXIV, batch)
+        if found is None:
             failed |= set(batch)
             continue
         pdb.upsert(found.values())
-        for pid in batch:
-            db.log_fetch(g.user, pid)  # misses count too: each one was a request
         fetched |= set(found)
     if fetched:
         db.request_compute()
-    return have, fetched, over, failed
+    return have, fetched, over, failed, twins
+
+
+def search_arxiv(paper, pid):
+    """paper's twin on arXiv (refs.same_paper), from one search of the arXiv API (counted as a fetch), or None"""
+    try:
+        with sources.ARXIV.slot():
+            return sources.ARXIV.by_title(paper['title'], lambda p: same_paper(p, paper['title'], paper['authors']))
+    except Exception as e:  # arXiv unreachable: keep the other site's paper, merge_twins can still join them later
+        print("arxiv title search for %s failed: %s" % (pid, e))
+        return None
+    finally:
+        db.log_fetch(g.user, 'title:' + pid)
 
 
 @app.route('/ui/import')
@@ -2177,20 +2252,22 @@ def import_papers():
     wanted = list(dict.fromkeys(wanted))
 
     pdb = get_papers()
-    have, fetched, over, failed = fetch_missing(wanted)
+    have, fetched, over, failed, twins = fetch_missing(wanted)
 
     for r in results:
-        pid = r[1]
-        if pid is None:
+        if r[1] is None:
             continue
+        asked = r[1]
+        pid = r[1] = twins.get(asked, asked)  # on arXiv too: the arXiv paper is the one we keep
+        twin = f'on arXiv too ({pid}), ' if pid != asked else ''
         if pid in have:
-            r[2] = 'already here'
+            r[2] = twin + 'already here'
         elif pid in fetched:
-            r[2] = f'added from {source_of(pid).label}'
+            r[2] = twin + f'added from {source_of(pid).label}'
         elif pid in over:
-            r[2] = 'over the daily fetch limit, try again tomorrow'
+            r[2] = twin + 'over the daily fetch limit, try again tomorrow'
         elif pid in failed:
-            r[2] = f'{source_of(pid).label} could not be reached, try again later'
+            r[2] = twin + f'{source_of(pid).label} could not be reached, try again later'
         else:
             r[2] = f'not found on {source_of(pid).label}'
             r[1] = None

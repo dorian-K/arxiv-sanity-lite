@@ -26,8 +26,10 @@
             store when you confirmed, as the record of your consent (Art. 6(1)(a) GDPR). You can withdraw
             any time through the link in every digest or on your profile; the address is then deleted.</li>
         <li><b>Papers you add by link</b>: if a paper isn't here yet, this server asks arXiv for it (or the
-            ACL Anthology, aclanthology.org, for papers published there). The
-            request contains only the paper's id, nothing about you. We keep a log of who added which
+            site the paper is published on, for papers that aren't on arXiv: the ACL Anthology, PMLR, JMLR, CVF Open
+            Access or the NeurIPS proceedings; then arXiv is searched for its title, so that a paper that is on
+            arXiv too is kept only once). The
+            request contains only the paper's id (or title), nothing about you. We keep a log of who added which
             paper for two days, to enforce daily limits.</li>
         <li><b>AI agents</b>: if you make an access token, or connect an app such as claude.ai (which then
             gets one after you allow it on our page), whoever holds it can read (and, if you allowed
@@ -37,8 +39,8 @@
             token can only search and rank papers; like everyone, they are subject to the rate limits below.</li>
         <li><b>References and thumbnails</b>: to show which papers your saved papers cite, and a picture of
             each paper, the server downloads the public HTML version and PDF of saved and recommended papers,
-            and of papers someone asks to analyze on the citation graph, from arXiv (or the ACL Anthology for papers
-            from there) and keeps their reference lists, and, for papers under a Creative Commons license, a small
+            and of papers someone asks to analyze on the citation graph, from arXiv (or the site it is published on, for
+            papers that aren't on arXiv) and keeps their reference lists, and, for papers under a Creative Commons license, a small
             image of their first figure and first page, credited with that license.
             The requests contain only the paper's id, nothing about you, and none of this says who saved or
             asked for a paper.</li>

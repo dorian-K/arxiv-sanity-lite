@@ -42,6 +42,14 @@ def make_paper(i, topic, rng):
     }
 
 
+@pytest.fixture(autouse=True)
+def no_arxiv_title_search(monkeypatch):
+    """papers from other sites are looked up on arXiv by title (serve.fetch_missing): never over the network here"""
+    from aslite import sources
+
+    monkeypatch.setattr(sources.ARXIV, 'by_title', lambda title, same=None: None)
+
+
 @pytest.fixture
 def corpus(tmp_path, monkeypatch):
     """

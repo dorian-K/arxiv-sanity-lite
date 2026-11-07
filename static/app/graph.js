@@ -216,31 +216,21 @@ const lensPicks = (lens, { g, pid, cited, out, ancestors, descendants, alike: al
     return [...sharing.slice(0, LENS_MAX - Math.min(4, content.length)), ...content].slice(0, LENS_MAX);
 };
 
-// a paper id from what was typed or pasted: an id, or a link to its abstract, pdf or html page,
-// on arXiv or the ACL Anthology (also ACL DOIs); aslite/sources.py knows the same ids
-const ID_IN = /(\d{4}\.\d{4,5}|[a-z-]+(?:\.[A-Z]{2})?\/\d{7})(?:v\d+)?(?:\.pdf)?\/?\s*$/;
-const ACL_IN = /(?:^|aclanthology\.org\/|aclweb\.org\/anthology\/(?:[A-Z]\/[A-Z]\d\d\/)?|10\.18653\/(?:v1\/)?)(\d{4}\.[a-z][a-z\d]*(?:-[a-z\d]+)*\.\d+|[A-Z]\d{2}-\d{4})(?:v\d+)?(?:\.pdf)?\/?\s*$/i;
-export const paperId = text => {
-    const t = text.trim().replace(/[?#].*$/, '');
-    const a = ACL_IN.exec(t);
-    if (a) return /^[a-z]\d/i.test(a[1]) ? a[1].toUpperCase() : a[1].toLowerCase();
-    const m = ID_IN.exec(t);
-    return m ? m[1] : '';
-};
-
 // the box at the top: a graph around another paper
 const OpenPaper = () => {
     const [err, setErr] = useState('');
     const submit = e => {
         e.preventDefault();
-        const id = paperId(e.target.elements.paper.value);
-        if (!id) { setErr('That is no paper id or link (like 1412.6980, arxiv.org/abs/1412.6980 or an aclanthology.org link).'); return; }
-        setErr('');
-        e.target.reset();
-        navigate('/graph?pid=' + encodeURIComponent(id));
+        const form = e.target;
+        // the server knows every site's links (aslite/sources.py)
+        api('/ui/paper_id?q=' + encodeURIComponent(form.elements.paper.value)).then(r => {
+            setErr('');
+            form.reset();
+            navigate('/graph?pid=' + encodeURIComponent(r.pid));
+        }).catch(er => setErr(er.message));
     };
     return html`<form class="graph-open" onSubmit=${submit} title="open the citation graph of another paper">
-        <input name="paper" type="text" placeholder="Another paper: arXiv or ACL Anthology id or link" aria-label="id or link of another paper (arXiv, ACL Anthology)"
+        <input name="paper" type="text" placeholder="Another paper: id or link" aria-label="id or link of another paper (arXiv, ACL Anthology, PMLR, JMLR, CVF, NeurIPS)"
             autocomplete="off" spellcheck=${false} />
         <button class="btn btn-small" type="submit">Open graph</button>
         ${err ? html`<span class="form-error small">${err}</span>` : null}
@@ -321,6 +311,10 @@ export const GraphPage = () => {
         api('/graph/analyze', { pid: id }).then(r => {
             const n = gRef.current && gRef.current.nodes.get(id);
             if (!n) return;
+            if (r.same_as) { // on arXiv too: kept and read there, so this node stays as it is
+                setActionError('This paper is on arXiv too, as ' + r.same_as + ': its references are read there. Open its graph with “Start from here” on that paper, or the box at the top.');
+                return;
+            }
             n.state = r.state;
             if (r.state === 'analyzed') expand(id);
             redraw();

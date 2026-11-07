@@ -240,7 +240,7 @@ export const ImportPage = () => {
     if (!d) return error ? html`<${LoadError} error=${error} reload=${reload} />` : null;
     const submit = e => {
         e.preventDefault();
-        run(() => api('/import', new FormData(e.target)), "Adding papers… ones that aren't here yet are fetched from arXiv (a few seconds per 100) or the ACL Anthology (a few seconds each).")
+        run(() => api('/import', new FormData(e.target)), "Adding papers… ones that aren't here yet are fetched from arXiv (a few seconds per 100) or the site they are published on (a few seconds each).")
             .then(r => { if (r) { setRes(r); reload(); } });
     };
     const q = res && encodeURIComponent(res.tag);
@@ -251,9 +251,11 @@ export const ImportPage = () => {
             ${!m.user || m.readonly ? html`<p class="muted">Please <a href="/profile">log in</a> to add papers.</p>` : html`
             <p class="muted">
                 One link or id per line, up to ${d.max_lines} at a time: arxiv.org/abs or /pdf links,
-                Hugging Face or alphaXiv paper pages, DOIs, or bare ids like 2401.12345; papers from the
-                ACL Anthology too (aclanthology.org links, ACL DOIs, ids like 2024.acl-long.12). Papers of any year
-                and category work; ones that aren't here yet are fetched from where they are published (up to ${d.limit} a day).
+                Hugging Face or alphaXiv paper pages, DOIs, or bare ids like 2401.12345. Papers that aren't on arXiv
+                work by their page or PDF link on the ACL Anthology (also ACL DOIs and ids like 2024.acl-long.12), PMLR (ICML,
+                AISTATS, COLT, CoRL, ...), JMLR, CVF Open Access (CVPR, ICCV, WACV) and the NeurIPS proceedings; one that is
+                on arXiv too is added as the arXiv paper. Papers of any year and category work; ones that aren't here yet
+                are fetched from where they are published (up to ${d.limit} a day).
             </p>
             <${Err} msg=${state.error} />
             <form id="import-form" onSubmit=${submit}>

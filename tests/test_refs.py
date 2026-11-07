@@ -456,6 +456,8 @@ def test_papers_from_other_sources_are_found_in_references_and_read_from_their_o
         assert m.match(ref) == (acl, 'id')
         raw = 'A. Author. 2020. Words. In Proc. of ACL. https://doi.org/10.18653/v1/2020.acl-main.1'
         assert m.match({'raw': raw, 'links': [], 'blocks': []}) == ('2020.acl-main.1', 'id')
+        ref = {'title': 'Nowhere on arXiv', 'raw': 'y', 'links': ['https://proceedings.mlr.press/v202/aamand23a.html']}
+        assert m.match(ref) == ('pmlr:v202.aamand23a', 'id')
         rdb.put_refs(a, 'ok', [(1, acl, 'A paper only the Anthology has', None, 'x'), (2, b, 'B', None, 'B')], 'html')
     node = next(n for n in client.get(f'/ui/graph?pid={a}').get_json()['nodes'] if n['id'] == acl)
     assert (node['here'], node['state'], node['year']) == (False, 'new', '2024')

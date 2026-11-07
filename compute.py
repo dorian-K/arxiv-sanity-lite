@@ -13,7 +13,8 @@ import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 from aslite import spell
-from aslite.db import get_papers_db, hold_heavy_lock, put_job, save_features, save_terms
+from aslite.db import get_papers_db, get_refs_db, hold_heavy_lock, put_job, save_features, save_terms
+from aslite.refs import merge_twins
 from aslite.embed import embed_papers
 
 # -----------------------------------------------------------------------------
@@ -77,6 +78,9 @@ if __name__ == '__main__':
     )
 
     pdb = get_papers_db()
+    with get_refs_db() as rdb:  # a paper users added from another site may have reached arXiv since
+        for old, new in merge_twins(pdb, rdb):
+            print(f"{old} is on arXiv too, as {new}: merged into it")
     pids = pdb.keys()
 
     def make_corpus(training: bool):

@@ -205,12 +205,12 @@ def test_papers_from_the_acl_anthology(client, corpus, monkeypatch):
     assert (sources.year(pid), sources.year('P15-1001'), sources.year('2401.12345')) == (2026, 2015, 2024)
     assert sources.ACL.license('P15-1001') == 'by-nc-sa/3.0' and sources.ACL.license(pid) == 'by/4.0'
 
-    paper = sources.parse_acl_page(pid, ACL_PAGE)
+    paper = sources.ACL.parse(pid, ACL_PAGE)
     assert paper['title'] == 'A Benchmark of Spoken & Written Errors'
     assert [a['name'] for a in paper['authors']] == ['Ada Lovelace', 'Alan Turing']
     assert paper['summary'] == 'We study errors in speech.'
     assert paper['arxiv_journal_ref'] == 'EMNLP 2026' and paper['_time_str'] == 'Oct 01 2026'
-    assert sources.parse_acl_page(pid, '<html>404</html>') is None
+    assert sources.ACL.parse(pid, '<html>404</html>') is None
 
     calls = []
     monkeypatch.setattr(sources.ACL, 'fetch', lambda ids: calls.append(ids) or {i: paper for i in ids if i == pid})
@@ -230,6 +230,148 @@ def test_papers_from_the_acl_anthology(client, corpus, monkeypatch):
     node = client.get(f'/ui/graph?pid={pid}').get_json()['nodes'][0]
     assert (node['year'], node['url'], node['here']) == ('2026', card['url'], True)
     assert client.get(f'/ui/list?q=aclanthology.org/{pid}').get_json()['papers'][0]['id'] == pid
+
+
+CVF_PAGE = """<html><head>
+<meta name="citation_title" content="Segment Everything Twice">
+<meta name="citation_author" content="Kirillov, Alexander"><meta name="citation_author" content="Mintun, Eric">
+<meta name="citation_publication_date" content="2023">
+<meta name="citation_conference_title" content="Proceedings of the IEEE/CVF International Conference on Computer Vision">
+</head><body><font size="5"><br><b>Abstract</b></font><br><br>
+<div id="abstract">We segment <b>everything</b>, twice.</div><div>Related Material</div></body></html>"""
+
+
+def test_papers_from_proceedings_sites(client, corpus, monkeypatch):
+    """PMLR, JMLR, CVF and NeurIPS papers by their links; one that is on arXiv too is kept as the arXiv paper"""
+    import contextlib
+
+    from aslite import db, sources
+
+    links = {
+        'https://proceedings.mlr.press/v202/aamand23a.html': 'pmlr:v202.aamand23a',
+        'http://proceedings.mlr.press/v37/ioffe15.pdf': 'pmlr:v37.ioffe15',
+        'https://jmlr.org/papers/v24/18-080.html': 'jmlr:v24.18-080',
+        'https://jmlr.org/papers/volume24/18-080/18-080.pdf': 'jmlr:v24.18-080',
+        'https://openaccess.thecvf.com/content/ICCV2023/html/Kirillov_Segment_Anything_ICCV_2023_paper.html': (
+            'cvf:ICCV2023.Kirillov_Segment_Anything_ICCV_2023_paper'
+        ),
+        'https://openaccess.thecvf.com/content_cvpr_2018/papers/Hu_Squeeze-and-Excitation_Networks_CVPR_2018_paper.pdf': (
+            'cvf:content_cvpr_2018.Hu_Squeeze-and-Excitation_Networks_CVPR_2018_paper'
+        ),
+        'https://openaccess.thecvf.com/content/CVPR2023W/ABAW/html/Foo_Bar_CVPRW_2023_paper.html': (
+            'cvf:CVPR2023W~ABAW.Foo_Bar_CVPRW_2023_paper'
+        ),
+        'https://papers.nips.cc/paper/2017/file/3f5ee243547dee91fbd053c1c4a845aa-Paper.pdf': (
+            'neurips:2017.3f5ee243547dee91fbd053c1c4a845aa'
+        ),
+        'https://proceedings.neurips.cc/paper_files/paper/2023/hash/0123456789abcdef0123456789abcdef-Abstract-Conference.html': (
+            'neurips:2023.0123456789abcdef0123456789abcdef-Conference'
+        ),
+    }
+    for link, pid in links.items():
+        assert sources.find_paper_id(link) == pid, link
+        src = sources.source_of(pid)
+        assert src is not sources.ARXIV and '/' not in pid and sources.find_paper_id(pid) == pid
+        # the links built from the id lead back to the same id: nothing about the paper is lost in it
+        assert sources.find_paper_id(src.abs_url(pid)) == pid and sources.find_paper_id(src.pdf_url(pid)) == pid
+        assert src.license(pid) == ''  # none of these publish under an open license: no thumbnails
+    assert [sources.year(p) for p in list(links.values())[::2]] == [2023, 2023, 2023, 2023, 2023]
+    assert (
+        sources.year('pmlr:v37.ioffe15') == 2015
+        and sources.year('neurips:2017.3f5ee243547dee91fbd053c1c4a845aa') == 2017
+    )
+
+    paper = sources.CVF.parse('cvf:ICCV2023.Kirillov_Segment_Anything_ICCV_2023_paper', CVF_PAGE)
+    assert [a['name'] for a in paper['authors']] == ['Alexander Kirillov', 'Eric Mintun']
+    assert paper['summary'] == 'We segment everything, twice.'
+    assert (paper['arxiv_journal_ref'], paper['tags'], paper['_time_str']) == (
+        'ICCV 2023',
+        [{'term': 'cs.CV'}],
+        'Jan 01 2023',
+    )
+    assert (
+        sources.short_venue('Proceedings of the 40th International Conference on Machine Learning', 2023) == 'ICML 2023'
+    )
+    assert sources.short_venue('ICML 2023 Workshop on Things', 2023) == 'ICML 2023 Workshop on Things'
+
+    # the graph's box reads links on the server
+    assert client.get('/ui/paper_id?q=https://jmlr.org/papers/v24/18-080.html').get_json() == {'pid': 'jmlr:v24.18-080'}
+    assert client.get('/ui/paper_id?q=no+such+thing').status_code == 404
+
+    # a NeurIPS paper that is on arXiv too (here: one of ours, by title) is saved as that one;
+    # one only the titles table knows is fetched from arXiv
+    ours = next(iter(corpus))
+    other = dict(corpus[ours], _id='2101.00001', _idv='2101.00001v1', title='A quantum paper in another category')
+    with db.get_refs_db() as rdb:
+        rdb.put_titles([(__import__('aslite.refs', fromlist=['x']).title_hash(other['title']), '2101.00001')])
+    nips = 'neurips:2017.3f5ee243547dee91fbd053c1c4a845aa'
+    pmlr = 'pmlr:v202.aamand23a'
+    found = {
+        nips: dict(paper, _id=nips, title=corpus[ours]['title']),
+        pmlr: dict(paper, _id=pmlr, title=other['title']),
+    }
+    asked = []
+    for src in (sources.NEURIPS, sources.PMLR, sources.ARXIV):
+        monkeypatch.setattr(src, 'slot', lambda: contextlib.nullcontext())
+    monkeypatch.setattr(db, 'arxiv_slot', lambda: contextlib.nullcontext())
+    monkeypatch.setattr(sources.NEURIPS, 'fetch', lambda ids: asked.append(ids) or {i: found[i] for i in ids})
+    monkeypatch.setattr(sources.PMLR, 'fetch', lambda ids: asked.append(ids) or {i: found[i] for i in ids})
+    monkeypatch.setattr(sources.ARXIV, 'fetch', lambda ids: asked.append(ids) or {'2101.00001': other})
+    login(client)
+    text = 'https://papers.nips.cc/paper/2017/file/3f5ee243547dee91fbd053c1c4a845aa-Paper.pdf\npmlr:v202.aamand23a'
+    got = client.post('/import', data={'text': text, 'tag': 'twins'}).get_json()['results']
+    assert [(r['pid'], r['status']) for r in got] == [
+        (ours, f'on arXiv too ({ours}), already here'),
+        ('2101.00001', 'on arXiv too (2101.00001), added from arXiv'),
+    ]
+    assert asked == [[pmlr], [nips], ['2101.00001']] or asked == [[nips], [pmlr], ['2101.00001']]
+    assert db.get_tags('alice')['twins'] == {ours, '2101.00001'}
+    assert nips not in db.get_papers_db() and pmlr not in db.get_papers_db()
+
+    # without a titles table hit, arXiv's search finds it (one API call, counted as a fetch)
+    jmlr = 'jmlr:v24.18-080'
+    on_arxiv = dict(other, _id='2302.00002', _idv='2302.00002v1', title='Approximation Bounds for Clustering')
+    found[jmlr] = dict(paper, _id=jmlr, title='Approximation bounds for clustering')
+    monkeypatch.setattr(sources.JMLR, 'slot', lambda: contextlib.nullcontext())
+    monkeypatch.setattr(sources.JMLR, 'fetch', lambda ids: {i: found[i] for i in ids})
+    monkeypatch.setattr(sources.ARXIV, 'by_title', lambda t, same: on_arxiv if same(on_arxiv) else None)
+    got = client.post('/import', data={'text': 'https://jmlr.org/papers/v24/18-080.html', 'tag': 'twins'}).get_json()
+    assert got['results'][0]['status'] == 'on arXiv too (2302.00002), added from arXiv'
+    assert '2302.00002' in db.get_papers_db() and jmlr not in db.get_papers_db()
+
+    # a title of a few words is only the same paper with an author in common
+    from aslite.refs import same_paper
+
+    sam = {'title': 'Segment anything', 'authors': [{'name': 'A. Kirillov'}, {'name': 'Someone Else'}]}
+    assert same_paper(sam, 'Segment Anything', [{'name': 'Alexander Kirillov'}])
+    assert not same_paper(sam, 'Segment Anything', [{'name': 'Jane Doe'}])
+    assert not same_paper(sam, 'Segment Anything Again', [{'name': 'Alexander Kirillov'}])
+    long_title = dict(sam, title=on_arxiv['title'])
+    assert same_paper(long_title, on_arxiv['title'].upper(), [{'name': 'Jane Doe'}])  # long titles are enough
+
+
+def test_papers_that_reach_arxiv_later_are_merged_into_it(client, corpus):
+    """a paper added from another site, then its arXiv version: users' marks and citations move to arXiv's"""
+    from aslite import db, refs
+
+    ours = sorted(corpus)[0]
+    acl, citing = '2024.acl-long.12', sorted(corpus)[1]
+    with db.get_papers_db() as pdb:
+        pdb.upsert([dict(corpus[ours], _id=acl, _idv=acl + 'v1', title=corpus[ours]['title'].upper())])
+    login(client)
+    client.post(f'/add/{acl}/nlp')
+    client.post(f'/addneg/{ours}/other')
+    client.post(f'/read/{acl}')
+    client.post(f'/note/{acl}', data={'text': 'read this'})
+    with db.get_refs_db() as rdb:
+        rdb.put_refs(citing, 'ok', [(1, acl, 'T', None, 'T')], 'pdf')
+    with db.get_papers_db() as pdb, db.get_refs_db() as rdb:
+        assert refs.merge_twins(pdb, rdb) == [(acl, ours)]
+        assert acl not in pdb and ours in pdb
+        assert rdb.references_of(citing)[2][0][1] == ours
+        assert refs.merge_twins(pdb, rdb) == []
+    assert db.get_tags('alice')['nlp'] == {ours} and db.get_tags('alice', neg=True)['other'] == {ours}
+    assert ours in db.get_reads('alice') and db.get_notes('alice', [ours]) == {ours: 'read this'}
 
 
 def test_rate_limits(client, corpus, monkeypatch):

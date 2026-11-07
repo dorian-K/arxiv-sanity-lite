@@ -23,7 +23,7 @@ import hashlib
 import unicodedata
 from html.parser import HTMLParser
 
-from aslite.sources import ACL, ACL_IN
+from aslite.sources import ARXIV, find_linked
 
 
 ARXIV_ID = re.compile(r'(?:arxiv[:\s/.]*|abs/|pdf/|html/)(\d{4}\.\d{4,5})', re.I)
@@ -189,10 +189,10 @@ class Matcher:
     def __init__(self, pdb, rdb):
         self.pdb, self.rdb = pdb, rdb
 
-    def _ours_by_title(self, title):
+    def _ours_by_title(self, title, min_words=3):
         """our paper with exactly this title: a phrase query on the title column, shortest first"""
         words = norm(title).split()
-        if len(words) < 3:
+        if len(words) < min_words:
             return None
         q = 'title : "' + ' '.join(words[:12]) + '"'
         rows = self.pdb.con.execute(
@@ -236,10 +236,59 @@ class Matcher:
         pid = self._ours_in_text(raw)
         if pid:
             return pid, 'text'
-        # no arXiv paper: a link or DOI to another source's (the ACL Anthology). kept as the cited id,
+        # no arXiv paper: a link or DOI to another source's (aslite/sources.py). kept as the cited id,
         # so the graph shows it and one click there fetches it (never fetched just for being cited)
-        pid = ACL.find(' '.join(ref.get('links', []))) or (ACL_IN.search(raw) and ACL.find(raw))
+        pid = find_linked(' '.join(ref.get('links', []))) or find_linked(raw)
         return (pid, 'id') if pid else (None, None)
+
+
+SHORT_TITLE = 4  # words: titles this short ("Segment Anything") are only the same paper with an author in common
+
+
+def surnames(authors):
+    """the last names of [{'name': ...}], normalized"""
+    return {norm(a['name']).split()[-1] for a in authors if norm(a['name'])}
+
+
+def same_paper(paper, title, authors):
+    """whether paper (a dict) is the one with this title and these authors: the same title, and for
+    a short title also an author in common"""
+    if norm(paper['title']) != norm(title):
+        return False
+    return len(norm(title).split()) >= SHORT_TITLE or bool(surnames(paper['authors']) & surnames(authors))
+
+
+def arxiv_twin(pdb, rdb, paper):
+    """the arXiv id of a paper from another site that is on arXiv too (same title, see same_paper), or None"""
+    title, authors = paper['title'], paper.get('authors') or []
+    if not norm(title):
+        return None
+    pid = rdb.lookup_title(title_hash(title)) or Matcher(pdb, rdb)._ours_by_title(title, min_words=1)
+    if not pid or not ARXIV.owns(pid):  # ours may be another site's paper itself
+        return None
+    if len(norm(title).split()) >= SHORT_TITLE:
+        return pid
+    known = pdb.get_many([pid]).get(pid)  # a short title: only with an author in common, so it must be here
+    return pid if known and same_paper(known, title, authors) else None
+
+
+def merge_twins(pdb, rdb):
+    """
+    papers from other sites that are here on arXiv too (added before their arXiv version came, or
+    before the titles table): users' saves, read marks and notes, and references to them, move to
+    the arXiv paper, and the other copy goes. returns [(old, new)]. compute.py runs it
+    """
+    from aslite import db  # db links papers through sources, which this module uses too
+
+    moved = []
+    for pid, _ in pdb.not_arxiv():
+        twin = arxiv_twin(pdb, rdb, pdb[pid])
+        if twin and twin in pdb:  # both here: a duplicate. (one only on arXiv is no duplicate yet)
+            db.move_paper(pid, twin)
+            rdb.move_paper(pid, twin)
+            pdb.delete([pid])
+            moved.append((pid, twin))
+    return moved
 
 
 def rows_for(refs, matcher):

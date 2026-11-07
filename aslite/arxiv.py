@@ -6,6 +6,7 @@ import re
 import time
 import calendar
 import logging
+import urllib.parse
 import urllib.request
 import feedparser
 from collections import OrderedDict
@@ -106,6 +107,36 @@ def find_arxiv_id(text):
     """the arXiv id in a url or bare id (arxiv.org/abs|pdf/..., alphaxiv, hf.co/papers, ...), or None"""
     m = ARXIV_ID_RE.search(text)
     return m.group(1) if m else None
+
+
+def search_title(title, same=None):
+    """
+    the arXiv paper with this title (same words, ignoring case and punctuation) for which
+    same(paper) holds, or None: one search of the API, for papers from other sites
+    (aslite/sources.py) that may be on arXiv too. callers space calls >= 3s (see db.arxiv_slot)
+    """
+    words = re.findall(r'[^\W_]+', title.lower())
+    if not words:
+        return None
+    q = urllib.parse.quote('ti:"%s"' % ' '.join(words))
+    url = f'https://export.arxiv.org/api/query?search_query={q}&max_results=5'
+    req = urllib.request.Request(url, headers={'User-Agent': USER_AGENT})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        response = r.read()
+    for e in feedparser.parse(response).entries:
+        j = encode_feedparser_dict(e)
+        if not j.get('title') or not j.get('updated_parsed') or re.findall(r'[^\W_]+', j['title'].lower()) != words:
+            continue
+        if same is not None and not same(j):
+            continue
+        idv, rawid, version = parse_arxiv_url(j['id'])
+        if '/' in rawid:
+            continue
+        j.update(_idv=idv, _id=rawid, _version=version)
+        j['_time'] = calendar.timegm(j['updated_parsed'])
+        j['_time_str'] = time.strftime('%b %d %Y', j['updated_parsed'])
+        return j
+    return None
 
 
 def fetch_papers_by_id(ids):

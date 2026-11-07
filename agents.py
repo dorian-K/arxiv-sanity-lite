@@ -22,7 +22,6 @@ import time
 import base64
 import hashlib
 import secrets
-import threading
 from urllib.parse import urlencode, urlparse
 
 from flask import Blueprint, g, jsonify, redirect, render_template, request, url_for
@@ -225,37 +224,22 @@ def get_papers(ids, abstracts=True):
 
 
 SUMMARY_IDS = 20  # papers per get_summaries call
-SUMMARY_WAIT_MAX = 60  # seconds a call may wait (gunicorn kills requests after 120)
-SUMMARY_POLL = 1.0
-# calls waiting at once per worker: each holds one of its few threads (docker: 2 workers x 4), so
-# at most one per worker waits and the others answer at once with pending, leaving the pages their threads
-_summary_waits = threading.BoundedSemaphore(1)
+SUMMARY_RETRY = 10  # seconds to suggest before asking again for pending ones (one takes a few)
 
 
 @tool(
     f"""AI summaries of papers: the problem, approach, result and caveat, written by a model from
     the paper's full text (papers saved or in digests here) or else its abstract. Any paper: with
-    the user's token, ones without a summary get one written now (from the abstract, a few seconds
+    the user's token, ones without a summary get one started now (from the abstract, a few seconds
     each) and ones not on this site are fetched first (arXiv or the site it was published on, within
     daily limits; one that is on arXiv too comes back under its arXiv id, see same_as). Without a token
-    you get the summaries that exist. wait=true holds the answer until every summary is written (at most
-    `timeout` seconds, {SUMMARY_WAIT_MAX} at most); otherwise papers still being written are in
-    pending: call again for them.""",
-    {
-        'ids': _ids(SUMMARY_IDS),
-        'wait': {'type': 'boolean', 'default': False, 'description': 'answer only once all summaries are written'},
-        'timeout': {
-            'type': 'integer',
-            'minimum': 1,
-            'maximum': SUMMARY_WAIT_MAX,
-            'default': 30,
-            'description': 'with wait: seconds to wait at most, then answer with what is there',
-        },
-    },
+    you get the summaries that exist. Answers at once: papers whose summary is still being written are
+    in pending; call again for them after retry_after seconds (about {SUMMARY_RETRY}).""",
+    {'ids': _ids(SUMMARY_IDS)},
     required=('ids',),
     limit='summary',
 )
-def get_summaries(ids, wait=False, timeout=30):
+def get_summaries(ids):
     from aslite import summary
 
     if not summary.enabled():
@@ -269,26 +253,15 @@ def get_summaries(ids, wait=False, timeout=30):
             out['same_as'] = twins
         pids = list(dict.fromkeys(twins.get(p, p) for p in pids))
         here = set(site.get_papers().get_many(pids))
+    # never waits here: a waiting call would hold one of the few web threads every page needs
     ready, pending, left = site.request_summaries([p for p in pids if p in here])
-    deadline = time.time() + min(timeout, SUMMARY_WAIT_MAX)
-    if wait and pending:
-        if _summary_waits.acquire(blocking=False):
-            try:
-                while pending and time.time() < deadline:
-                    time.sleep(SUMMARY_POLL)
-                    more, pending, gone = site.request_summaries(pending, start=False)
-                    ready |= more
-                    left += gone  # failed while we waited
-            finally:
-                _summary_waits.release()
-        else:
-            out['note'] = 'many calls are waiting already: answered at once, call again for pending'
     out['summaries'] = {
         p: {k: s[k] for k in db.SUMMARY_KEYS if s[k]} | {'from': s['source'], 'model': s['model']}
         for p, s in ready.items()
     }
     if pending:
         out['pending'] = pending
+        out['retry_after'] = SUMMARY_RETRY
     if left:
         out['not_made'] = left
         out['why_not_made'] = (
@@ -774,7 +747,8 @@ To find related work, use rank_like: give it 1-10 papers you know are relevant (
 every paper on the site ranked by them, then add the best hits to `like` (and off-topic ones to `unlike`)
 and rank again. It finds papers that share no keywords with your query; search is for names, exact
 titles and keywords. `days` restricts to recent papers. references and cited_by follow citations
-(only for papers this site has processed).
+(only for papers this site has processed). get_summaries gives short AI summaries of any papers (ones
+still being written come back as pending: ask again), cheaper to read than abstracts when skimming many.
 
 {who}
 
@@ -820,7 +794,8 @@ def _rpc(msg):
                         'annotations': {
                             'readOnlyHint': t['access'] not in ('agent', 'write'),
                             'destructiveHint': False,
-                            'openWorldHint': name == 'save_papers',  # it may fetch from arXiv
+                            # they may fetch papers from arXiv or other sites (get_summaries also asks a model)
+                            'openWorldHint': name in ('save_papers', 'get_summaries'),
                         },
                     }
                     for name, t in TOOLS.items()

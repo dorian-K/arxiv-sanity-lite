@@ -23,6 +23,8 @@ import hashlib
 import unicodedata
 from html.parser import HTMLParser
 
+from aslite.sources import ACL, ACL_IN
+
 
 ARXIV_ID = re.compile(r'(?:arxiv[:\s/.]*|abs/|pdf/|html/)(\d{4}\.\d{4,5})', re.I)
 DOI = re.compile(r'\b(10\.\d{4,9}/[^\s,;"<>]+[^\s,;.)"<>])')
@@ -182,7 +184,7 @@ def candidate_titles(ref):
 
 
 class Matcher:
-    """finds the arXiv id a reference points to (see the module docstring)"""
+    """finds the paper id (arXiv, else another source's) a reference points to (see the module docstring)"""
 
     def __init__(self, pdb, rdb):
         self.pdb, self.rdb = pdb, rdb
@@ -217,7 +219,7 @@ class Matcher:
         return None
 
     def match(self, ref):
-        """(arXiv id or None, how: id | title | text | None)"""
+        """(paper id or None, how: id | title | text | None)"""
         a = ARXIV_ID.search(' '.join(ref.get('links', []))) or ARXIV_ID.search(ref.get('raw', ''))
         if a:
             return a.group(1), 'id'
@@ -232,7 +234,12 @@ class Matcher:
             if pid:
                 return pid, 'text'
         pid = self._ours_in_text(raw)
-        return (pid, 'text') if pid else (None, None)
+        if pid:
+            return pid, 'text'
+        # no arXiv paper: a link or DOI to another source's (the ACL Anthology). kept as the cited id,
+        # so the graph shows it and one click there fetches it (never fetched just for being cited)
+        pid = ACL.find(' '.join(ref.get('links', []))) or (ACL_IN.search(raw) and ACL.find(raw))
+        return (pid, 'id') if pid else (None, None)
 
 
 def rows_for(refs, matcher):

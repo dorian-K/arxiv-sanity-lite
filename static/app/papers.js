@@ -15,6 +15,8 @@ export const withMadeTags = names => [...names, ...[...madeTags].filter(t => !na
 export const FOR_YOU_DAYS = 30; // as in serve.py
 // venues are aslite.arxiv.venue() of what the authors wrote in the comment or journal reference
 const VENUE_NOTE = 'parsed from the arXiv metadata (the authors\' comment or journal reference), not verified';
+// the venue's tooltip: arXiv's needs the caveat in full, other sources (the ACL Anthology) publish the paper themselves
+const venueNote = p => (p.source === 'arXiv' ? VENUE_NOTE : p.venue_note);
 export const tagUrl = (tag, days = FOR_YOU_DAYS) => '/?rank=tags&tags=' + encodeURIComponent(tag)
     + (days ? '&time_filter=' + days : '') + '&skip_have=yes';
 
@@ -337,10 +339,10 @@ export const Paper = ({ paper: p, quickTag }) => {
             <button class="rel_expand" aria-expanded="false" title="show everything" aria-label="show details"
                     onClick=${() => setExpanded(true)}>▸</button>
             ${score}
-            <a class="rel_title_c" href=${'https://arxiv.org/abs/' + p.id}><${MathText} text=${p.title} /></a>
+            <a class="rel_title_c" href=${p.url}><${MathText} text=${p.title} /></a>
             ${utags.length ? html`<span class="rel_saved" title=${'saved to ' + utags.join(', ')}>★</span>` : null}
             ${note ? html`<span class="rel_note_c" title=${'your note: ' + note}>✎</span>` : null}
-            ${p.venue ? html`<span class="rel_venue_c" title=${p.venue + ' (' + VENUE_NOTE + ')'}>✓</span>` : null}
+            ${p.venue ? html`<span class="rel_venue_c" title=${p.venue + ' (' + venueNote(p) + ')'}>✓</span>` : null}
             <span class="rel_time">${p.time}</span>
             ${readBox}
             ${canEdit && quickTag ? html`<${QuickVote} pid=${p.id} tag=${quickTag} state=${state} onChange=${onVote} compact />` : null}
@@ -356,7 +358,7 @@ export const Paper = ({ paper: p, quickTag }) => {
             ${compactView ? html`<button class="rel_expand" aria-expanded="true" title="back to one line"
                     aria-label="hide details" onClick=${() => setExpanded(false)}>▾</button>` : null}
             ${score}
-            <h2 class="rel_title"><a href=${'https://arxiv.org/abs/' + p.id}><${MathText} text=${p.title} /></a></h2>
+            <h2 class="rel_title"><a href=${p.url}><${MathText} text=${p.title} /></a></h2>
         </div>
         ${fit !== undefined ? html`
         <div class=${'rel_fit' + (fit > ho.misfit ? ' misfit' : '')}
@@ -368,7 +370,7 @@ export const Paper = ({ paper: p, quickTag }) => {
             <span class="rel_time">${p.time}</span>
             <span class="rel_tags">${p.tags}</span>
         </div>
-        ${p.venue ? html`<div class="rel_venue" title=${VENUE_NOTE[0].toUpperCase() + VENUE_NOTE.slice(1)}>✓ ${p.venue} <span class="rel_venue_note">(from arXiv metadata, unverified)</span></div>` : null}
+        ${p.venue ? html`<div class="rel_venue" title=${venueNote(p)[0].toUpperCase() + venueNote(p).slice(1)}>✓ ${p.venue} <span class="rel_venue_note">(${p.venue_note})</span></div>` : null}
         ${canEdit && quickTag ? html`
         <${QuickVote} pid=${p.id} tag=${quickTag} state=${state} onChange=${onVote} />` : null}
         ${canEdit ? html`
@@ -402,7 +404,7 @@ export const Paper = ({ paper: p, quickTag }) => {
         ${canEdit || note ? html`<${NoteBox} pid=${p.id} note=${note} setNote=${setNote}
             editing=${canEdit && editingNote} setEditing=${setEditingNote} />` : null}
         <div class="rel_links">
-            <a href=${'https://arxiv.org/pdf/' + p.id}>pdf</a>
+            <a href=${p.pdf}>pdf</a>
             <a class="rel_more" href=${'/?rank=pid&pid=' + p.id}>similar</a>
             <a href=${'/graph?pid=' + p.id} title="what it cites and what cites it, as a graph to explore">graph</a>
             ${canEdit && !note && !editingNote ? html`<button class="linkbtn" title="a note for yourself on this paper (only you see it)"

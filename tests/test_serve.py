@@ -140,7 +140,9 @@ def test_import_papers(client, corpus, monkeypatch):
         calls.append(list(ids))
         return {i: old for i in ids if i == '1706.03762'}
 
-    monkeypatch.setattr(serve, 'fetch_papers_by_id', fake_fetch)
+    from aslite import sources
+
+    monkeypatch.setattr(sources.ARXIV, 'fetch', fake_fetch)
     monkeypatch.setattr(db, 'arxiv_slot', lambda: __import__('contextlib').nullcontext())
     have = next(iter(corpus))
     text = '\n'.join(
@@ -160,7 +162,7 @@ def test_import_papers(client, corpus, monkeypatch):
     r = client.post('/import', data={'text': text, 'tag': 'reading'})
     assert r.status_code == 200
     page = r.data.decode()
-    for s in ['already here', 'added from arXiv', 'not found on arXiv', 'old-style', 'no arXiv id found']:
+    for s in ['already here', 'added from arXiv', 'not found on arXiv', 'old-style', 'no paper id or link found']:
         assert s in page, s
     assert calls == [['1706.03762', '2501.99999']]  # one api call for everything missing
     assert db.get_tags('alice')['reading'] == {have, '1706.03762'}
@@ -174,6 +176,60 @@ def test_import_papers(client, corpus, monkeypatch):
     assert 'over the daily fetch limit' in r.data.decode()
     assert calls[-1] == ['2502.00001']
     assert '2502.00002' not in db.get_tags('alice')['reading']  # not fetched: not tagged either
+
+
+ACL_PAGE = """<html><head>
+<meta content="A Benchmark of Spoken &amp; Written Errors" name=citation_title>
+<meta content="Ada Lovelace" name=citation_author><meta content="Alan Turing" name=citation_author>
+<meta content="Proceedings of the 2026 Conference on Empirical Methods in Natural Language Processing" name=citation_conference_title>
+<meta content="2026/10" name=citation_publication_date></head><body>
+<div class="card-body acl-abstract"><h5 class=card-title>Abstract</h5><span>We study <i>errors</i> in speech.</span></div>
+<dl><dt>Cite (Informal):</dt><dd><span id=citeRichText><a href=x>A Benchmark</a> (Lovelace &amp; Turing, EMNLP 2026)</span></dd></dl>
+</body></html>"""
+
+
+def test_papers_from_the_acl_anthology(client, corpus, monkeypatch):
+    """a paper that isn't on arXiv: added by its Anthology link, then shown with its own links everywhere"""
+    import contextlib
+
+    from aslite import db, sources
+
+    pid = '2026.emnlp-main.2349'
+    assert sources.find_paper_id(f'https://aclanthology.org/{pid}/') == pid
+    assert sources.find_paper_id(f'https://aclanthology.org/{pid}.pdf') == pid
+    assert sources.find_paper_id('https://doi.org/10.18653/v1/2020.acl-main.1') == '2020.acl-main.1'
+    assert sources.find_paper_id('https://www.aclweb.org/anthology/p19-1001.pdf') == 'P19-1001'
+    assert sources.find_paper_id('https://arxiv.org/abs/1706.03762v7') == '1706.03762'
+    assert sources.find_paper_id('see 2401.12345') == '2401.12345'
+    assert sources.source_of(pid) is sources.ACL and sources.source_of('2401.12345') is sources.ARXIV
+    assert (sources.year(pid), sources.year('P15-1001'), sources.year('2401.12345')) == (2026, 2015, 2024)
+    assert sources.ACL.license('P15-1001') == 'by-nc-sa/3.0' and sources.ACL.license(pid) == 'by/4.0'
+
+    paper = sources.parse_acl_page(pid, ACL_PAGE)
+    assert paper['title'] == 'A Benchmark of Spoken & Written Errors'
+    assert [a['name'] for a in paper['authors']] == ['Ada Lovelace', 'Alan Turing']
+    assert paper['summary'] == 'We study errors in speech.'
+    assert paper['arxiv_journal_ref'] == 'EMNLP 2026' and paper['_time_str'] == 'Oct 01 2026'
+    assert sources.parse_acl_page(pid, '<html>404</html>') is None
+
+    calls = []
+    monkeypatch.setattr(sources.ACL, 'fetch', lambda ids: calls.append(ids) or {i: paper for i in ids if i == pid})
+    monkeypatch.setattr(sources.ACL, 'slot', lambda: contextlib.nullcontext())
+    login(client)
+    r = client.post('/import', data={'text': f'https://aclanthology.org/{pid}/\n2026.acl-long.9999', 'tag': 'speech'})
+    got = {x['line']: x['status'] for x in r.get_json()['results']}
+    assert got == {
+        f'https://aclanthology.org/{pid}/': 'added from the ACL Anthology',
+        '2026.acl-long.9999': 'not found on the ACL Anthology',
+    }
+    assert calls == [[pid], ['2026.acl-long.9999']]  # one request per paper, each in the Anthology's slot
+    assert db.get_tags('alice')['speech'] == {pid}
+    card = next(p for p in client.get('/ui/list?rank=saved&tags=speech').get_json()['papers'] if p['id'] == pid)
+    assert card['url'] == f'https://aclanthology.org/{pid}/' and card['pdf'] == f'https://aclanthology.org/{pid}.pdf'
+    assert card['venue'] == 'EMNLP 2026' and card['venue_note'] == 'from the ACL Anthology'
+    node = client.get(f'/ui/graph?pid={pid}').get_json()['nodes'][0]
+    assert (node['year'], node['url'], node['here']) == ('2026', card['url'], True)
+    assert client.get(f'/ui/list?q=aclanthology.org/{pid}').get_json()['papers'][0]['id'] == pid
 
 
 def test_rate_limits(client, corpus, monkeypatch):

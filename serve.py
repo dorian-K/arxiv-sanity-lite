@@ -34,7 +34,9 @@ from aslite import db, digest, mail, metrics, summary, thumbs
 from aslite.spell import Speller
 from aslite.refs import may_reread
 from aslite.db import get_papers_db, get_secret_key, load_features, features_exist, PAPERS_DB_FILE
-from aslite.arxiv import find_arxiv_id, fetch_papers_by_id, OLD_ARXIV_ID_RE, categories_text
+from aslite.arxiv import OLD_ARXIV_ID_RE, categories_text
+from aslite import sources
+from aslite.sources import find_paper_id, is_paper_id, source_of
 from aslite.rank import (
     fit,
     usable,
@@ -484,8 +486,8 @@ def thumb_info(pid):
 
 @app.route('/thumb/<kind>/<path:pid>')
 def thumb(kind, pid):
-    if kind not in ('figure', 'page') or not re.fullmatch(r'[a-zA-Z.\-]*/?\d{4,7}(\.\d{4,5})?', pid):
-        abort(404)  # only arXiv ids (2610.12345, cs/0701001) become file names
+    if kind not in ('figure', 'page') or not is_paper_id(pid):
+        abort(404)  # only paper ids (2610.12345, cs/0701001, 2026.emnlp-main.2349) become file names
     path, _ = db.thumb_file(pid, (kind,), big=request.args.get('size') == 'big')
     if path is None or not _thumb_license(pid):
         abort(404)  # also a thumbnail made before its license was known not to allow it
@@ -603,6 +605,7 @@ def render_pid(pid, d=None):
         stags=[t for t, pids in get_seen_tags().items() if pid in pids],
         summary=d['summary'],
         venue=d.get('venue', ''),
+        **sources.links(pid),  # url, pdf, source: where the paper lives
         read=pid in get_reads(),
         note=get_notes().get(pid, ''),
         thumb_url=t_url,
@@ -925,8 +928,8 @@ def search_rank(q: str = ''):
     if not q:
         return [], []  # no query? no results
     pids, scores = get_papers().search(q)  # full-text index, see aslite/db.py
-    # an arXiv url or id in the query: show that paper first
-    pid = find_arxiv_id(q)
+    # a paper's link or id in the query: show that paper first
+    pid = find_paper_id(q)
     if pid and pid in get_papers():
         pids, scores = (
             [pid] + [p for p in pids if p != pid],
@@ -1144,7 +1147,7 @@ def _notice(opt_rank, opt_pid, res, features_ok):
             "Search and the newest papers work meanwhile; recommendations show up when it is done."
         )
     if opt_rank == 'pid' and opt_pid not in get_papers():
-        return "There's no paper with this id here. Paste its arXiv link on the add page to fetch it."
+        return "There's no paper with this id here. Paste its link on the add page to fetch it."
     if not res['unindexed']:
         return ''
     if opt_rank == 'pid':
@@ -1367,7 +1370,7 @@ def ui_inspect():
     if pid not in pdb:
         return error_page(
             'Unknown paper',
-            "There's no paper with this id here. Paste its arXiv link on the add page to fetch it.",
+            "There's no paper with this id here. Paste its link on the add page to fetch it.",
             404,
         )
 
@@ -1666,7 +1669,6 @@ def health():
 ENRICH_ON = os.environ.get('ENRICH_ENABLED', '0') == '1'
 GRAPH_MAX = 150  # neighbours of one paper sent at once (a survey cites hundreds)
 ANALYZE_QUEUE_MAX = 50  # papers waiting at most: each takes the daemon about a minute
-PAPER_ID_RE = re.compile(r'^(\d{4}\.\d{4,5}|[a-z-]+(\.[A-Z]{2})?/\d{7})$')
 
 
 def graph_nodes(ids):
@@ -1698,13 +1700,13 @@ def graph_nodes(ids):
         else:
             state = 'new'
         authors = [a['name'] for a in d['authors']] if d else []
-        m = re.match(r'(\d\d)\d\d\.', p) or re.search(r'/(\d\d)', p)
         out.append(
             {
                 'id': p,
                 'title': ' '.join((d['title'] if d else other.get(p, '')).split()),
                 'authors': authors[0] + (' et al.' if len(authors) > 1 else '') if authors else '',
-                'year': (('20' if int(m.group(1)) < 90 else '19') + m.group(1)) if m else '',
+                'year': str(sources.year(p) or ''),
+                **sources.links(p),
                 'here': d is not None,
                 'state': state,
                 'readable': not (st and st[0] == 'ok' and not st[1]),  # analyzed, but no reference list found
@@ -1816,8 +1818,8 @@ def ui_graph():
     """
     pid = request.args.get('pid', '').strip()
     root = request.args.get('root', '').strip() or pid
-    if not PAPER_ID_RE.match(pid) or not PAPER_ID_RE.match(root):
-        return {'error': 'Not an arXiv id.'}, 400
+    if not is_paper_id(pid) or not is_paper_id(root):
+        return {'error': 'Not a paper id.'}, 400
     rdb = _refs_db()
     cited, citing, n_refs = neighbours(pid)
     ids = [pid] + cited[:GRAPH_MAX] + citing[:GRAPH_MAX]
@@ -1850,8 +1852,8 @@ def ui_graph_alike():
     """the papers closest to pid in content that it neither cites nor is cited by, for the graph's side panel"""
     pid = request.args.get('pid', '').strip()
     root = request.args.get('root', '').strip() or pid
-    if not PAPER_ID_RE.match(pid) or not PAPER_ID_RE.match(root):
-        return {'error': 'Not an arXiv id.'}, 400
+    if not is_paper_id(pid) or not is_paper_id(root):
+        return {'error': 'Not a paper id.'}, 400
     if not features_exist():
         return {'pid': pid, 'ghosts': []}
     if rate_limited('rank'):
@@ -1874,8 +1876,8 @@ def graph_analyze():
     if not ENRICH_ON:
         return {'error': "Reading papers' references is turned off on this server (ENRICH_ENABLED)."}, 400
     pid = request.form.get('pid', '').strip()
-    if not PAPER_ID_RE.match(pid):
-        return {'error': 'Not an arXiv id.'}, 400
+    if not is_paper_id(pid):
+        return {'error': 'Not a paper id.'}, 400
     rdb = _refs_db()
     st = rdb.status_of([pid]).get(pid)
     if st and st[0] == 'ok' and not may_reread(st):
@@ -1889,11 +1891,12 @@ def graph_analyze():
     if pid not in get_papers():  # cited, but outside this site's categories: its metadata first
         _, fetched, over, failed = fetch_missing([pid])
         if pid not in fetched:
+            where = source_of(pid).label
             if pid in over:
-                return {'error': "Over today's limit of papers fetched from arXiv. Try again tomorrow."}, 429
+                return {'error': "Over today's limit of papers fetched from other sites. Try again tomorrow."}, 429
             if pid in failed:
-                return {'error': 'arXiv could not be reached. Try again later.'}, 503
-            return {'error': "arXiv doesn't know this paper."}, 404
+                return {'error': f'{where[0].upper() + where[1:]} could not be reached. Try again later.'}, 503
+            return {'error': f"{where[0].upper() + where[1:]} doesn't know this paper."}, 404
     rdb.request(pid)
     return {'state': 'queued'}
 
@@ -2101,9 +2104,10 @@ def copy_tag():
 
 def fetch_missing(wanted):
     """
-    fetches the papers of `wanted` (arXiv ids) that aren't here from the arXiv API, within the
-    user's and everyone's daily limits (one call per 100 ids, through db.arxiv_slot). returns
-    sets: (were here, fetched now, over the limit, arXiv not reached); the rest weren't found
+    fetches the papers of `wanted` (ids of any source) that aren't here from where they live,
+    within the user's and everyone's daily limits (one request per `batch` ids of a source,
+    through its slot, see aslite/sources.py). returns sets: (were here, fetched now, over the
+    limit, their site not reached); the rest weren't found
     """
     pdb = get_papers()
     have = set(pdb.get_many(wanted))
@@ -2112,13 +2116,16 @@ def fetch_missing(wanted):
     budget = min(FETCH_LIMIT_USER - db.count_fetches(day_ago, g.user), FETCH_LIMIT_TOTAL - db.count_fetches(day_ago))
     to_fetch, over = missing[: max(0, budget)], set(missing[max(0, budget) :])
     fetched, failed = set(), set()
-    for i in range(0, len(to_fetch), 100):
-        batch = to_fetch[i : i + 100]
+    batches = []
+    for src in sources.SOURCES:
+        mine = [p for p in to_fetch if source_of(p) is src]
+        batches += [(src, mine[i : i + src.batch]) for i in range(0, len(mine), src.batch)]
+    for src, batch in batches:
         try:
-            with db.arxiv_slot():
-                found = fetch_papers_by_id(batch)
-        except Exception as e:  # arXiv down or rate limiting us: report it, don't retry here
-            print("arxiv fetch failed: %s" % (e,))
+            with src.slot():
+                found = src.fetch(batch)
+        except Exception as e:  # the site is down or rate limiting us: report it, don't retry here
+            print("%s fetch failed: %s" % (src.name, e))
             failed |= set(batch)
             continue
         pdb.upsert(found.values())
@@ -2139,7 +2146,7 @@ def ui_import():
 
 @app.route('/import', methods=['POST'])
 def import_papers():
-    """add papers by arXiv url or id, one per line, fetching the ones we don't have"""
+    """add papers by link or id (arXiv, ACL Anthology), one per line, fetching the ones we don't have"""
     if g.user is None:
         return not_logged_in()
     if rate_limited('import'):
@@ -2158,10 +2165,12 @@ def import_papers():
     # one result per line: (input, pid or None, status)
     results, wanted = [], []
     for line in lines:
-        pid = find_arxiv_id(line)
+        pid = find_paper_id(line)
         if pid is None:
             old = OLD_ARXIV_ID_RE.search(line)
-            results.append([line, None, 'old-style arXiv ids are not supported' if old else 'no arXiv id found'])
+            results.append(
+                [line, None, 'old-style arXiv ids are not supported' if old else 'no paper id or link found']
+            )
         else:
             results.append([line, pid, None])
             wanted.append(pid)
@@ -2177,13 +2186,13 @@ def import_papers():
         if pid in have:
             r[2] = 'already here'
         elif pid in fetched:
-            r[2] = 'added from arXiv'
+            r[2] = f'added from {source_of(pid).label}'
         elif pid in over:
             r[2] = 'over the daily fetch limit, try again tomorrow'
         elif pid in failed:
-            r[2] = 'arXiv could not be reached, try again later'
+            r[2] = f'{source_of(pid).label} could not be reached, try again later'
         else:
-            r[2] = 'not found on arXiv'
+            r[2] = f'not found on {source_of(pid).label}'
             r[1] = None
         if r[1] in have or r[1] in fetched:  # not the ones over the limit or not reached: they'd have no paper
             db.tag_paper(g.user, pid, tag)

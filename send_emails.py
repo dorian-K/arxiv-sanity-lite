@@ -34,7 +34,7 @@ from email.utils import formataddr
 
 from itsdangerous import URLSafeSerializer
 
-from aslite import db, digest, mail, summary
+from aslite import db, digest, mail, sources, summary
 from aslite.db import load_features, get_papers_db, get_emails, get_secret_key
 
 DIGEST_SCHEDULE = os.environ.get('DIGEST_SCHEDULE', 'sun 08:00 Europe/Berlin')
@@ -166,7 +166,7 @@ def render(user, sections, papers, days, ais=None):
             ai = ais.get(pid)
             lines = [(label, ai[k]) for k, label in AI_LABELS if ai and ai.get(k)]
             text += [f"- {title}", f"  {authors}", *(f"  {label}: {v}" for label, v in lines)]
-            text += [f"  https://arxiv.org/abs/{pid}", '']
+            text += [f"  {sources.abs_url(pid)}", '']
             if lines:
                 about = (
                     '<ul style="margin:4px 0;padding-left:18px;font-size:14px;color:#333">'
@@ -179,11 +179,11 @@ def render(user, sections, papers, days, ais=None):
                 about = f'<div style="font-size:14px;color:#333">{e(abstract)}</div>'
             parts.append(
                 '<div style="margin:0 0 16px">'
-                f'<a href="https://arxiv.org/abs/{pid}" style="font-size:15px;font-weight:600;color:#1a1a1a">{e(title)}</a>'
+                f'<a href="{sources.abs_url(pid)}" style="font-size:15px;font-weight:600;color:#1a1a1a">{e(title)}</a>'
                 f'<div style="font-size:13px;color:#666;margin:2px 0">{e(authors)} · {e(p["_time_str"])}</div>'
                 + about
                 + f'<div style="font-size:13px;margin-top:4px"><a href="{PUBLIC_URL}/?rank=pid&pid={pid}">similar papers</a>'
-                f' · <a href="https://arxiv.org/pdf/{pid}">pdf</a></div>'
+                f' · <a href="{sources.pdf_url(pid)}">pdf</a></div>'
                 '</div>'
             )
     text += ['', f"Papers per tag can be changed in your settings: {settings_url}", f"Unsubscribe: {unsub}"]

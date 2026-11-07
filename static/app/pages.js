@@ -55,7 +55,7 @@ export const InspectPage = () => {
     return html`
     <div id="wrap">
         <article class="rel_paper">
-            <h2 class="rel_title"><a href=${'https://arxiv.org/abs/' + p.id}><${MathText} text=${p.title} /></a></h2>
+            <h2 class="rel_title"><a href=${p.url}><${MathText} text=${p.title} /></a></h2>
             <div class="rel_authors">${p.authors}</div>
             <div class="rel_meta">
                 <span class="rel_time">${p.time}</span>
@@ -63,7 +63,7 @@ export const InspectPage = () => {
             </div>
             <div class="rel_abs"><${MathText} text=${p.summary} /></div>
             <div class="rel_links">
-                <a href=${'https://arxiv.org/pdf/' + p.id}>pdf</a>
+                <a href=${p.pdf}>pdf</a>
                 <a href=${'/?rank=pid&pid=' + p.id}>similar</a>
             </div>
         </article>

@@ -18,6 +18,10 @@ A paper is done ('ok') with whatever of that worked; it isn't asked for again (e
 the papers whose thumbnails were made before there were big ones). A network error
 or a broken answer marks it 'error': tried again after a day, at most 3 times.
 
+Papers from other sources (aslite/sources.py: the ACL Anthology) are only here because someone
+added them; they get the same treatment from their own site, which has no HTML version: the PDF
+gives the references, the page thumbnail and the text, and the license follows from the source.
+
 Order: papers someone saved (the Cited tab is made of them), newest first, then the papers in
 everyone's latest digest. One request per --pause seconds (ENRICH_PAUSE, at least 15, as
 arxiv.org's robots.txt asks), so at most ~1400 papers a day, in practice the few people save.
@@ -36,7 +40,7 @@ import argparse
 import urllib.error
 import urllib.request
 
-from aslite import db, summary, thumbs
+from aslite import db, sources, summary, thumbs
 from aslite.db import get_papers_db, get_refs_db
 from aslite.refs import Matcher, may_reread, parse, parse_pdf, rows_for
 
@@ -65,7 +69,7 @@ class TooBig(Exception):
 
 
 class Fetcher:
-    """GETs from arxiv.org, one per `pause` seconds, inside the slot all arXiv calls share"""
+    """GETs from arxiv.org (or another paper site), one per `pause` seconds, inside the slot all calls to that site share"""
 
     def __init__(self, pause):
         self.pause, self.last = pause, 0.0
@@ -73,7 +77,8 @@ class Fetcher:
     def get(self, url, max_bytes, timeout=90):
         """(final url, body), or (None, b'') if arXiv has no such page (404/410)"""
         time.sleep(max(0.0, self.last + self.pause - time.time()))
-        with db.arxiv_slot():
+        src = sources.source_of_url(url) or sources.ARXIV
+        with src.slot():
             self.last = time.time()
             req = urllib.request.Request(url, headers={'User-Agent': USER_AGENT})
             try:
@@ -96,10 +101,13 @@ class Fetcher:
 
 
 def paper_license(pid, fetch, rdb):
-    """the paper's license code: from the snapshot's table, else from its abstract page"""
+    """the paper's license code: from its source (the ACL Anthology's are all CC), else the snapshot's table, else its arXiv abstract page"""
+    code = sources.source_of(pid).license(pid)
+    if code is not None:
+        return code
     code = rdb.license_of(pid)
     if code is None:
-        url, body = fetch.get(f'https://arxiv.org/abs/{pid}', MAX_HTML)
+        url, body = fetch.get(sources.abs_url(pid), MAX_HTML)
         code = thumbs.abs_license(body.decode('utf-8', 'replace')) if url else ''
         rdb.put_licenses([(pid, code)])
     return code
@@ -121,7 +129,8 @@ def process(pid, fetch, matcher, license):
     """
     rows, refs_from, figure, page, text = [], '', False, False, ('', '')
     may_show = thumbs.is_open(license)
-    url, body = fetch.get(f'https://arxiv.org/html/{pid}', MAX_HTML)
+    src = sources.source_of(pid)
+    url, body = fetch.get(src.html_url(pid), MAX_HTML) if src.html_url(pid) else (None, b'')
     html = body.decode('utf-8', 'replace') if url and '/html/' in url else ''
     if 'ltx_page_main' not in html and 'ltx_document' not in html:
         html = ''  # no HTML version: arXiv answers with a notice page (or 404)
@@ -143,7 +152,7 @@ def process(pid, fetch, matcher, license):
     if not may_show and refs_from:
         return rows, refs_from, figure, page, text
     try:
-        pdf_url, pdf = fetch.get(f'https://arxiv.org/pdf/{pid}', MAX_PDF)
+        pdf_url, pdf = fetch.get(src.pdf_url(pid), MAX_PDF)
     except TooBig:
         pdf_url, pdf = None, b''
         print(f"  {pid}: PDF over {MAX_PDF // 1_000_000} MB, skipped", flush=True)
@@ -247,14 +256,15 @@ def summary_queue(pdb, rdb, now=None):
 
 def fetch_text(pid, fetch):
     """(source, text) of a paper for its summary: its HTML version, else its PDF, else ('', '')"""
-    url, body = fetch.get(f'https://arxiv.org/html/{pid}', MAX_HTML)
+    src = sources.source_of(pid)
+    url, body = fetch.get(src.html_url(pid), MAX_HTML) if src.html_url(pid) else (None, b'')
     html = body.decode('utf-8', 'replace') if url and '/html/' in url else ''
     if 'ltx_page_main' in html or 'ltx_document' in html:
         text = summary.html_text(html)
         if text:
             return 'html', text
     try:
-        url, pdf = fetch.get(f'https://arxiv.org/pdf/{pid}', MAX_PDF)
+        url, pdf = fetch.get(src.pdf_url(pid), MAX_PDF)
     except TooBig:
         return '', ''
     if url and pdf.startswith(b'%PDF'):

@@ -435,3 +435,48 @@ def test_the_alike_papers_of_any_paper_on_the_graph(client, corpus, monkeypatch)
     # the paper's own citations are left out: alike, but not linked
     assert seen[b] == {a, b} and [(n['id'], n['similarity']) for n in r['ghosts']] == [(c, 0.9)]
     assert client.get('/ui/graph/alike?pid=../x').status_code == 400
+
+
+def test_papers_from_other_sources_are_found_in_references_and_read_from_their_own_site(client, corpus, monkeypatch):
+    """an ACL Anthology paper: a reference's link keeps its id, a click on the graph fetches it from
+    the Anthology (never from arXiv), and the daemon reads its PDF there, under the Anthology's license"""
+    import contextlib
+
+    import pytest
+
+    import enrich_daemon
+    import serve
+    from aslite import sources
+
+    acl = '2024.acl-long.12'
+    a, b = sorted(corpus)[:2]
+    with db.get_papers_db() as pdb, db.get_refs_db() as rdb:
+        m = refs.Matcher(pdb, rdb)
+        ref = {'title': 'A paper only the Anthology has', 'links': [f'https://aclanthology.org/{acl}'], 'raw': 'x'}
+        assert m.match(ref) == (acl, 'id')
+        raw = 'A. Author. 2020. Words. In Proc. of ACL. https://doi.org/10.18653/v1/2020.acl-main.1'
+        assert m.match({'raw': raw, 'links': [], 'blocks': []}) == ('2020.acl-main.1', 'id')
+        rdb.put_refs(a, 'ok', [(1, acl, 'A paper only the Anthology has', None, 'x'), (2, b, 'B', None, 'B')], 'html')
+    node = next(n for n in client.get(f'/ui/graph?pid={a}').get_json()['nodes'] if n['id'] == acl)
+    assert (node['here'], node['state'], node['year']) == (False, 'new', '2024')
+    assert node['title'] == 'A paper only the Anthology has' and node['url'] == f'https://aclanthology.org/{acl}/'
+
+    paper = dict(corpus[b], _id=acl, _idv=acl + 'v1', title='A paper only the Anthology has')
+    asked = []
+    monkeypatch.setattr(sources.ACL, 'fetch', lambda ids: asked.append(ids) or {acl: paper})
+    monkeypatch.setattr(sources.ACL, 'slot', lambda: contextlib.nullcontext())
+    monkeypatch.setattr(sources.ARXIV, 'fetch', lambda ids: pytest.fail(f'asked arXiv for {ids}'))
+    monkeypatch.setattr(serve, 'ENRICH_ON', True)
+    login(client)
+    assert client.post('/graph/analyze', data={'pid': acl}).get_json() == {'state': 'queued'}
+    assert asked == [[acl]]
+
+    pdf_refs = '\n'.join(f'[{i}] Some One. {corpus[b]["title"]}. In Venue, 2021.' for i in (1, 2, 3))
+    monkeypatch.setattr(enrich_daemon.thumbs, 'pdf_text', lambda data: 'References\n' + pdf_refs)
+    site = fake_arxiv(monkeypatch, {f'https://aclanthology.org/{acl}.pdf': pdf_bytes()})
+    run_daemon(monkeypatch)
+    assert site == [f'https://aclanthology.org/{acl}.pdf']  # no html, no abstract page: the Anthology has neither
+    with db.get_refs_db() as rdb:
+        status, src, rows = rdb.references_of(acl)
+        assert (status, src, rows[0][1], rdb.thumb_license(acl)) == ('ok', 'pdf', b, 'by/4.0')
+    assert client.get(f'/thumb/page/{acl}').status_code == 200

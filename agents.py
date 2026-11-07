@@ -27,7 +27,8 @@ from urllib.parse import urlencode, urlparse
 from flask import Blueprint, g, jsonify, redirect, render_template, request, url_for
 
 from aslite import db
-from aslite.arxiv import categories_text, find_arxiv_id
+from aslite.arxiv import categories_text
+from aslite.sources import abs_url, find_paper_id, source_of
 
 bp = Blueprint('agents', __name__)
 site = None  # the serve module, set by register()
@@ -77,7 +78,7 @@ def tool(description, params=None, required=(), access='public', limit='agent'):
     return register
 
 
-def _ids(n=MAX_IDS, what='arXiv ids or links'):
+def _ids(n=MAX_IDS, what='arXiv ids or links (ACL Anthology ones work too)'):
     return {'type': 'array', 'items': {'type': 'string'}, 'maxItems': n, 'description': f'{what} (at most {n})'}
 
 
@@ -105,10 +106,10 @@ TAG = {'type': 'string', 'maxLength': 100, 'description': "one of the user's tag
 
 
 def _norm_ids(raw):
-    """(arXiv ids, inputs that aren't one), in order, without duplicates"""
+    """(paper ids, inputs that aren't one), in order, without duplicates"""
     ids, bad = [], []
     for x in raw:
-        pid = find_arxiv_id(x)
+        pid = find_paper_id(x)
         if pid is None:
             bad.append(x)
         elif pid not in ids:
@@ -138,7 +139,7 @@ def _papers(pids, abstracts=True, extra=None):
             'authors': authors[:15] + ([f'... ({len(authors) - 15} more)'] if len(authors) > 15 else []),
             'date': _iso(d['_time']),
             'categories': [t['term'] for t in d['tags']],
-            'url': f'https://arxiv.org/abs/{pid}',
+            'url': abs_url(pid),
         }
         if d.get('venue'):
             p['venue'] = d['venue']
@@ -302,9 +303,9 @@ def rank_like(
     required=('id',),
 )
 def references(id, full_text=False):
-    pid = find_arxiv_id(id)
+    pid = find_paper_id(id)
     if pid is None:
-        raise ToolError(f'{id!r} is not an arXiv id')
+        raise ToolError(f'{id!r} is not a paper id (arXiv or ACL Anthology)')
     with db.get_refs_db() as rdb:
         status, src, rows = rdb.references_of(pid)
     if status is None:
@@ -330,9 +331,9 @@ def references(id, full_text=False):
     required=('id',),
 )
 def cited_by(id, limit=20, offset=0, abstracts=False):
-    pid = find_arxiv_id(id)
+    pid = find_paper_id(id)
     if pid is None:
-        raise ToolError(f'{id!r} is not an arXiv id')
+        raise ToolError(f'{id!r} is not a paper id (arXiv or ACL Anthology)')
     with db.get_refs_db() as rdb:
         citing, n = rdb.citing(pid), rdb.n_processed()
     times = site.get_times()[0]
@@ -440,7 +441,7 @@ def _check_new_tag(tag):
 
 @tool(
     """Saves papers to one of the user's tags (a new name makes a new tag). Papers that aren't on
-    the site are fetched from arXiv first (within daily limits); they count for rankings after
+    the site are fetched from arXiv (or the ACL Anthology) first (within daily limits); they count for rankings after
     the next index update, usually within an hour. If the token only
     allows agent tags, the tag is always one named agent:... (the prefix is added if missing).""",
     {'ids': _ids(), 'tag': {'type': 'string', 'maxLength': 100}},
@@ -456,13 +457,13 @@ def save_papers(ids, tag):
     for p in pids:
         if p in have or p in fetched:
             db.tag_paper(g.user, p, tag)
-            status[p] = 'saved' if p in have else 'fetched from arXiv and saved'
+            status[p] = 'saved' if p in have else f'fetched from {source_of(p).label} and saved'
         elif p in over:
             status[p] = 'over the daily fetch limit, try tomorrow'
         elif p in failed:
-            status[p] = 'arXiv could not be reached, try later'
+            status[p] = f'{source_of(p).label} could not be reached, try later'
         else:
-            status[p] = 'not found on arXiv'
+            status[p] = f'not found on {source_of(p).label}'
     site.prefit_later(g.user, tag, 'all')
     return {'tag': tag, 'status': status, **({'not_arxiv_ids': bad} if bad else {})}
 
@@ -536,7 +537,7 @@ def mark_read(ids, read=True):
     limit='agent_write',
 )
 def set_note(id, text):
-    pid = find_arxiv_id(id)
+    pid = find_paper_id(id)
     if pid is None or pid not in site.get_papers():
         raise ToolError(f'{id!r} is not a paper on this site (save_papers fetches it)')
     db.set_note(g.user, pid, text)

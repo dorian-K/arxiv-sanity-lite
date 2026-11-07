@@ -33,6 +33,7 @@ import numpy as np
 import scipy.sparse as sp
 
 from aslite.arxiv import venue
+from aslite.sources import abs_url
 
 # -----------------------------------------------------------------------------
 # global configuration
@@ -158,7 +159,7 @@ def _row_to_paper(r):
         '_version': version,
         '_time': t,
         '_time_str': time_str,
-        'link': f'https://arxiv.org/abs/{pid}v{version}',
+        'link': abs_url(pid),
         'published': published,
         'title': title,
         'summary': summary,
@@ -950,8 +951,19 @@ def arxiv_slot(pause=3.5):
     waits for our turn to call the arXiv API: at most one call per `pause` seconds across
     all processes on this machine (web workers, scripts), as arXiv asks
     """
+    with host_slot('arxiv', pause):
+        yield
+
+
+@contextmanager
+def host_slot(name, pause):
+    """
+    the same for any site we fetch papers from (aslite/sources.py), each with its own lock:
+    at most one request per `pause` seconds to it across all processes
+    """
     os.makedirs(DATA_DIR, exist_ok=True)
-    with open(ARXIV_LOCK_FILE, 'a+') as f:
+    path = ARXIV_LOCK_FILE if name == 'arxiv' else os.path.join(DATA_DIR, f'{name}.lock')
+    with open(path, 'a+') as f:
         fcntl.flock(f, fcntl.LOCK_EX)
         try:
             f.seek(0)

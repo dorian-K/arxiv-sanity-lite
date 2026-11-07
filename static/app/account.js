@@ -240,7 +240,7 @@ export const ImportPage = () => {
     if (!d) return error ? html`<${LoadError} error=${error} reload=${reload} />` : null;
     const submit = e => {
         e.preventDefault();
-        run(() => api('/import', new FormData(e.target)), "Adding papers… ones that aren't here yet are fetched from arXiv, which takes a few seconds per 100.")
+        run(() => api('/import', new FormData(e.target)), "Adding papers… ones that aren't here yet are fetched from arXiv (a few seconds per 100) or the ACL Anthology (a few seconds each).")
             .then(r => { if (r) { setRes(r); reload(); } });
     };
     const q = res && encodeURIComponent(res.tag);
@@ -250,15 +250,16 @@ export const ImportPage = () => {
             <h1>Add papers</h1>
             ${!m.user || m.readonly ? html`<p class="muted">Please <a href="/profile">log in</a> to add papers.</p>` : html`
             <p class="muted">
-                One arXiv link or id per line, up to ${d.max_lines} at a time: arxiv.org/abs or /pdf links,
-                Hugging Face or alphaXiv paper pages, DOIs, or bare ids like 2401.12345. Papers of any year
-                and category work; ones that aren't here yet are fetched from arXiv (up to ${d.limit} a day).
+                One link or id per line, up to ${d.max_lines} at a time: arxiv.org/abs or /pdf links,
+                Hugging Face or alphaXiv paper pages, DOIs, or bare ids like 2401.12345; papers from the
+                ACL Anthology too (aclanthology.org links, ACL DOIs, ids like 2024.acl-long.12). Papers of any year
+                and category work; ones that aren't here yet are fetched from where they are published (up to ${d.limit} a day).
             </p>
             <${Err} msg=${state.error} />
             <form id="import-form" onSubmit=${submit}>
                 <div class="form-group">
                     <textarea class="form-control" name="text" rows="8" required spellcheck="false"
-                              placeholder=${'https://arxiv.org/abs/1706.03762\n2401.12345'} value=${f.text} onInput=${field(f, setF)} />
+                              placeholder=${'https://arxiv.org/abs/1706.03762\n2401.12345\nhttps://aclanthology.org/2020.acl-main.1/'} value=${f.text} onInput=${field(f, setF)} />
                 </div>
                 <div class="form-group">
                     <label for="import-tag">Save them to tag: pick one of yours or type a new name</label>

@@ -216,10 +216,15 @@ const lensPicks = (lens, { g, pid, cited, out, ancestors, descendants, alike: al
     return [...sharing.slice(0, LENS_MAX - Math.min(4, content.length)), ...content].slice(0, LENS_MAX);
 };
 
-// an arXiv id from what was typed or pasted: an id, or a link to its abstract, pdf or html page
+// a paper id from what was typed or pasted: an id, or a link to its abstract, pdf or html page,
+// on arXiv or the ACL Anthology (also ACL DOIs); aslite/sources.py knows the same ids
 const ID_IN = /(\d{4}\.\d{4,5}|[a-z-]+(?:\.[A-Z]{2})?\/\d{7})(?:v\d+)?(?:\.pdf)?\/?\s*$/;
+const ACL_IN = /(?:^|aclanthology\.org\/|aclweb\.org\/anthology\/(?:[A-Z]\/[A-Z]\d\d\/)?|10\.18653\/(?:v1\/)?)(\d{4}\.[a-z][a-z\d]*(?:-[a-z\d]+)*\.\d+|[A-Z]\d{2}-\d{4})(?:v\d+)?(?:\.pdf)?\/?\s*$/i;
 export const paperId = text => {
-    const m = ID_IN.exec(text.trim().replace(/[?#].*$/, ''));
+    const t = text.trim().replace(/[?#].*$/, '');
+    const a = ACL_IN.exec(t);
+    if (a) return /^[a-z]\d/i.test(a[1]) ? a[1].toUpperCase() : a[1].toLowerCase();
+    const m = ID_IN.exec(t);
     return m ? m[1] : '';
 };
 
@@ -229,13 +234,13 @@ const OpenPaper = () => {
     const submit = e => {
         e.preventDefault();
         const id = paperId(e.target.elements.paper.value);
-        if (!id) { setErr('That is no arXiv id or link (like 1412.6980 or arxiv.org/abs/1412.6980).'); return; }
+        if (!id) { setErr('That is no paper id or link (like 1412.6980, arxiv.org/abs/1412.6980 or an aclanthology.org link).'); return; }
         setErr('');
         e.target.reset();
         navigate('/graph?pid=' + encodeURIComponent(id));
     };
     return html`<form class="graph-open" onSubmit=${submit} title="open the citation graph of another paper">
-        <input name="paper" type="text" placeholder="Another paper: arXiv id or link" aria-label="arXiv id or link of another paper"
+        <input name="paper" type="text" placeholder="Another paper: arXiv or ACL Anthology id or link" aria-label="id or link of another paper (arXiv, ACL Anthology)"
             autocomplete="off" spellcheck=${false} />
         <button class="btn btn-small" type="submit">Open graph</button>
         ${err ? html`<span class="form-error small">${err}</span>` : null}
@@ -503,7 +508,7 @@ export const GraphPage = () => {
     <div class="graph-page">
         <section class="graph-head">
             <div class="graph-head-row"><div class="graph-kicker">Citation graph</div><${OpenPaper} /></div>
-            <h1>${center ? html`<a href=${'https://arxiv.org/abs/' + pid}><${MathText} text=${center.title || pid} /></a>` : pid}</h1>
+            <h1>${center ? html`<a href=${center.url}><${MathText} text=${center.title || pid} /></a>` : pid}</h1>
             <p class="muted small">Where this paper comes from, where it went, and what stands next to it. Time runs left to right
                 ${' '}(what a paper cites lies to its left, what cites it to its right), height is topic, from the papers' embeddings.
                 ${' '}Pick a question (Read first, Came after, Siblings) to light up its answers; hover a paper to trace its lineage, click one to spread out its citations${res && res.enrich_on && m.logged_in
@@ -611,7 +616,7 @@ const Selected = ({ n, res, m, queue, cited, out, busy, error, onExpand, onAnaly
             <span>${n.year}${n.authors ? ' · ' + n.authors : ''}</span>
             ${n.saved.length ? html`<span class="graph-saved" title="in your tags">★ ${n.saved.join(', ')}</span>` : null}
         </div>
-        <h2 class="graph-title"><a href=${'https://arxiv.org/abs/' + n.id}><${MathText} text=${n.title || n.id} /></a></h2>
+        <h2 class="graph-title"><a href=${n.url}><${MathText} text=${n.title || n.id} /></a></h2>
         <p class="muted small">
             ${STATE_TEXT[n.state]}${n.state === 'analyzed' && !n.readable ? ', but no reference list was found in it' : ''}
             ${n.state === 'queued' && pos >= 0 ? ' (number ' + (pos + 1) + ' in line, about ' + Math.max(1, Math.round(((pos + 1) * SECONDS_PER_PAPER) / 60)) + ' min)' : ''}.
@@ -621,11 +626,11 @@ const Selected = ({ n, res, m, queue, cited, out, busy, error, onExpand, onAnaly
             ${n.state === 'analyzed' && !n.expanded ? html`<button type="button" class="btn btn-small btn-primary" disabled=${busy}
                 onClick=${() => onExpand(n.id)} title="add the papers it cites and the ones citing it">Spread out its citations</button>` : null}
             ${n.state === 'new' && res.enrich_on && m.logged_in ? html`<button type="button" class="btn btn-small btn-primary" disabled=${busy}
-                onClick=${() => onAnalyze(n.id)} title="the server reads its reference list from arXiv, about a minute">Read its references</button>` : null}
+                onClick=${() => onAnalyze(n.id)} title=${'the server reads its reference list from ' + n.source + ', about a minute'}>Read its references</button>` : null}
             ${n.state === 'new' && !m.logged_in ? html`<span class="muted small"><a href="/profile">Log in</a> to have its references read.</span>` : null}
             ${!isCenter ? html`<a class="btn btn-small" href=${'/graph?pid=' + n.id} title="a new graph around this paper">Start from here</a>` : null}
             ${n.here ? html`<a class="btn btn-small" href=${'/?rank=pid&pid=' + n.id} title="papers like it, by their text">Similar</a>` : null}
-            <a class="btn btn-small" href=${'https://arxiv.org/pdf/' + n.id}>pdf</a>
+            <a class="btn btn-small" href=${n.pdf}>pdf</a>
         </div>
     </div>`;
 };

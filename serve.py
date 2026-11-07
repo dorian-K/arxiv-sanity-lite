@@ -105,12 +105,9 @@ RATE_LIMITS = {
     'agent': (300, 60),  # every call of an agent tool (agents.py), on top of its own kind
     'agent_rank': (30, 60),  # rank_like without a token: a model fit per call, per ip
     'agent_write': (120, 60),
-    'oauth_register': (20, 3600),
+    'oauth_register': (20, 3600),  # apps registering for OAuth (claude.ai does once per connector)
     'analyze': (30, 3600),  # papers asked to analyze on the citation graph: arXiv requests (enrich_daemon.py)
-    'summary': (
-        60,
-        60,
-    ),  # requests that start AI summaries (each a model call that costs money)  # apps registering for OAuth (claude.ai does once per connector)
+    'summary': (60, 60),  # requests that start AI summaries (each a model call that costs money)
 }
 RATE_LIMITS_ON = os.environ.get('RATE_LIMITS', '1') != '0'
 _buckets = {}
@@ -551,6 +548,36 @@ def _summaries_later(pids):
         _summary_pool.submit(_summarize_abstract, pid)
 
 
+def request_summaries(pids, start=True):
+    """
+    the AI summaries of pids (papers on the site): (ready {pid: fields}, pending [pids being made],
+    left out [pids not started: the daily cap, the rate limit, or no logged-in user]). with start,
+    a logged-in user starts the missing ones (from the abstract, in the background); a paper whose
+    summary failed for good counts as left out
+    """
+    rdb = _refs_db()
+    known = rdb.summaries_of(pids)
+    ready = {
+        p: {k: s[k] for k in (*db.SUMMARY_KEYS, 'model', 'source')} for p, s in known.items() if s['status'] == 'ok'
+    }
+    missing = [p for p in pids if p not in ready]
+    started = []
+    # only logged-in users start model calls (they cost money); others see the ones that exist
+    may_start = start and g.user is not None and not (g.readonly and not g.get('token'))
+    if (
+        missing
+        and may_start
+        and rdb.summaries_since(time.time() - 86400) < SUMMARY_MAX_DAY
+        and not rate_limited('summary')
+    ):
+        left = SUMMARY_MAX_DAY - rdb.summaries_since(time.time() - 86400)
+        started = rdb.claim_summaries(missing[: max(0, left)])
+        _summaries_later(started)
+    now = rdb.summaries_of(missing)
+    pending = [p for p in missing if p in started or (now.get(p) or {}).get('status') == 'pending']
+    return ready, pending, [p for p in missing if p not in pending]
+
+
 @app.route('/summaries', methods=['POST'])
 def summaries():
     """
@@ -563,26 +590,7 @@ def summaries():
         return {'summaries': {}, 'pending': []}
     papers = get_papers()
     pids = [p for p in request.form.get('pids', '').split(',')[:SUMMARY_BATCH] if p and p in papers]
-    rdb = _refs_db()
-    known = rdb.summaries_of(pids)
-    ready = {
-        p: {k: s[k] for k in (*db.SUMMARY_KEYS, 'model', 'source')} for p, s in known.items() if s['status'] == 'ok'
-    }
-    missing = [p for p in pids if p not in ready]
-    started = []
-    # only logged-in users start model calls (they cost money); others see the ones that exist
-    may_start = g.user is not None and not g.readonly
-    if (
-        missing
-        and may_start
-        and rdb.summaries_since(time.time() - 86400) < SUMMARY_MAX_DAY
-        and not rate_limited('summary')
-    ):
-        left = SUMMARY_MAX_DAY - rdb.summaries_since(time.time() - 86400)
-        started = rdb.claim_summaries(missing[: max(0, left)])
-        _summaries_later(started)
-    now = rdb.summaries_of(missing)
-    pending = [p for p in missing if p in started or (now.get(p) or {}).get('status') == 'pending']
+    ready, pending, _ = request_summaries(pids)
     return {'summaries': ready, 'pending': pending}
 
 

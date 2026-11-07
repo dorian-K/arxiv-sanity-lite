@@ -251,3 +251,53 @@ def test_which_tab_cards_open_on_is_a_setting(client, monkeypatch, summaries_on)
     assert db.get_user('alice')['card_tab'] == ''
     monkeypatch.setenv('SUMMARIES_ENABLED', '0')
     assert not me()['summaries_on']  # the profile leaves the setting out then
+
+
+def test_agents_get_summaries_of_any_paper_and_may_wait_for_them(client, corpus, monkeypatch, summaries_on):
+    import contextlib
+
+    import agents
+    from aslite import sources
+    from test_agents import make_token
+
+    monkeypatch.setattr(agents, 'SUMMARY_POLL', 0.02)
+    pids = sorted(corpus)[:2]
+    # without a token: only the summaries that exist, nothing is started
+    r = client.get(f'/api/get_summaries?ids={",".join(pids)}&wait=true').get_json()
+    assert r['summaries'] == {} and r['not_made'] == pids and 'token' in r['why_not_made']
+    assert summaries_on == []
+
+    token = make_token(client)  # read-only is enough: a summary changes nothing of the user's
+    auth = {'Authorization': 'Bearer ' + token}
+    # without waiting: they are started, and listed as pending
+    r = client.get(f'/api/get_summaries?ids={pids[0]}', headers=auth).get_json()
+    assert r['pending'] == [pids[0]] and r['summaries'] == {}
+    # waiting: the answer comes once they are written, from the abstract
+    r = client.get(f'/api/get_summaries?ids={",".join(pids)}&wait=true&timeout=10', headers=auth).get_json()
+    assert sorted(r['summaries']) == pids and 'pending' not in r
+    assert r['summaries'][pids[1]]['problem'].startswith('About') and r['summaries'][pids[1]]['from'] == 'abstract'
+    assert len(summaries_on) == 2  # each made once
+
+    # a paper that isn't here is fetched first (here from the ACL Anthology), then summarized; over MCP too
+    acl = '2024.acl-long.12'
+    paper = dict(corpus[pids[0]], _id=acl, _idv=acl + 'v1', title='Only in the Anthology, nowhere else')
+    monkeypatch.setattr(sources.ACL, 'fetch', lambda ids: {acl: paper})
+    monkeypatch.setattr(sources.ACL, 'slot', lambda: contextlib.nullcontext())
+    from test_agents import call
+
+    got, err = call(client, 'get_summaries', token, ids=[f'https://aclanthology.org/{acl}/'], wait=True, timeout=10)
+    assert err is None and list(got['summaries']) == [acl]
+
+    # a timeout answers with what is there
+    import threading
+
+    slow = threading.Event()
+    monkeypatch.setattr(summary, 'ask', lambda *a, **k: slow.wait(5) and answer())
+    t = time.time()
+    r = client.get(f'/api/get_summaries?ids={sorted(corpus)[7]}&wait=true&timeout=1', headers=auth).get_json()
+    assert r == {'summaries': {}, 'pending': [sorted(corpus)[7]]} and time.time() - t < 3
+    slow.set()
+    assert client.get('/api/get_summaries?ids=x&timeout=500', headers=auth).status_code == 400
+
+    monkeypatch.setenv('SUMMARIES_ENABLED', '0')
+    assert 'turned off' in client.get(f'/api/get_summaries?ids={pids[0]}').get_json()['error']

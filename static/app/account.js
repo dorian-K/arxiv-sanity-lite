@@ -253,7 +253,8 @@ export const ImportPage = () => {
                 One link or id per line, up to ${d.max_lines} at a time: arxiv.org/abs or /pdf links,
                 Hugging Face or alphaXiv paper pages, DOIs, or bare ids like 2401.12345. Papers that aren't on arXiv
                 work by their page or PDF link on the ACL Anthology (also ACL DOIs and ids like 2024.acl-long.12), PMLR (ICML,
-                AISTATS, COLT, CoRL, ...), JMLR, CVF Open Access (CVPR, ICCV, WACV) and the NeurIPS proceedings; one that is
+                AISTATS, COLT, CoRL, ...), JMLR, CVF Open Access (CVPR, ICCV, WACV), the NeurIPS proceedings and the
+                ISCA Archive (Interspeech); one that is
                 on arXiv too is added as the arXiv paper. Papers of any year and category work; ones that aren't here yet
                 are fetched from where they are published (up to ${d.limit} a day).
             </p>

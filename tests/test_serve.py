@@ -240,9 +240,18 @@ CVF_PAGE = """<html><head>
 </head><body><font size="5"><br><b>Abstract</b></font><br><br>
 <div id="abstract">We segment <b>everything</b>, twice.</div><div>Related Material</div></body></html>"""
 
+ISCA_PAGE = """<html><head>
+<meta name="citation_title" content="Speech-IFEval">
+<meta name="citation_conference_title" content="Proc. Interspeech 2025">
+<meta name="citation_publication_date" content="2025">
+<meta name="citation_author" content="Lu, Ke-Han"><meta name="citation_author" content="Lee, Hung-yi">
+</head><body><div id="abstract">
+    <p>We introduce Speech-IFEval.</p>
+</div></body></html>"""
+
 
 def test_papers_from_proceedings_sites(client, corpus, monkeypatch):
-    """PMLR, JMLR, CVF and NeurIPS papers by their links; one that is on arXiv too is kept as the arXiv paper"""
+    """PMLR, JMLR, CVF, NeurIPS and ISCA papers by their links; one that is on arXiv too is kept as the arXiv paper"""
     import contextlib
 
     from aslite import db, sources
@@ -267,6 +276,8 @@ def test_papers_from_proceedings_sites(client, corpus, monkeypatch):
         'https://proceedings.neurips.cc/paper_files/paper/2023/hash/0123456789abcdef0123456789abcdef-Abstract-Conference.html': (
             'neurips:2023.0123456789abcdef0123456789abcdef-Conference'
         ),
+        'https://www.isca-archive.org/interspeech_2025/lu25c_interspeech.pdf': 'isca:interspeech_2025.lu25c_interspeech',
+        'https://www.isca-speech.org/archive/interspeech_2023/foo23_interspeech.html': 'isca:interspeech_2023.foo23_interspeech',
     }
     for link, pid in links.items():
         assert sources.find_paper_id(link) == pid, link
@@ -275,7 +286,7 @@ def test_papers_from_proceedings_sites(client, corpus, monkeypatch):
         # the links built from the id lead back to the same id: nothing about the paper is lost in it
         assert sources.find_paper_id(src.abs_url(pid)) == pid and sources.find_paper_id(src.pdf_url(pid)) == pid
         assert src.license(pid) == ''  # none of these publish under an open license: no thumbnails
-    assert [sources.year(p) for p in list(links.values())[::2]] == [2023, 2023, 2023, 2023, 2023]
+    assert [sources.year(p) for p in list(links.values())[::2]] == [2023] * 6
     assert (
         sources.year('pmlr:v37.ioffe15') == 2015
         and sources.year('neurips:2017.3f5ee243547dee91fbd053c1c4a845aa') == 2017
@@ -293,6 +304,33 @@ def test_papers_from_proceedings_sites(client, corpus, monkeypatch):
         sources.short_venue('Proceedings of the 40th International Conference on Machine Learning', 2023) == 'ICML 2023'
     )
     assert sources.short_venue('ICML 2023 Workshop on Things', 2023) == 'ICML 2023 Workshop on Things'
+
+    paper = sources.ISCA.parse('isca:interspeech_2025.lu25c_interspeech', ISCA_PAGE)
+    assert [a['name'] for a in paper['authors']] == ['Ke-Han Lu', 'Hung-yi Lee']
+    assert paper['summary'] == 'We introduce Speech-IFEval.'
+    assert (paper['arxiv_journal_ref'], paper['tags']) == ('Interspeech 2025', [{'term': 'eess.AS'}])
+
+    # a page the site's robots.txt disallows is never fetched: it is left out like an unknown id
+    import io
+    import urllib.request
+
+    def fake_urlopen(req, timeout=None):
+        fetched.append(req.full_url)
+        if req.full_url.endswith('/robots.txt'):
+            return io.BytesIO(b'User-agent: *\nDisallow: /interspeech_2026/\n')
+        return io.BytesIO(ISCA_PAGE.encode())
+
+    fetched = []
+    with monkeypatch.context() as mp:
+        mp.setattr(urllib.request, 'urlopen', fake_urlopen)
+        mp.setattr(sources.ISCA, '_robots', None, raising=False)
+        new, old = 'isca:interspeech_2026.foo26_interspeech', 'isca:interspeech_2025.lu25c_interspeech'
+        assert list(sources.ISCA.fetch([new, old])) == [old]
+        assert list(sources.ISCA.fetch([new])) == []  # robots.txt is read once
+    assert fetched == [
+        'https://www.isca-archive.org/robots.txt',
+        'https://www.isca-archive.org/interspeech_2025/lu25c_interspeech.html',
+    ]
 
     # the graph's box reads links on the server
     assert client.get('/ui/paper_id?q=https://jmlr.org/papers/v24/18-080.html').get_json() == {'pid': 'jmlr:v24.18-080'}

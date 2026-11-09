@@ -230,7 +230,7 @@ const OpenPaper = () => {
         }).catch(er => setErr(er.message));
     };
     return html`<form class="graph-open" onSubmit=${submit} title="open the citation graph of another paper">
-        <input name="paper" type="text" placeholder="Another paper: id or link" aria-label="id or link of another paper (arXiv, ACL Anthology, PMLR, JMLR, CVF, NeurIPS)"
+        <input name="paper" type="text" placeholder="Another paper: id or link" aria-label="id or link of another paper (arXiv, ACL Anthology, PMLR, JMLR, CVF, NeurIPS, ISCA)"
             autocomplete="off" spellcheck=${false} />
         <button class="btn btn-small" type="submit">Open graph</button>
         ${err ? html`<span class="form-error small">${err}</span>` : null}

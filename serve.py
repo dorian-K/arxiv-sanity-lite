@@ -1882,7 +1882,9 @@ def ui_paper_id():
     """the paper id in a link or id someone typed (the graph's open box): every site's links are known here, never fetched"""
     pid = find_paper_id(request.args.get('q', '')[:500])
     if pid is None:
-        return {'error': 'That is no paper id or link we know (arXiv, ACL Anthology, PMLR, JMLR, CVF, NeurIPS).'}, 404
+        return {
+            'error': 'That is no paper id or link we know (arXiv, ACL Anthology, PMLR, JMLR, CVF, NeurIPS, ISCA).'
+        }, 404
     return {'pid': pid}
 
 

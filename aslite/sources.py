@@ -1,7 +1,7 @@
 """
 Where papers come from. arXiv is the site's source: arxiv_daemon.py, the bulk importers and the
 snapshot fill papers.sqlite from it. Other sources (the ACL Anthology, PMLR, JMLR, the CVF's open
-access proceedings, NeurIPS's proceedings) only ever add single papers someone asks for: a user's
+access proceedings, NeurIPS's proceedings, the ISCA Archive) only ever add single papers someone asks for: a user's
 /import, the graph's open box, a cited paper clicked on the graph. We never crawl them.
 
 Everything that depends on where a paper lives goes through the Source of its id: what its ids
@@ -19,8 +19,10 @@ one parser (CitationPage) reads them all; a new site of that kind is a small sub
 import calendar
 import html as htmllib
 import re
+import time
 import urllib.error
 import urllib.request
+import urllib.robotparser
 from datetime import datetime, timezone
 from html.parser import HTMLParser
 
@@ -167,6 +169,7 @@ VENUE_SHORT = [
     ('Learning for Dynamics and Control', 'L4DC'),
     ('Algorithmic Learning Theory', 'ALT'),
     ('Journal of Machine Learning Research', 'JMLR'),
+    ('Interspeech', 'Interspeech'),
 ]
 
 
@@ -184,9 +187,31 @@ class CitationPage(Source):
     category = 'cs.LG'  # stored as the paper's category, so filters and the about page make sense of it
     abstract_re = re.compile(r'abstract', re.I)  # the id or class of the element holding the abstract
 
+    ROBOTS_TTL = 24 * 3600  # how long a site's robots.txt is trusted, per process
+
+    def allowed(self, url):
+        """whether the site's robots.txt lets us fetch url (the ISCA Archive disallows its newest
+        Interspeech, for one). Read once a day per process; unreadable (a network error) means no"""
+        robots = getattr(self, '_robots', None)
+        if robots is None or time.time() - robots[0] > self.ROBOTS_TTL:
+            rp = urllib.robotparser.RobotFileParser()
+            origin = re.match(r'https?://[^/]+', url).group(0)
+            req = urllib.request.Request(origin + '/robots.txt', headers={'User-Agent': USER_AGENT})
+            try:
+                with urllib.request.urlopen(req, timeout=30) as r:
+                    rp.parse(r.read(500_000).decode('utf-8', 'replace').splitlines())
+            except urllib.error.HTTPError as e:
+                if e.code not in (404, 410):  # no robots.txt: everything is allowed
+                    raise
+                rp.parse([])
+            robots = self._robots = (time.time(), rp)
+        return robots[1].can_fetch(USER_AGENT, url)
+
     def fetch(self, pids):
         out = {}
         for pid in pids:
+            if not self.allowed(self.abs_url(pid)):
+                continue  # left out like an unknown id
             req = urllib.request.Request(self.abs_url(pid), headers={'User-Agent': USER_AGENT})
             try:
                 with urllib.request.urlopen(req, timeout=60) as r:
@@ -416,8 +441,39 @@ class NeurIps(CitationPage):
         return int(self._parts(pid)[0])
 
 
-ARXIV, ACL, PMLR, JMLR, CVF, NEURIPS = ArXiv(), Acl(), Pmlr(), Jmlr(), Cvf(), NeurIps()
-SOURCES = (ARXIV, ACL, PMLR, JMLR, CVF, NEURIPS)
+class Isca(CitationPage):
+    """the ISCA Archive: Interspeech, SSW and the other ISCA conferences and workshops
+    (isca:interspeech_2025.lu25c_interspeech: the event's folder and the paper's file name)"""
+
+    name, label, host, category = 'isca', 'ISCA Archive', 'isca-archive.org', 'eess.AS'
+    venue_note = 'from the ISCA Archive'
+    id_re = re.compile(r'isca:[a-z\d]+_\d{4}\.[a-z\d]+_[a-z\d]+')
+
+    def find_link(self, text):
+        # isca-speech.org/archive/ is the archive's old address, with the same paths
+        m = re.search(
+            r'(?:isca-archive\.org|isca-speech\.org/archive)/([a-z\d]+_\d{4})/([a-z\d]+_[a-z\d]+)\.(?:html|pdf)',
+            text or '',
+        )
+        return f'isca:{m.group(1)}.{m.group(2)}' if m else None
+
+    def _parts(self, pid):
+        return pid[len('isca:') :].split('.', 1)
+
+    def abs_url(self, pid):
+        event, key = self._parts(pid)
+        return f'https://www.isca-archive.org/{event}/{key}.html'
+
+    def pdf_url(self, pid):
+        event, key = self._parts(pid)
+        return f'https://www.isca-archive.org/{event}/{key}.pdf'
+
+    def year(self, pid):
+        return int(self._parts(pid)[0].rsplit('_', 1)[1])
+
+
+ARXIV, ACL, PMLR, JMLR, CVF, NEURIPS, ISCA = ArXiv(), Acl(), Pmlr(), Jmlr(), Cvf(), NeurIps(), Isca()
+SOURCES = (ARXIV, ACL, PMLR, JMLR, CVF, NEURIPS, ISCA)
 OTHERS = SOURCES[1:]
 
 

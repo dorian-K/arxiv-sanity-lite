@@ -58,10 +58,12 @@ class ToolError(Exception):
 TOOLS = {}
 
 
-def tool(description, params=None, required=(), access='public', limit='agent'):
+def tool(description, params=None, required=(), access='public', limit='agent', title='', destructive=False):
     """
     registers a tool. params: {name: json schema}; access: public (anyone), user (any token),
-    agent (a token that may change agent: tags, or more), write (one that may change anything); limit: the rate limit kind (serve.RATE_LIMITS) per call
+    agent (a token that may change agent: tags, or more), write (one that may change anything); limit: the rate limit kind (serve.RATE_LIMITS) per call.
+    title: its name for people (connector directories require one); destructive: it can remove or overwrite
+    the user's data (saves, likes, notes), so clients ask before calling it
     """
 
     def register(fn):
@@ -72,6 +74,8 @@ def tool(description, params=None, required=(), access='public', limit='agent'):
             'required': tuple(required),
             'access': access,
             'limit': limit,
+            'title': title or fn.__name__.replace('_', ' ').capitalize(),
+            'destructive': destructive,
         }
         return fn
 
@@ -198,6 +202,7 @@ def _top(pct):
     },
     required=('query',),
     limit='search',
+    title='Search papers',
 )
 def search(query, days=None, limit=20, offset=0, published_only=False, abstracts=True):
     res = site._ranked('search', query, '', '', days or '', 'no', None, 'auto', 'auto', 'one', published_only)
@@ -210,6 +215,7 @@ def search(query, days=None, limit=20, offset=0, published_only=False, abstracts
     in not_here: save_papers fetches them from arXiv.""",
     {'ids': _ids(), 'abstracts': ABSTRACTS},
     required=('ids',),
+    title='Get papers',
 )
 def get_papers(ids, abstracts=True):
     pids, bad = _norm_ids(ids)
@@ -238,6 +244,7 @@ SUMMARY_RETRY = 10  # seconds to suggest before asking again for pending ones (o
     {'ids': _ids(SUMMARY_IDS)},
     required=('ids',),
     limit='summary',
+    title='Get AI summaries',
 )
 def get_summaries(ids):
     from aslite import summary
@@ -301,6 +308,7 @@ def get_summaries(ids):
     },
     required=('like',),
     limit='rank',
+    title='Rank papers like these',
 )
 def rank_like(
     like, unlike=(), days=None, limit=20, offset=0, published_only=False, exclude_rated=False, abstracts=True
@@ -355,6 +363,7 @@ def rank_like(
         'full_text': {'type': 'boolean', 'default': False, 'description': 'include the whole text of every reference'},
     },
     required=('id',),
+    title='Get references',
 )
 def references(id, full_text=False):
     pid = find_paper_id(id)
@@ -383,6 +392,7 @@ def references(id, full_text=False):
     references this site has read (the ones its users saved), so far from all citations.""",
     {'id': {'type': 'string', 'maxLength': 200}, 'limit': LIMIT, 'offset': OFFSET, 'abstracts': ABSTRACTS},
     required=('id',),
+    title='Get citing papers',
 )
 def cited_by(id, limit=20, offset=0, abstracts=False):
     pid = find_paper_id(id)
@@ -399,6 +409,7 @@ def cited_by(id, limit=20, offset=0, abstracts=False):
     """The user's tags with how many papers each has saved, marked "not for" it, and not
     marked read yet ('all' counts the user's own tags together, without the agent:... ones).""",
     access='user',
+    title='List my tags',
 )
 def list_tags():
     tags, neg, reads = site.get_tags(), site.get_neg_tags(), site.get_reads()
@@ -432,6 +443,7 @@ LISTS = {'saved': 'saved', 'to_read': 'unread', 'not_for': 'down', 'cited': 'cit
     },
     required=('tag',),
     access='user',
+    title="List a tag's papers",
 )
 def tag_papers(tag, list='saved', limit=20, offset=0, published_only=False, abstracts=True):
     rank = LISTS[list]
@@ -457,6 +469,7 @@ def tag_papers(tag, list='saved', limit=20, offset=0, published_only=False, abst
     },
     access='user',
     limit='rank',
+    title='Recommend papers',
 )
 def recommend(tag='all', days=30, limit=20, offset=0, published_only=False, include_rated=False, abstracts=True):
     if not site.features_exist():
@@ -474,6 +487,7 @@ def recommend(tag='all', days=30, limit=20, offset=0, published_only=False, incl
     """The user's latest weekly digest: the best new papers per tag, as of when it was made.""",
     {'abstracts': {**ABSTRACTS, 'default': False}},
     access='user',
+    title='Get my digest',
 )
 def get_digest(abstracts=False):
     d = db.get_digest(g.user)
@@ -502,6 +516,7 @@ def _check_new_tag(tag):
     required=('ids', 'tag'),
     access='agent',
     limit='agent_write',
+    title='Save papers to a tag',
 )
 def save_papers(ids, tag):
     tag = _check_new_tag(_writable_tag(tag))
@@ -531,6 +546,8 @@ def save_papers(ids, tag):
     required=('ids', 'tag'),
     access='agent',
     limit='agent_write',
+    title='Remove papers from a tag',
+    destructive=True,
 )
 def unsave_papers(ids, tag):
     tag = _writable_tag(tag)
@@ -548,6 +565,8 @@ def unsave_papers(ids, tag):
     required=('ids', 'tag'),
     access='agent',
     limit='agent_write',
+    title='Mark papers as not for a tag',
+    destructive=True,
 )
 def mark_not_for(ids, tag, undo=False):
     tag = _writable_tag(tag)
@@ -570,6 +589,7 @@ def mark_not_for(ids, tag, undo=False):
     required=('ids',),
     access='write',
     limit='agent_write',
+    title='Mark papers read',
 )
 def mark_read(ids, read=True):
     pids, _ = _norm_ids(ids)
@@ -591,6 +611,8 @@ def mark_read(ids, read=True):
     required=('id', 'text'),
     access='write',
     limit='agent_write',
+    title='Set a note on a paper',
+    destructive=True,
 )
 def set_note(id, text):
     pid = find_paper_id(id)
@@ -789,11 +811,13 @@ def _rpc(msg):
                 'tools': [
                     {
                         'name': name,
+                        'title': t['title'],
                         'description': t['description'],
                         'inputSchema': _schema(t),
                         'annotations': {
+                            'title': t['title'],
                             'readOnlyHint': t['access'] not in ('agent', 'write'),
-                            'destructiveHint': False,
+                            'destructiveHint': t['destructive'],
                             # they may fetch papers from arXiv or other sites (get_summaries also asks a model)
                             'openWorldHint': name in ('save_papers', 'get_summaries'),
                         },

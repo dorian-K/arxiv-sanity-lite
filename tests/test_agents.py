@@ -462,3 +462,19 @@ def test_the_token_choices_are_the_same_on_agents_and_the_consent_page(client):
     with serve.app.test_request_context():
         page = render_template_string('{% from "_access.html" import access_choice %}{{ access_choice() }}')
     assert all(name in page and f'value="{v}"' in page for v, _, name, _ in agents.ACCESS_CHOICES)
+
+
+def test_tools_carry_titles_and_hints_for_connector_directories(client, corpus):
+    """directories (Claude's) flag tools without a title and the applicable readOnlyHint / destructiveHint"""
+    login(client)
+    token = make_token(client, 'write')
+    tools = rpc(client, 'tools/list', token=token)['result']['tools']
+    assert len(tools) == 15
+    for t in tools:
+        a = t['annotations']
+        assert t['title'] and a['title'] == t['title'] and len(t['name']) <= 64
+        assert isinstance(a['readOnlyHint'], bool) and isinstance(a['destructiveHint'], bool)
+        assert not (a['readOnlyHint'] and a['destructiveHint'])
+    by = {t['name']: t['annotations'] for t in tools}
+    assert {n for n, a in by.items() if a['destructiveHint']} == {'unsave_papers', 'mark_not_for', 'set_note'}
+    assert by['search']['readOnlyHint'] and not by['save_papers']['readOnlyHint']

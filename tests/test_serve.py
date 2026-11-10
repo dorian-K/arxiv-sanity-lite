@@ -484,6 +484,26 @@ def test_tag_check_and_rank_percentiles(client, corpus):
     assert all(0 < p['pct'] <= 1 for p in res['papers'])
 
 
+def test_search_results_show_how_well_they_fit_the_tags(client, corpus):
+    vision = [p for p in corpus if corpus[p]['tags'][0]['term'] == 'cs.CV']
+    language = [p for p in corpus if corpus[p]['tags'][0]['term'] == 'cs.CL']
+    assert client.get('/ui/fit?pids=' + vision[0]).get_json() == {'fit': {}}  # no tags: nothing to fit
+    login(client)
+    for p in vision[:6]:
+        client.post(f'/add/{p}/cv')
+    for p in language[:6]:
+        client.post(f'/add/{p}/nlp')
+    # each paper gets its best tag only, and where it would rank there among all papers
+    pids = [vision[10], language[20], 'no.such']
+    fit = client.get('/ui/fit?pids=' + ','.join(pids)).get_json()['fit']
+    assert set(fit) == {vision[10], language[20]}
+    # (language is 5/6 of this corpus, so a top language paper is only "top 80%" for nlp: real
+    # tags are small, here only the vision side says something)
+    assert fit[vision[10]]['tag'] == 'cv'
+    assert all(0 < f['pct'] <= 1 for f in fit.values())
+    assert fit[vision[10]]['pct'] < 0.3  # vision is 1/6 of the corpus: its papers top the cv ranking
+
+
 def test_tag_pages_and_landing(client, corpus):
     from aslite import db
 

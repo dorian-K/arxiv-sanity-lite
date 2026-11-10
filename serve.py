@@ -319,7 +319,7 @@ def _start_session(user, readonly=False):
         session['readonly'] = True
 
 
-SHAREABLE = ('ui_list', 'ui_digest', 'digest_more', 'tag_check')  # data a ?u= link can show of another user
+SHAREABLE = ('ui_list', 'ui_digest', 'digest_more', 'tag_check', 'ui_fit')  # data a ?u= link can show of another user
 AGENT_ENDPOINTS = (
     'agents.mcp',
     'agents.mcp_me',
@@ -1366,6 +1366,42 @@ def ui_list():
     context['notice'] = notice
     context['for_you_days'] = FOR_YOU_DAYS
     return context
+
+
+FIT_MAX = 50  # papers per /ui/fit request (a page shows RET_NUM)
+
+
+@app.route('/ui/fit')
+def ui_fit():
+    """
+    how well papers (?pids=a,b,...: a page of search results) fit the owner's tags: for each, the
+    tag it fits best and where it lands in that tag's ranking among all papers ("top 2%"). one
+    model per tag, the same cached ones the tag pages use; the page asks after showing its results
+    """
+    pids = [p for p in request.args.get('pids', '').split(',') if p][:FIT_MAX]
+    names = sorted(own_tags(get_tags()))
+    if not pids or not names or not features_exist():
+        return {'fit': {}}
+    if rate_limited('rank'):
+        return too_many('rank')
+    features = get_features()
+    ptoi = features['ptoi']
+    have = [p for p in pids if p in ptoi]
+    rows = np.array([ptoi[p] for p in have], dtype=np.int64)
+    best = {}
+    for t in names:
+        m, _, _ = svm_rank(tags=t)
+        if m is None or not len(rows):
+            continue
+        ok = usable(features, m['feats'])
+        keep = [i for i in range(len(have)) if ok is None or ok[rows[i]]]
+        if not keep:
+            continue
+        for i, x in zip(keep, pct(m, apply(features, m, rows[keep])), strict=True):
+            if have[i] not in best or x < best[have[i]]['pct']:
+                best[have[i]] = {'pct': x, 'tag': t}
+    g.metric_name = 'fit'
+    return {'fit': best}
 
 
 @app.route('/ui/inspect')

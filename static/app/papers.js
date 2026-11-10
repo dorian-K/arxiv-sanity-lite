@@ -1,6 +1,6 @@
 // paper cards and what goes with them: votes, tags, notes, the AI summary tabs, the digest's
 // sections, the tag check and the model's words. used by the list, the digest and inspect
-import { html, useState, useEffect, useRef, useContext, createContext, store, api, tagRequest, me } from 'app/lib';
+import { html, useState, useEffect, useRef, useContext, createContext, store, api, load, tagRequest, me } from 'app/lib';
 import { MathText } from 'app/math';
 
 // what the page around the cards is: its rank and tag, whose tags it shows (viewing someone's
@@ -255,7 +255,7 @@ const QuickVote = ({ pid, tag, state, onChange, compact }) => {
         </div>`;
 };
 
-export const Paper = ({ paper: p, quickTag }) => {
+export const Paper = ({ paper: p, quickTag, tagFit }) => {
     const page = useContext(Page);
     const canEdit = page.canEdit;
     const m = me.use();
@@ -323,7 +323,8 @@ export const Paper = ({ paper: p, quickTag }) => {
         ? html`<span class="rel_score" title=${'cited by ' + p.weight + ' of the papers you saved here'}>cited ×${p.weight}</span>`
         : html`${p.pct !== undefined
         ? html`<span class="rel_score" title=${'rank among all papers (model score ' + p.weight.toFixed(2) + ')'}>${fmtPct(p.pct)}</span>`
-        : showScore ? html`<span class="rel_score" title="search score">${p.weight.toFixed(2)}</span>` : null}${p.for_tag ? html`
+        : showScore ? html`<span class="rel_score" title="search score">${p.weight.toFixed(2)}</span>`
+        : html`<${FitScore} fit=${tagFit} id=${p.id} />`}${p.for_tag ? html`
         <a class="rel_for" href=${tagUrl(p.for_tag)} title=${'recommended for your tag ' + p.for_tag}>${p.for_tag}</a>` : null}`;
     const state = quickTag && (utags.includes(quickTag) ? 'like' : ntags.includes(quickTag) ? 'down' : stags.includes(quickTag) ? 'seen' : null);
     // the server keeps one state per paper and tag, so the others are gone now
@@ -422,8 +423,35 @@ const EMPTY = {
     search: 'No papers match this search.',
 };
 
+// search results: how well each fits the tags (/ui/fit), asked for once the results show.
+// undefined: not on this page; null: on its way; {pid: {pct, tag}} (papers that fit no tag are left out)
+function useFit(papers, page) {
+    const want = page.rank === 'search' && page.userTags.length > 0 && papers.length > 0;
+    const [fit, setFit] = useState(want ? null : undefined);
+    useEffect(() => {
+        if (!want) return undefined;
+        let live = true;
+        const path = '/ui/fit?pids=' + papers.map(p => encodeURIComponent(p.id)).join(',')
+            + (page.viewing ? '&u=' + encodeURIComponent(page.owner) : '');
+        load(path).then(d => { if (live) setFit(d.fit); }, () => { if (live) setFit(undefined); });
+        return () => { live = false; };
+    }, []); // the list is keyed by its data: new results mount a new one
+    return fit;
+}
+
+// a search result's best tag and its rank there, as on "For you" (the tag links to its page)
+const FitScore = ({ fit, id }) => {
+    if (fit === undefined) return null;
+    if (fit === null) return html`<span class="sk sk-score" title="checking how well this paper fits your tags"></span>`;
+    const f = fit[id];
+    if (!f) return null;
+    return html`<span class="rel_score" title=${'how well it fits your tags: where it would rank among all papers for its best tag, ' + f.tag}>${fmtPct(f.pct)}</span>
+        <a class="rel_for" href=${tagUrl(f.tag)} title=${'fits your tag ' + f.tag + ' best'}>${f.tag}</a>`;
+};
+
 export const PaperList = ({ papers }) => {
     const page = useContext(Page);
+    const fit = useFit(papers, page);
     if (papers.length === 0) {
         return html`<div class="empty">${EMPTY[page.rank] || 'No papers here. Try another search or a longer time window.'}</div>`;
     }
@@ -431,7 +459,7 @@ export const PaperList = ({ papers }) => {
     const quickTag = page.canEdit && page.rank === 'tags' && page.userTags.includes(page.tags) ? page.tags : null;
     // on "For you", each paper was picked by one tag: its votes go to that tag
     const voteTag = p => (page.canEdit && p.for_tag ? p.for_tag : quickTag);
-    return html`<div id="paperList" class="rel_papers">${papers.map(p => html`<${Paper} key=${p.id} paper=${p} quickTag=${voteTag(p)} />`)}</div>`;
+    return html`<div id="paperList" class="rel_papers">${papers.map(p => html`<${Paper} key=${p.id} paper=${p} quickTag=${voteTag(p)} tagFit=${fit} />`)}</div>`;
 };
 
 // what the list will look like, blanked, while the results are on their way: cards or lines

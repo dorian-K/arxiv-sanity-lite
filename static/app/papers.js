@@ -442,11 +442,12 @@ function useFit(papers, page) {
 // a search result's best tag and its rank there, as on "For you" (the tag links to its page)
 const FitScore = ({ fit, id }) => {
     if (fit === undefined) return null;
-    if (fit === null) return html`<span class="sk sk-score" title="checking how well this paper fits your tags"></span>`;
+    if (fit === null) return html`<span class="sk sk-fit" title="checking how well this paper fits your tags"></span>`;
     const f = fit[id];
     if (!f) return null;
-    return html`<span class="rel_score" title=${'how well it fits your tags: where it would rank among all papers for its best tag, ' + f.tag}>${fmtPct(f.pct)}</span>
-        <a class="rel_for" href=${tagUrl(f.tag)} title=${'fits your tag ' + f.tag + ' best'}>${f.tag}</a>`;
+    // one bubble: the tag it fits best, and where it would rank among all papers for that tag
+    return html`<a class="rel_for" href=${tagUrl(f.tag)}
+        title=${'fits your tag ' + f.tag + ' best: it would rank in the ' + fmtPct(f.pct) + ' of all papers for it'}>${f.tag}${' '}<span class="rel_for_pct">${fmtPct(f.pct)}</span></a>`;
 };
 
 export const PaperList = ({ papers }) => {

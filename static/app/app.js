@@ -108,7 +108,9 @@ if (here.pathname === '/digest') load('/ui/digest' + here.search).catch(() => {}
 api('/ui/me').then(m => {
     me.set(m);
     initAbout(m.card_tab);
-    render(html`<${App} />`, document.getElementById('app'));
+    const root = document.getElementById('app');
+    root.textContent = ''; // the boot skeleton of index.html
+    render(html`<${App} />`, root);
 }).catch(() => {
     document.getElementById('app').innerHTML = '<div class="page"><section class="card"><p class="form-error">The server could not be reached. Try reloading the page.</p></section></div>';
 });

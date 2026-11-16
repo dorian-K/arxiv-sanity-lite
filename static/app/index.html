@@ -26,10 +26,48 @@
     }
 }
 </script>
+<!-- every module at once: without these the browser finds them one import level at a time (3 round trips) -->
+<link rel="modulepreload" href="/static/vendor/preact-10.29.8/preact.module.js">
+<link rel="modulepreload" href="/static/vendor/preact-10.29.8/hooks/dist/hooks.module.js">
+<link rel="modulepreload" href="/static/vendor/htm-3.1.1/htm.module.js">
+<link rel="modulepreload" href="/static/app/lib.js">
+<link rel="modulepreload" href="/static/app/math.js">
+<link rel="modulepreload" href="/static/app/papers.js">
+<link rel="modulepreload" href="/static/app/list.js">
+<link rel="modulepreload" href="/static/app/pages.js">
+<link rel="modulepreload" href="/static/app/account.js">
+<link rel="modulepreload" href="/static/app/graph.js">
 <script type="module" src="/static/app/app.js"></script>
 </head>
 
 <body>
-<div id="app"></div>
+<div id="app">
+<!-- shown from the first paint until the app has drawn the page (app.js replaces it): the site's
+     frame and a blanked list, never an empty screen while the modules and /ui/me load -->
+<header id="header"><a href="/" id="home-link">Arxiv <span>Resanity</span></a><nav></nav></header>
+<main><div class="rel_papers skeleton" role="status" aria-busy="true" aria-live="polite">
+    <div class="skel-caption">Loading…</div>
+    <div class="rel_paper skel" aria-hidden="true">
+        <div class="rel_head"><span class="sk sk-score"></span><span class="sk sk-title" style="width:92%"></span></div>
+        <span class="sk sk-line" style="width:45%"></span><span class="sk sk-line sk-small" style="width:25%"></span>
+        <span class="sk sk-line"></span><span class="sk sk-line" style="width:80%"></span>
+    </div>
+    <div class="rel_paper skel" aria-hidden="true">
+        <div class="rel_head"><span class="sk sk-score"></span><span class="sk sk-title" style="width:74%"></span></div>
+        <span class="sk sk-line" style="width:45%"></span><span class="sk sk-line sk-small" style="width:25%"></span>
+        <span class="sk sk-line"></span><span class="sk sk-line" style="width:65%"></span>
+    </div>
+    <div class="rel_paper skel" aria-hidden="true">
+        <div class="rel_head"><span class="sk sk-score"></span><span class="sk sk-title" style="width:86%"></span></div>
+        <span class="sk sk-line" style="width:45%"></span><span class="sk sk-line sk-small" style="width:25%"></span>
+        <span class="sk sk-line"></span><span class="sk sk-line" style="width:88%"></span>
+    </div>
+    <div class="rel_paper skel" aria-hidden="true">
+        <div class="rel_head"><span class="sk sk-score"></span><span class="sk sk-title" style="width:65%"></span></div>
+        <span class="sk sk-line" style="width:45%"></span><span class="sk sk-line sk-small" style="width:25%"></span>
+        <span class="sk sk-line"></span><span class="sk sk-line" style="width:70%"></span>
+    </div>
+</div></main>
+</div>
 </body>
 </html>

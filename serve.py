@@ -26,6 +26,7 @@ from flask import Flask, request, redirect, url_for, abort
 from flask import render_template, send_file
 from flask import g  # global session-level object
 from flask import session
+from flask.sessions import SecureCookieSessionInterface
 from itsdangerous import URLSafeSerializer, URLSafeTimedSerializer, BadSignature
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -70,6 +71,22 @@ app.config.update(
     SESSION_COOKIE_SECURE=os.environ.get('SECURE_COOKIES', '0') == '1',  # set when served over https
     PERMANENT_SESSION_LIFETIME=90 * 24 * 3600,
 )
+
+# files that are the same for everyone: they never look at the session. a logged-in session is
+# permanent, so Flask would send it anew (with a new timestamp) on every response, plus
+# Vary: Cookie: the browser's cached scripts then no longer matched the next request's cookie, and
+# every page load fetched all its modules again, one import level after the other
+COOKIELESS = ('static', 'thumb')
+
+
+class _Sessions(SecureCookieSessionInterface):
+    def save_session(self, app, session, response):
+        if request.endpoint in COOKIELESS:
+            return
+        super().save_session(app, session, response)
+
+
+app.session_interface = _Sessions()
 # behind a reverse proxy, take the client's scheme/host/ip from its X-Forwarded-* headers.
 # TRUST_PROXY is the number of proxies in front; leave it 0 when clients connect directly,
 # or anyone could spoof those headers
@@ -333,6 +350,8 @@ AGENT_ENDPOINTS = (
 @app.before_request
 def before_request():
     g.t0 = time.perf_counter()  # for /stats, see record_timing
+    if request.endpoint in COOKIELESS:
+        return
     # everything that changes state is a POST. SameSite=Lax already keeps the session
     # cookie off cross-site POSTs; rejecting them by Sec-Fetch-Site covers old browsers too
     if request.method == 'POST' and request.headers.get('Sec-Fetch-Site') == 'cross-site':

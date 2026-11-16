@@ -677,6 +677,16 @@ def test_static_files_are_versioned_and_cached(client):
     assert 'immutable' not in client.get('/static/app/lib.js').headers.get('Cache-Control', '')
 
 
+def test_static_files_leave_the_session_alone(client):
+    # a fresh session cookie plus Vary: Cookie on every script made browsers fetch them all again
+    login(client)
+    for path in ('/static/app/lib.js?v=1', '/thumb/figure/0000.00001'):
+        r = client.get(path)
+        assert 'Set-Cookie' not in r.headers and 'Cookie' not in r.headers.get('Vary', ''), path
+    me = client.get('/ui/me')
+    assert me.get_json()['user'] == 'alice'  # the session itself is untouched
+
+
 def test_published_filter_and_venues(client, corpus):
     from aslite import db
 

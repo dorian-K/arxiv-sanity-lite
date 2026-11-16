@@ -1,6 +1,6 @@
 // the pages about the user's account: log in and settings (profile), adding papers, and access
 // tokens for AI agents. their forms post to the server's endpoints and show the answer in place
-import { html, useState, me, refreshMe, api, useData, navigate, Err, useAction, LoadError } from 'app/lib';
+import { html, useState, me, refreshMe, unsynced, forgetDevice, api, useData, navigate, Err, useAction, LoadError } from 'app/lib';
 import { about, setAboutDefault } from 'app/papers';
 
 const fmtDate = t => (t ? new Date(t * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'never');
@@ -44,7 +44,12 @@ const LoginForm = ({ user }) => {
     </form>`;
 };
 
-const logout = () => api('/logout', {}).then(refreshMe);
+// the papers kept for offline reading (notes too) and changes not sent yet leave the device with the account
+const logout = () => {
+    const n = unsynced.get();
+    if (n && !confirm(`${n} change${n > 1 ? 's' : ''} made offline (votes, read marks, notes) haven't reached the server yet and will be lost. Log out anyway?`)) return undefined;
+    return api('/logout', {}).then(forgetDevice).then(refreshMe);
+};
 
 // -----------------------------------------------------------------------------
 // the profile: settings, digest, data

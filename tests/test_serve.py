@@ -1,4 +1,5 @@
 import os
+import time
 
 from conftest import login
 
@@ -879,3 +880,64 @@ def test_searching_a_link_to_a_missing_paper_offers_to_add_it(client, corpus, mo
     assert got['pid'] == '2501.99999'
     r = client.get('/ui/list?q=2501.99999').get_json()
     assert r['missing'] is None and r['papers'][0]['id'] == '2501.99999'
+
+
+def test_reading_offline_pack_and_pdfs(client, corpus, monkeypatch):
+    import serve
+    import enrich_daemon
+    from aslite import db
+
+    pids = sorted(corpus)[:3]
+    assert client.get('/ui/offline').status_code == 403
+    login(client)
+    for p in pids:
+        client.post(f'/add/{p}/cv')
+    client.post(f'/read/{pids[0]}')
+    client.post(f'/note/{pids[1]}', data={'text': 'for the flight'})
+    pack = client.get('/ui/offline').get_json()
+    toread = next(s for s in pack['sections'] if s['key'] == 'toread')
+    assert {p['id'] for p in toread['papers']} == set(pids[1:])
+    assert {p['offline_pdf'] for p in toread['papers']} == {''}
+    assert next(p for p in toread['papers'] if p['id'] == pids[1])['note'] == 'for the flight'
+    ids = [p['id'] for s in pack['sections'] for p in s['papers']]
+    assert len(ids) == len(set(ids))  # a paper is in one section only
+    assert any(u.endswith('katex.min.js') for u in pack['warm'])
+
+    # PDFs: only with the enrich daemon, which fetches them; only the asker gets them
+    assert client.post('/offline/pdfs', data={'pids': pids[1]}).status_code == 400
+    monkeypatch.setattr(serve, 'ENRICH_ON', True)
+    r = client.post('/offline/pdfs', data={'pids': f'{pids[1]},{pids[2]},9999.99999'}).get_json()
+    assert r['pdfs'] == {pids[1]: 'waiting', pids[2]: 'waiting'}
+    assert client.get(f'/offline/pdf/{pids[1]}').status_code == 404
+
+    class Fetch:
+        def get(self, url, max_bytes):
+            return (url, b'%PDF-1.5 paper') if pids[1] in url else (None, b'')
+
+    assert enrich_daemon.fetch_pdfs(Fetch()) == 2
+    assert db.pdfs_wanted() == []
+    states = client.get(f'/ui/offline/pdfs?pids={pids[1]},{pids[2]}').get_json()['pdfs']
+    assert states == {pids[1]: 'ready', pids[2]: 'failed'}
+    r = client.get(f'/offline/pdf/{pids[1]}')
+    assert r.status_code == 200 and r.data == b'%PDF-1.5 paper' and r.mimetype == 'application/pdf'
+    client.post('/logout')
+    login(client, user='bob')
+    assert client.get(f'/offline/pdf/{pids[1]}').status_code == 404  # alice's
+
+    # gone after OFFLINE_KEEP_DAYS, and with the account
+    assert db.expire_pdfs(now=time.time() + 8 * 86400) == 2
+    assert not os.listdir(db.PDFS_DIR)
+    db.ask_pdfs('alice', [pids[1]])
+    db.save_pdf(pids[1], b'%PDF')
+    db.delete_user('alice')
+    assert not os.listdir(db.PDFS_DIR) and db.pdf_states([pids[1]]) == {}
+
+
+def test_the_app_works_offline(client):
+    r = client.get('/sw.js')
+    assert r.status_code == 200 and r.mimetype == 'text/javascript' and 'Set-Cookie' not in r.headers
+    assert 'no-cache' in r.headers['Cache-Control']
+    assert client.get('/offline').status_code == 200  # an app page
+    shell = client.get('/').get_data(as_text=True)
+    assert '/static/app/offline.js?v=' in shell and 'manifest.webmanifest' in shell
+    assert client.get('/static/manifest.webmanifest').status_code == 200

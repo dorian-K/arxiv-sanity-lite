@@ -22,6 +22,10 @@ Papers from other sources (aslite/sources.py: the ACL Anthology) are only here b
 added them; they get the same treatment from their own site, which has no HTML version: the PDF
 gives the references, the page thumbnail and the text, and the license follows from the source.
 
+PDFs someone wants to read offline (serve.py /offline/pdfs, static/app/offline.js) come before
+everything else but the graph page's requests: one request each, kept in data/pdfs for
+db.OFFLINE_KEEP_DAYS, then deleted (db.expire_pdfs, every round).
+
 Order: papers someone saved (the Cited tab is made of them), newest first, then the papers in
 everyone's latest digest. One request per --pause seconds (ENRICH_PAUSE, at least 15, as
 arxiv.org's robots.txt asks), so at most ~1400 papers a day, in practice the few people save.
@@ -175,6 +179,39 @@ def process(pid, fetch, matcher, license):
             if parsed:
                 rows, refs_from = rows_for(parsed, matcher), 'pdf'
     return rows, refs_from, figure, page, text
+
+
+def fetch_pdfs(fetch, limit=5):
+    """
+    downloads up to `limit` of the PDFs people want to read offline, the longest waiting first;
+    returns how many were tried. arXiv's 429/503 (SlowDown) goes up to the caller, which waits
+    """
+    db.expire_pdfs()
+    todo = db.pdfs_wanted()[:limit]
+    for pid in todo:
+        src = sources.source_of(pid)
+        url = src.pdf_url(pid)
+        try:
+            allowed = getattr(src, 'allowed', None)  # the proceedings sites' robots.txt
+            if allowed and not allowed(url):
+                db.pdf_failed(pid, 'blocked')
+                continue
+            final, body = fetch.get(url, MAX_PDF)
+        except SlowDown:
+            raise
+        except TooBig:
+            db.pdf_failed(pid, 'toobig')
+            continue
+        except Exception as e:  # network trouble: tried again later (db.PDF_RETRY)
+            print(f"  pdf {pid}: {type(e).__name__}: {e}", flush=True)
+            db.pdf_failed(pid, 'error')
+            continue
+        if final and body.startswith(b'%PDF'):
+            db.save_pdf(pid, body)
+            print(f"  pdf {pid}: {len(body) // 1000} kB for reading offline", flush=True)
+        else:
+            db.pdf_failed(pid, 'missing')
+    return len(todo)
 
 
 def requested_due(pdb, rdb, now=None):
@@ -367,6 +404,14 @@ def main():
             if time.time() - last_rematch > 86400:
                 print(f"matched {rematch(rdb, matcher)} earlier references now", flush=True)
                 last_rematch = time.time()
+            if not requested_due(pdb, rdb):  # (the graph page's requests go first)
+                try:
+                    if fetch_pdfs(fetch):
+                        continue
+                except SlowDown as e:
+                    print(f"{e}, waiting", flush=True)
+                    time.sleep(e.retry_after)
+                    continue
             todo = queue(pdb, rdb)
             # (not while someone waits for a paper they asked for on the graph page)
             if summaries and summaries_left(rdb) and not requested_due(pdb, rdb):
@@ -383,7 +428,7 @@ def main():
                 # someone may ask for a paper on the graph page meanwhile: look every few seconds
                 for _ in range(REFRESH // ASK_POLL):
                     time.sleep(ASK_POLL)
-                    if requested_due(pdb, rdb):
+                    if requested_due(pdb, rdb) or db.pdfs_wanted():
                         break
                 continue
             print(f"{len(todo)} papers to enrich", flush=True)
@@ -393,7 +438,7 @@ def main():
                 if args.max and total + n >= args.max:
                     break
                 # a paper asked for on the graph page meanwhile: it goes before the rest of this batch
-                if any(p not in batch for p in requested_due(pdb, rdb)):
+                if any(p not in batch for p in requested_due(pdb, rdb)) or db.pdfs_wanted():
                     break
                 try:
                     license = paper_license(pid, fetch, rdb)

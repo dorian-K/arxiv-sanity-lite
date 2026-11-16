@@ -877,3 +877,24 @@ details.danger form { margin-top: 10px; }
 .missing-paper { margin: 12px 0; }
 .missing-add { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .missing-add .form-control { flex: 1 1 180px; min-width: 0; }
+
+/* reading offline (static/app/offline.js) */
+.pack-prepare h2 { margin: 0 0 8px; font-size: 18px; }
+.pack-status { font-weight: 600; }
+.pack-pdfs { border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px 8px; margin: 10px 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; }
+.pack-pdfs legend { font-size: 13px; color: var(--muted); padding: 0 4px; }
+.pack-pdfs .hint { flex-basis: 100%; font-size: 12px; color: var(--muted); }
+.pack-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+.pack-progress { font-size: 14px; display: grid; gap: 3px; margin: 8px 0; }
+.pack-progress .form-error { margin: 4px 0 0; }
+.pack-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); margin-right: 7px; vertical-align: 1px; animation: pack-pulse 1.4s ease-in-out infinite; }
+@keyframes pack-pulse { 50% { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) { .pack-dot { animation: none; } }
+.pack-prepare > .hint { font-size: 12px; color: var(--muted); margin-bottom: 0; }
+.pack-offline { border-left: 4px solid var(--accent); }
+.pack-heading { font-size: 17px; margin: 18px 0 6px; }
+.pack-heading .linkbtn { font-size: inherit; font-weight: 600; color: inherit; }
+.pack-paper { margin-bottom: 10px; }
+.pack-read { display: inline-block; margin: 0 0 4px; }
+.pack-pdf { display: block; font-size: 12px; margin: 0 0 4px; }
+.nav-unsynced { font-weight: 600; }

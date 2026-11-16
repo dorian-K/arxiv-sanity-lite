@@ -46,6 +46,11 @@ export async function api(path, form, { keep = false } = {}) {
     try {
         r = await fetch(path, opts);
     } catch (e) {
+        // offline (on a plane): votes, read marks and notes wait on the device, see queueChange
+        if (form !== undefined && QUEUEABLE.test(path)) {
+            queueChange(path, form);
+            return 'ok, kept on this device until you are online';
+        }
         throw new ApiError(form !== undefined ? 'Could not reach the server, so this was not saved.' : 'Could not reach the server.');
     }
     const text = await r.text();
@@ -54,7 +59,61 @@ export async function api(path, form, { keep = false } = {}) {
     let data;
     try { data = JSON.parse(text); } catch (e) { data = null; }
     if (!r.ok || (data && data.error)) throw new ApiError((data && data.error) || text || r.statusText);
+    if (form !== undefined && QUEUEABLE.test(path) && String(text).startsWith('ok')) paperChanged(path, form);
     return data ?? text;
+}
+
+// -----------------------------------------------------------------------------
+// offline (static/app/offline.js): whether the server can't be reached, and the changes made
+// meanwhile, kept in localStorage and sent in order once it can
+
+export const offline = store(false);
+const QUEUEABLE = /^\/(add|sub|addneg|subneg|seen|unseen|read|unread|note)\//;
+const QUEUE_KEY = 'resanity-queue';
+const readQueue = () => { try { return JSON.parse(localStorage.getItem(QUEUE_KEY)) || []; } catch (e) { return []; } };
+const writeQueue = q => { try { localStorage.setItem(QUEUE_KEY, JSON.stringify(q)); } catch (e) { /* full or blocked */ } };
+export const unsynced = store(readQueue().length);
+
+// a change to a paper (vote, read mark, note), sent or kept: the reading pack on the device follows it
+const paperListeners = new Set();
+export const onPaperChange = f => paperListeners.add(f);
+const paperChanged = (path, form) => paperListeners.forEach(f => { try { f(path, form); } catch (e) { /* the pack is a copy */ } });
+
+function queueChange(path, form) {
+    const q = readQueue();
+    q.push([path, { ...form }]);
+    writeQueue(q);
+    unsynced.set(q.length);
+    paperChanged(path, form);
+}
+
+// sends what was kept, oldest first; stops at the first that doesn't reach the server. an answer
+// that isn't "ok" (a tag deleted meanwhile) won't get better by sending it again, so it is dropped,
+// unless the session has ended: then it waits for the next login
+let flushing = false;
+export async function flushChanges() {
+    if (flushing || !readQueue().length) return;
+    flushing = true;
+    try {
+        for (;;) {
+            const q = readQueue();
+            if (!q.length) break;
+            const [path, form] = q[0];
+            let r, text;
+            try {
+                r = await fetch(path, { method: 'POST', headers: { Accept: 'application/json' }, body: new URLSearchParams(form) });
+                text = await r.text();
+            } catch (e) {
+                break;
+            }
+            if (r.status === 403 || r.status >= 500 || /not logged in/.test(text)) break;
+            writeQueue(readQueue().slice(1));
+        }
+    } finally {
+        flushing = false;
+        unsynced.set(readQueue().length);
+        changed();
+    }
 }
 
 // calls one of the vote endpoints; resolves on "ok...", otherwise shows the server's message.
@@ -116,14 +175,24 @@ export function useData(path, busyMsg) {
 // who is looking: their name, whether read-only, the site's switches (/ui/me)
 
 export const me = store(null);
-export const refreshMe = () => api('/ui/me').then(m => { changed(); me.set(m); return m; });
+export const refreshMe = () => api('/ui/me').then(m => { changed(); rememberMe(m); me.set(m); return m; });
+// who was logged in last, for opening the site without a network (offline.js)
+const ME_KEY = 'resanity-me';
+export const rememberMe = m => { try { localStorage.setItem(ME_KEY, JSON.stringify(m)); } catch (e) { /* not remembered */ } };
+export const lastMe = () => { try { return JSON.parse(localStorage.getItem(ME_KEY)); } catch (e) { return null; } };
+// logging out: nothing of the account stays on the device (a shared computer)
+export const forgetDevice = () => {
+    try { [ME_KEY, QUEUE_KEY].forEach(k => localStorage.removeItem(k)); } catch (e) { /* nothing there */ }
+    unsynced.set(0);
+    return typeof caches !== 'undefined' ? caches.delete('pack-v1').catch(() => {}) : Promise.resolve();
+};
 export const canEdit = (m, page) => Boolean(m && m.user) && !m.readonly && !(page && page.viewing);
 
 // -----------------------------------------------------------------------------
 // the router: same-origin links to the app's pages change the address and the page, without
 // loading a new document; back and forward return to where the page was scrolled
 
-export const APP_PATHS = ['/', '/digest', '/profile', '/import', '/inspect', '/stats', '/agents', '/graph', '/about', '/privacy', '/imprint'];
+export const APP_PATHS = ['/', '/digest', '/profile', '/import', '/inspect', '/stats', '/agents', '/graph', '/offline', '/about', '/privacy', '/imprint'];
 export const location = store(new URL(window.location.href));
 
 // shared links: ?u=<name> shows that user's tags. on someone else's page, links to the shareable

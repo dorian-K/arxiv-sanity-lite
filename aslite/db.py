@@ -50,6 +50,7 @@ SEARCH_TERMS_FILE = os.path.join(DATA_DIR, 'search_terms.json')  # aslite/spell.
 METRICS_DB_FILE = os.path.join(DATA_DIR, 'metrics.sqlite')  # timings for /stats, safe to delete
 REFS_DB_FILE = os.path.join(DATA_DIR, 'refs.sqlite')  # references of papers (aslite/refs.py)
 THUMBS_DIR = os.path.join(DATA_DIR, 'thumbs')  # aslite/thumbs.py: <pid>.figure.jpg, <pid>.page.jpg
+PDFS_DIR = os.path.join(DATA_DIR, 'pdfs')  # PDFs users asked to read offline (offline_pdfs), <pid>.pdf
 
 # -----------------------------------------------------------------------------
 # sqlite plumbing
@@ -458,6 +459,23 @@ CREATE TABLE IF NOT EXISTS oauth_codes (
     write INTEGER NOT NULL,  -- the scope granted, as in tokens
     expires REAL NOT NULL
 ) WITHOUT ROWID;
+-- papers a user wants to read offline (the reading pack, static/app/offline.js): enrich_daemon.py
+-- downloads their PDFs, /offline/pdf serves them to this user only. a row ends OFFLINE_KEEP_DAYS
+-- after it was last asked for, and with it the file
+CREATE TABLE IF NOT EXISTS offline_pdfs (
+    user TEXT NOT NULL,
+    pid TEXT NOT NULL,
+    asked REAL NOT NULL,
+    PRIMARY KEY (user, pid)
+) WITHOUT ROWID;
+-- those PDFs: ok (a file in PDFS_DIR) or why not: error (tried again), missing, toobig, blocked
+CREATE TABLE IF NOT EXISTS pdfs (
+    pid TEXT PRIMARY KEY,
+    status TEXT NOT NULL,
+    time REAL NOT NULL,
+    size INTEGER NOT NULL DEFAULT 0,
+    tries INTEGER NOT NULL DEFAULT 0
+) WITHOUT ROWID;
 -- papers per tag in the digest, where the user changed it (0 = leave the tag out)
 CREATE TABLE IF NOT EXISTS digest_sizes (
     user TEXT NOT NULL,
@@ -615,6 +633,7 @@ def delete_user(name):
                 ('fetches', 'user'),
                 ('reads', 'user'),
                 ('notes', 'user'),
+                ('offline_pdfs', 'user'),
                 ('tokens', 'user'),
                 ('oauth_codes', 'user'),
                 ('users', 'name'),
@@ -623,6 +642,7 @@ def delete_user(name):
     finally:
         con.close()
     delete_models(name)
+    expire_pdfs()  # the PDFs only they had asked for
 
 
 def export_user(name):
@@ -655,12 +675,119 @@ def export_user(name):
             for p, t in _query('SELECT pid, time FROM reads WHERE user = ? ORDER BY time', (name,))
         ],
         'latest_digest': get_digest(name),
+        'papers_to_read_offline': [
+            {'pid': p, 'time': t}
+            for p, t in _query('SELECT pid, asked FROM offline_pdfs WHERE user = ? ORDER BY asked', (name,))
+        ],
         'digest_papers_per_tag': get_digest_sizes(name),
         'arxiv_fetches_last_two_days': [
             {'time': t, 'pid': p} for t, p in _query('SELECT time, pid FROM fetches WHERE user = ?', (name,))
         ],
         'note': 'the password is stored only as a salted hash, which is not included',
     }
+
+
+# -----------------------------------------------------------------------------
+# reading offline: PDFs users asked for (offline_pdfs), fetched by enrich_daemon.py into PDFS_DIR
+
+OFFLINE_KEEP_DAYS = 7  # a PDF is kept this long after it was last asked for: the device has it by then
+PDF_TRIES = 3  # a PDF whose download failed is tried this often...
+PDF_RETRY = 3600  # ...this many seconds apart
+
+
+def _pdf_file(pid):
+    return os.path.join(PDFS_DIR, pid.replace('/', '_') + '.pdf')  # old ids: cs/0701001
+
+
+def _keep_since(now=None):
+    return (now or time.time()) - OFFLINE_KEEP_DAYS * 86400
+
+
+def ask_pdfs(user, pids, now=None):
+    """the user wants these papers' PDFs on their device: asked again, a request starts its days anew"""
+    now = now or time.time()
+    con = users_db()
+    try:
+        with con:
+            con.executemany(
+                'INSERT INTO offline_pdfs (user, pid, asked) VALUES (?, ?, ?) ON CONFLICT DO UPDATE SET asked = excluded.asked',
+                [(user, p, now) for p in pids],
+            )
+    finally:
+        con.close()
+
+
+def offline_pdfs(user, now=None):
+    """{pid: when asked} of the PDFs this user asked for that are still kept"""
+    return dict(_query('SELECT pid, asked FROM offline_pdfs WHERE user = ? AND asked > ?', (user, _keep_since(now))))
+
+
+def pdf_states(pids):
+    """{pid: (status, size, tries)} of the PDFs that were tried; the others are still waiting"""
+    pids = list(pids)
+    out = {}
+    for i in range(0, len(pids), 500):
+        chunk = pids[i : i + 500]
+        q = ','.join('?' * len(chunk))
+        for pid, st, size, tries in _query(f'SELECT pid, status, size, tries FROM pdfs WHERE pid IN ({q})', chunk):
+            out[pid] = (st, size, tries)
+    return out
+
+
+def pdfs_wanted(now=None):
+    """the PDFs to download, the longest waiting first: asked, never tried, or failed and due again"""
+    now = now or time.time()
+    rows = _query(
+        """SELECT o.pid FROM offline_pdfs o LEFT JOIN pdfs p ON p.pid = o.pid
+           WHERE o.asked > ? AND (p.pid IS NULL OR (p.status = 'error' AND p.tries < ? AND p.time < ?))
+           GROUP BY o.pid ORDER BY min(o.asked)""",
+        (_keep_since(now), PDF_TRIES, now - PDF_RETRY),
+    )
+    return [r[0] for r in rows]
+
+
+def save_pdf(pid, data):
+    """a downloaded PDF, written atomically"""
+    os.makedirs(PDFS_DIR, exist_ok=True)
+    path = _pdf_file(pid)
+    with open(path + '.tmp', 'wb') as f:
+        f.write(data)
+    os.replace(path + '.tmp', path)
+    _run(
+        "INSERT INTO pdfs (pid, status, time, size, tries) VALUES (?, 'ok', ?, ?, 1) "
+        "ON CONFLICT DO UPDATE SET status = 'ok', time = excluded.time, size = excluded.size, tries = tries + 1",
+        (pid, time.time(), len(data)),
+    )
+
+
+def pdf_failed(pid, status='error'):
+    """why a PDF couldn't be had: error (tried again, PDF_TRIES times), missing, toobig, blocked"""
+    _run(
+        'INSERT INTO pdfs (pid, status, time, tries) VALUES (?, ?, ?, 1) '
+        'ON CONFLICT DO UPDATE SET status = excluded.status, time = excluded.time, tries = tries + 1',
+        (pid, status, time.time()),
+    )
+
+
+def pdf_file(pid, user, now=None):
+    """the path of a downloaded PDF this user asked for (and only they), else None"""
+    if not _query('SELECT 1 FROM offline_pdfs WHERE user = ? AND pid = ? AND asked > ?', (user, pid, _keep_since(now))):
+        return None
+    path = _pdf_file(pid)
+    return path if os.path.isfile(path) else None
+
+
+def expire_pdfs(now=None):
+    """forgets requests older than OFFLINE_KEEP_DAYS and deletes the PDFs nobody wants any more"""
+    _run('DELETE FROM offline_pdfs WHERE asked <= ?', (_keep_since(now),))
+    gone = [r[0] for r in _query('SELECT pid FROM pdfs WHERE pid NOT IN (SELECT pid FROM offline_pdfs)')]
+    for pid in gone:
+        try:
+            os.remove(_pdf_file(pid))
+        except FileNotFoundError:
+            pass
+        _run('DELETE FROM pdfs WHERE pid = ?', (pid,))
+    return len(gone)
 
 
 def touch_user(name, every=300):

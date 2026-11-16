@@ -76,7 +76,7 @@ app.config.update(
 # permanent, so Flask would send it anew (with a new timestamp) on every response, plus
 # Vary: Cookie: the browser's cached scripts then no longer matched the next request's cookie, and
 # every page load fetched all its modules again, one import level after the other
-COOKIELESS = ('static', 'thumb')
+COOKIELESS = ('static', 'thumb', 'service_worker')
 
 
 class _Sessions(SecureCookieSessionInterface):
@@ -125,6 +125,7 @@ RATE_LIMITS = {
     'oauth_register': (20, 3600),  # apps registering for OAuth (claude.ai does once per connector)
     'analyze': (30, 3600),  # papers asked to analyze on the citation graph: arXiv requests (enrich_daemon.py)
     'summary': (60, 60),  # requests that start AI summaries (each a model call that costs money)
+    'offline': (20, 3600),  # asking for PDFs to read offline: requests to arxiv.org (enrich_daemon.py)
 }
 RATE_LIMITS_ON = os.environ.get('RATE_LIMITS', '1') != '0'
 _buckets = {}
@@ -2009,10 +2010,152 @@ def ui_page(name):
     return {'html': render_template(f'pages/{name}.html', operator=OPERATOR, categories=categories_text())}
 
 
+# -----------------------------------------------------------------------------
+# reading offline (static/app/offline.js, on a plane): the app keeps a pack of the user's papers
+# on the device (/ui/offline: To read, the latest digest, the best of For you, with their AI
+# summaries), and their PDFs, which enrich_daemon.py downloads (one request per paper, at its
+# polite pace) and /offline/pdf hands to this user only, for db.OFFLINE_KEEP_DAYS. static/app/sw.js
+# serves the site from the device when there is no network
+
+OFFLINE_TO_READ = 40  # papers of To read in the pack, newest first
+OFFLINE_FOR_YOU = 20  # papers of For you (all tags, FOR_YOU_DAYS) besides those
+OFFLINE_PDF_MAX = 60  # PDFs a user may have asked for at once
+OFFLINE_QUEUE_MAX = 500  # PDFs waiting for the daemon, everyone's together
+ENRICH_PAUSE = float(os.environ.get('ENRICH_PAUSE') or 20)  # the daemon's, for the time estimate
+
+
+def pdf_offline_states(pids):
+    """{pid: ready | waiting | failed | ''} of these papers' PDFs for the user ('': not asked for)"""
+    asked = db.offline_pdfs(g.user)
+    st = db.pdf_states(p for p in pids if p in asked)
+    out = {}
+    for p in pids:
+        s = st.get(p)
+        if p not in asked:
+            out[p] = ''
+        elif s is None or (s[0] == 'error' and s[2] < db.PDF_TRIES):
+            out[p] = 'waiting'
+        else:
+            out[p] = 'ready' if s[0] == 'ok' else 'failed'
+    return out
+
+
+def _pdf_wait():
+    """seconds until the last PDF waiting now is there, roughly"""
+    return int(len(db.pdfs_wanted()) * (ENRICH_PAUSE + 2))
+
+
+@app.route('/ui/offline')
+def ui_offline():
+    """the reading pack: sections of paper cards, as the app stores them on the device"""
+    if not own_page() or g.token:
+        return not_logged_in()
+    sections, taken = [], set()
+    papers = get_papers()
+
+    def add(key, title, pids, tag=''):
+        pids = [p for p in dict.fromkeys(pids) if p not in taken]
+        found = papers.get_many(pids)
+        cards = [render_pid(p, found[p]) for p in pids if p in found]
+        taken.update(c['id'] for c in cards)
+        if cards:
+            sections.append({'key': key, 'title': title, 'tag': tag, 'papers': cards})
+
+    add('toread', 'To read', unread_rank('all')[0][:OFFLINE_TO_READ])
+    d = db.get_digest(g.user)
+    if d:
+        for s in d['sections']:
+            add('digest', 'Digest: ' + s['tag'], [p for p, _ in s['papers']], tag=s['tag'])
+    if get_tags() and features_exist():
+        try:
+            res = _ranked('tags', '', 'all', '', str(FOR_YOU_DAYS), 'yes', None, 'auto', 'auto', 'one', limit=200)
+            add('foryou', 'For you', [p for p in res['pids'] if p not in taken][:OFFLINE_FOR_YOU])
+        except Exception as e:  # the pack still has the rest
+            print("offline pack, for you: %s" % (e,))
+    states = pdf_offline_states(list(taken))
+    for s in sections:
+        for c in s['papers']:
+            c['offline_pdf'] = states[c['id']]
+    return {
+        'sections': sections,
+        'tags': sorted(own_tags(get_tags())),
+        'made': time.time(),
+        'pdfs_on': ENRICH_ON,
+        'pdf_max': OFFLINE_PDF_MAX,
+        'keep_days': db.OFFLINE_KEEP_DAYS,
+        'warm': offline_files(),
+    }
+
+
+def offline_files():
+    """the static files a page loads only when needed (KaTeX for math), for the device to have them offline"""
+    vendor = os.path.join(app.static_folder, 'vendor')
+    out = []
+    for d in sorted(os.listdir(vendor)):
+        if d.startswith('katex-'):
+            base = f'/static/vendor/{d}/'
+            out += [base + 'katex.min.css', base + 'katex.min.js', base + 'contrib/auto-render.min.js']
+            fonts = os.path.join(vendor, d, 'fonts')
+            out += [base + 'fonts/' + f for f in sorted(os.listdir(fonts)) if f.endswith('.woff2')]
+    return out
+
+
+@app.route('/offline/pdfs', methods=['POST'])
+def offline_pdfs():
+    """asks for these papers' PDFs (form field pids, comma-separated): enrich_daemon.py fetches them"""
+    if g.user is None or g.token:
+        return not_logged_in()
+    if not ENRICH_ON:
+        return {'error': 'Downloading PDFs is turned off on this server (ENRICH_ENABLED).'}, 400
+    papers = get_papers()
+    pids = [p for p in dict.fromkeys(request.form.get('pids', '').split(',')) if p and p in papers]
+    asked = db.offline_pdfs(g.user)
+    new = [p for p in pids if p not in asked]
+    room = max(0, OFFLINE_PDF_MAX - len(asked))
+    if new and rate_limited('offline'):
+        return too_many('offline')
+    if len(db.pdfs_wanted()) + min(room, len(new)) > OFFLINE_QUEUE_MAX:
+        return {'error': 'Many PDFs are waiting to be fetched already. Try again in an hour.'}, 429
+    db.ask_pdfs(g.user, [p for p in pids if p in asked] + new[:room])  # asking again keeps them longer
+    return {'pdfs': pdf_offline_states(pids), 'left_out': len(new[room:]), 'wait': _pdf_wait()}
+
+
+@app.route('/ui/offline/pdfs')
+def ui_offline_pdfs():
+    """how far the PDFs of these papers are (pids, comma-separated)"""
+    if g.user is None or g.token:
+        return not_logged_in()
+    pids = [p for p in request.args.get('pids', '').split(',')[: OFFLINE_PDF_MAX * 2] if p]
+    return {'pdfs': pdf_offline_states(pids), 'wait': _pdf_wait()}
+
+
+@app.route('/offline/pdf/<path:pid>')
+def offline_pdf(pid):
+    """a downloaded PDF, only for the user who asked for it"""
+    path = db.pdf_file(pid, g.user) if g.user and not g.token else None
+    if path is None:
+        return {'error': 'no such PDF here'}, 404
+    resp = send_file(
+        os.path.abspath(path), mimetype='application/pdf', download_name=pid.replace('/', '_') + '.pdf', max_age=0
+    )
+    resp.headers['Cache-Control'] = 'private, no-cache'
+    # the site's CSP is for its own pages: browsers' PDF viewers may not work under it
+    resp.headers['Content-Security-Policy'] = "frame-ancestors 'none'"
+    return resp
+
+
+@app.route('/sw.js')
+def service_worker():
+    """the service worker (static/app/sw.js): its address decides which pages it serves, so it lives at /"""
+    resp = send_file(os.path.join(app.static_folder, 'app', 'sw.js'), mimetype='text/javascript', max_age=0)
+    resp.headers['Cache-Control'] = 'no-cache'
+    return resp
+
+
 # every page of the site is the app (static/app): one html file that loads its modules, which
 # then fetch the page's data from /ui/. the addresses stay what they were, so links and
 # bookmarks keep working
-APP_PAGES = ('/', '/digest', '/profile', '/import', '/inspect', '/stats', '/agents', '/graph') + tuple(
+APP_PAGES = ('/', '/digest', '/profile', '/import', '/inspect', '/stats', '/agents', '/graph', '/offline') + tuple(
     '/' + p for p in TEXT_PAGES
 )
 SHELL_FILE = os.path.join(app.static_folder, 'app', 'index.html')

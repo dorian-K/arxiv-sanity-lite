@@ -44,6 +44,13 @@
             image of their first figure and first page, credited with that license.
             The requests contain only the paper's id, nothing about you, and none of this says who saved or
             asked for a paper.</li>
+        <li><b>Reading offline</b>: if you get papers ready for offline reading ("✈ offline"), the server
+            downloads the PDFs of the papers you chose from arXiv (or the site the paper is published on); the
+            request contains only the paper's id. It keeps which papers you asked for and the PDFs for
+            7 days after you last asked, gives them only to you, and then deletes them; deleting your account deletes them
+            at once. Your browser keeps the papers, their summaries, your notes on them and the PDFs on your device
+            (its cache storage), together with the votes, read marks and notes you make while offline until
+            they are sent; logging out or "Remove from this device" deletes them there.</li>
         <li><b>AI summaries</b>: if the operator turned them on, short summaries of papers (shown on paper
             cards and in the digest) are written by an AI model reached through OpenRouter. It receives only
             the public text of a paper (its title, abstract and full text from arXiv), never anything about
@@ -72,7 +79,10 @@
         The other things kept in your browser are display choices you made: the "Cards" or "Titles only"
         view, which digest tags you collapsed, how often you switched a card between the AI summary and the
         abstract (to offer making that the default), and, when you're not logged in, which of the two cards
-        open on (local storage, never sent to the server), settings you asked for (§ 25(2) TDDDG).</p>
+        open on (local storage, never sent to the server), settings you asked for (§ 25(2) TDDDG). When you
+        are logged in, the browser also keeps who you are logged in as and, if you get papers ready for
+        offline reading, those papers (see "Reading offline" above), so the site opens without a network;
+        a service worker of this site serves it from your device only when the server can't be reached.</p>
 
     <h2>Who receives your data</h2>
     <p>No one, apart from the hosting provider{{ ' (' + operator.hosting + ')' if operator.hosting }}, which

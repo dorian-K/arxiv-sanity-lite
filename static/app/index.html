@@ -10,6 +10,9 @@
 <title>Arxiv Resanity</title>
 <link rel="stylesheet" type="text/css" href="/static/style.css">
 <link rel="shortcut icon" type="image/png" href="/static/favicon.png" />
+<link rel="manifest" href="/static/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#b31b1b">
 <script type="importmap">
 {
     "imports": {
@@ -22,7 +25,8 @@
         "app/list": "/static/app/list.js",
         "app/pages": "/static/app/pages.js",
         "app/account": "/static/app/account.js",
-        "app/graph": "/static/app/graph.js"
+        "app/graph": "/static/app/graph.js",
+        "app/offline": "/static/app/offline.js"
     }
 }
 </script>
@@ -37,6 +41,7 @@
 <link rel="modulepreload" href="/static/app/pages.js">
 <link rel="modulepreload" href="/static/app/account.js">
 <link rel="modulepreload" href="/static/app/graph.js">
+<link rel="modulepreload" href="/static/app/offline.js">
 <script type="module" src="/static/app/app.js"></script>
 </head>
 

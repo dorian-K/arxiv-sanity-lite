@@ -1,12 +1,13 @@
 // the app: header, footer and the page for the address. who is logged in comes first (/ui/me),
 // each page then fetches its own data (see lib.js)
 import { render } from 'preact';
-import { html, useEffect, useRef, me, refreshMe, api, load, location, shared, setAddress, SHARED_PATHS } from 'app/lib';
+import { html, useEffect, useRef, me, refreshMe, api, load, location, shared, setAddress, SHARED_PATHS, offline, unsynced, flushChanges, rememberMe, lastMe } from 'app/lib';
 import { initAbout } from 'app/papers';
 import { ListPage, listPath } from 'app/list';
 import { DigestPage, InspectPage, StatsPage, TextPage } from 'app/pages';
 import { ProfilePage, ImportPage, AgentsPage } from 'app/account';
 import { GraphPage } from 'app/graph';
+import { OfflinePage } from 'app/offline';
 
 const PAGES = {
     '/': ListPage,
@@ -17,6 +18,7 @@ const PAGES = {
     '/import': ImportPage,
     '/agents': AgentsPage,
     '/graph': GraphPage,
+    '/offline': OfflinePage,
     '/about': () => html`<${TextPage} name="about" />`,
     '/privacy': () => html`<${TextPage} name="privacy" />`,
     '/imprint': () => html`<${TextPage} name="imprint" />`,
@@ -32,7 +34,9 @@ const trackHeight = header => {
     else window.addEventListener('resize', set);
 };
 
-const Header = ({ m }) => html`
+const Header = ({ m }) => {
+    const n = unsynced.use();
+    return html`
     <header id="header" ref=${trackHeader}>
         <a href="/" id="home-link">Arxiv <span>Resanity</span></a>
         <nav>
@@ -40,10 +44,13 @@ const Header = ({ m }) => html`
             <a href="/agents" title="how to use this site with Claude and other AI agents">agents</a>
             ${m.user ? html`<a href="/?rank=unread&tags=all" title="saved papers you haven't marked as read">to read</a><a href="/digest">digest</a>` : null}
             ${m.user && !m.readonly ? html`<a href="/import" title="add papers by arXiv link">add</a>` : null}
+            ${m.user && !m.readonly ? html`<a href="/offline" title="keep your papers and their PDFs on this device, for reading without a network (on a plane)">✈ offline</a>` : null}
             <a href="/profile" class=${m.user ? 'nav-user' : 'nav-login'} title=${m.readonly ? 'read-only view' : null}>
                 ${m.readonly ? '👁 ' + m.user : m.user || 'log in'}</a>
+            ${n ? html`<a href="/offline" class="nav-unsynced" title="changes made offline, sent when the server can be reached">⟳ ${n} to send</a>` : null}
         </nav>
     </header>`;
+};
 
 let tracked = false;
 const trackHeader = elt => { if (elt && !tracked) { tracked = true; trackHeight(elt); } };
@@ -92,7 +99,8 @@ const App = () => {
             setAddress(here.href);
         }
     }, [url, m]);
-    const PageComponent = PAGES[url.pathname] || ListPage;
+    // without a network every address shows the papers kept on the device (static/app/offline.js)
+    const PageComponent = offline.use() ? OfflinePage : PAGES[url.pathname] || ListPage;
     return html`
         <${Header} m=${m} />
         <main><${PageComponent} key=${url.pathname} /></main>
@@ -105,12 +113,36 @@ const here = new URL(window.location.href);
 if (here.pathname === '/') load(listPath(here)).catch(() => {});
 if (here.pathname === '/digest') load('/ui/digest' + here.search).catch(() => {});
 
-api('/ui/me').then(m => {
+const start = m => {
     me.set(m);
     initAbout(m.card_tab);
     const root = document.getElementById('app');
     root.textContent = ''; // the boot skeleton of index.html
     render(html`<${App} />`, root);
+};
+
+api('/ui/me').then(m => {
+    rememberMe(m);
+    start(m);
+    if (m.user && !m.readonly) flushChanges();
 }).catch(() => {
+    const m = lastMe();
+    if (m && m.user) {
+        offline.set(true);
+        start(m);
+        return;
+    }
     document.getElementById('app').innerHTML = '<div class="page"><section class="card"><p class="form-error">The server could not be reached. Try reloading the page.</p></section></div>';
 });
+
+// the network comes and goes (a plane): offline, every address shows the papers on the device
+window.addEventListener('offline', () => { if (me.get() && me.get().user) offline.set(true); });
+window.addEventListener('online', () => {
+    refreshMe().then(m => {
+        offline.set(false);
+        if (m.user && !m.readonly) flushChanges();
+    }).catch(() => {});
+});
+
+// the service worker (sw.js) answers from the device only when the server can't be reached
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});

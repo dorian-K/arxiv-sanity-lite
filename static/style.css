@@ -873,3 +873,7 @@ details.danger form { margin-top: 10px; }
     .graph-tip { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { .graph-scan { animation-duration: 4s; } .graph-edge, .graph-node.fresh .graph-dot { animation: none; } }
+
+.missing-paper { margin: 12px 0; }
+.missing-add { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.missing-add .form-control { flex: 1 1 180px; min-width: 0; }

@@ -932,12 +932,23 @@ def _cited_notice(info):
     return f"From the references of {info['known']} of the {info['saved']} papers saved here{more}."
 
 
+def missing_paper(q):
+    """the paper a search for its link or id points to, if it isn't here: the page offers to add it"""
+    pid = find_paper_id(q) if q else None
+    if not pid or pid in get_papers():
+        return None
+    src = source_of(pid)
+    return {'pid': pid, 'source': src.label, 'url': src.abs_url(pid)}
+
+
 def search_rank(q: str = ''):
     if not q:
         return [], []  # no query? no results
-    pids, scores = get_papers().search(q)  # full-text index, see aslite/db.py
     # a paper's link or id in the query: show that paper first
     pid = find_paper_id(q)
+    if pid and pid not in get_papers() and len(q.split()) == 1:
+        return [], []  # just a link to a paper that isn't here: the page offers to add it (missing_paper)
+    pids, scores = get_papers().search(q)  # full-text index, see aslite/db.py
     if pid and pid in get_papers():
         pids, scores = (
             [pid] + [p for p in pids if p != pid],
@@ -1214,7 +1225,7 @@ def ui_list():
         opt_rank = 'search'
     # typos fixed ('difusion' -> 'diffusion'), unless the user asked for exactly what they typed
     corrected = ''
-    if opt_rank == 'search' and opt_q and request.args.get('exact') != 'yes':
+    if opt_rank == 'search' and opt_q and request.args.get('exact') != 'yes' and not find_paper_id(opt_q):
         try:
             speller = get_speller()
             corrected = (speller and speller.correct(opt_q, get_papers().term_docs)) or ''
@@ -1364,6 +1375,7 @@ def ui_list():
     context['gvars']['page_number'] = str(page_number)
     context['has_next'] = has_next
     context['notice'] = notice
+    context['missing'] = missing_paper(opt_q) if opt_rank == 'search' else None
     context['for_you_days'] = FOR_YOU_DAYS
     return context
 

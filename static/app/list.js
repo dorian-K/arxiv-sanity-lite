@@ -234,6 +234,45 @@ const waitingFor = url => {
     return 'Loading…';
 };
 
+// a search for the link or id of a paper that isn't here: say so, link it, and offer to add it
+// (POST /import, so it is fetched from its site and saved to a tag), then show it
+const MissingPaper = ({ miss, editable, userTags }) => {
+    const m = me.use();
+    const [tag, setTag] = useState(userTags.length === 1 ? userTags[0] : '');
+    const [state, run] = useAction();
+    const [msg, setMsg] = useState('');
+    const add = e => {
+        e.preventDefault();
+        const f = new FormData();
+        f.set('text', miss.pid);
+        f.set('tag', tag.trim());
+        setMsg('');
+        run(() => api('/import', f), 'Fetching the paper from ' + miss.source + '…').then(r => {
+            if (!r) return;
+            const got = r.results[0];
+            if (got && got.pid) navigate('/?q=' + encodeURIComponent(got.pid), { replace: true });
+            else setMsg(got ? got.status : 'Nothing was added.');
+        });
+    };
+    return html`
+    <section class="card missing-paper">
+        <p>That's a link to <a href=${miss.url}><code>${miss.pid}</code></a> on ${miss.source}, which isn't on Arxiv Resanity yet.</p>
+        ${editable ? html`
+        <form class="missing-add" onSubmit=${add}>
+            <label for="missing-tag">Add it to tag</label>
+            <input class="form-control" type="text" id="missing-tag" maxLength="100" value=${tag} required
+                   onInput=${e => setTag(e.target.value)} placeholder="pick one of yours or type a new one"
+                   autocapitalize="none" spellcheck="false" autocomplete="off" list="missing-tags" />
+            <datalist id="missing-tags">${userTags.map(t => html`<option key=${t} value=${t} />`)}</datalist>
+            <button type="submit" class="btn btn-primary" disabled=${state.busy}>Add paper</button>
+        </form>
+        <p class="muted small">It is fetched from ${miss.source} and saved to that tag; then it shows up here.</p>
+        <${Err} msg=${state.error || msg} />` : m.user ? html`
+        <p class="muted">You can add it on the <a href="/import">add papers</a> page.</p>` : html`
+        <p class="muted"><a href="/profile">Log in</a> to add it: it is then fetched from ${miss.source} and saved to one of your tags.</p>`}
+    </section>`;
+};
+
 export const ListPage = () => {
     const url = location.use();
     const m = me.use();
@@ -283,7 +322,8 @@ export const ListPage = () => {
             ${g.corrected ? html`<div class="notice">Showing results for <b>${g.corrected}</b>.
                 ${' '}<a href=${'/?' + exact.toString()}>Search for “${g.search_query}” instead</a></div>` : null}
             ${d.notice ? html`<div class="notice">${d.notice}</div>` : null}
-            <${PaperList} papers=${d.papers} key=${dataPath} />`}
+            ${d.missing ? html`<${MissingPaper} miss=${d.missing} editable=${editable} userTags=${userTags} key=${d.missing.pid} />` : null}
+            ${d.missing && !d.papers.length ? null : html`<${PaperList} papers=${d.papers} key=${dataPath} />`}`}
         </section>
         <nav id="pagination" aria-label="pages">
             <button class="btn" disabled=${pageNo <= 1} onClick=${() => goPage(pageNo - 1)}>← prev</button>

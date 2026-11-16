@@ -842,3 +842,30 @@ def test_health_not_counted(client, monkeypatch):
     assert client.get('/health').data == b'ok'
     client.get('/about')
     assert seen == ['shell']
+
+
+def test_searching_a_link_to_a_missing_paper_offers_to_add_it(client, corpus, monkeypatch):
+    """a paper link in the search box that isn't here: no junk results, the page says what it is (and offers to add it)"""
+    import contextlib
+
+    from aslite import db, sources
+
+    r = client.get('/ui/list?q=https://arxiv.org/abs/2501.99999').get_json()
+    assert r['missing'] == {'pid': '2501.99999', 'source': 'arXiv', 'url': sources.abs_url('2501.99999')}
+    assert r['papers'] == [] and not r['gvars'].get('corrected')
+    # nothing was fetched by looking (never from a GET)
+    assert '2501.99999' not in db.get_papers_db()
+    # a paper that is here: no offer, it comes first
+    pid = next(iter(corpus))
+    r = client.get('/ui/list?q=arxiv.org/abs/' + pid).get_json()
+    assert r['missing'] is None and r['papers'][0]['id'] == pid
+    assert client.get('/ui/list?q=vision').get_json()['missing'] is None
+    # adding it is the import endpoint, as the box does it
+    paper = dict(corpus[pid], _id='2501.99999', _idv='2501.99999v1', title='A paper from outside')
+    monkeypatch.setattr(db, 'arxiv_slot', lambda: contextlib.nullcontext())
+    monkeypatch.setattr(sources.ARXIV, 'fetch', lambda ids: {'2501.99999': paper})
+    login(client)
+    got = client.post('/import', data={'text': '2501.99999', 'tag': 'new'}).get_json()['results'][0]
+    assert got['pid'] == '2501.99999'
+    r = client.get('/ui/list?q=2501.99999').get_json()
+    assert r['missing'] is None and r['papers'][0]['id'] == '2501.99999'

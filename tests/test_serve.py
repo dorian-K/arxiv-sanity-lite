@@ -920,12 +920,26 @@ def test_reading_offline_pack_and_pdfs(client, corpus, monkeypatch):
     assert states == {pids[1]: 'ready', pids[2]: 'failed'}
     r = client.get(f'/offline/pdf/{pids[1]}')
     assert r.status_code == 200 and r.data == b'%PDF-1.5 paper' and r.mimetype == 'application/pdf'
+
+    # enrichment reads that copy instead of downloading it again, and keeps one it downloads for a waiting user
+    assert pids[1] in enrich_daemon.wanted(db.get_papers_db()) and pids[1] in db.offline_pids()
+
+    class NoNet:
+        def get(self, url, max_bytes):
+            raise AssertionError(f'downloaded {url} again')
+
+    assert enrich_daemon.get_pdf(pids[1], NoNet()) == b'%PDF-1.5 paper'
+    db.ask_pdfs('alice', [pids[0]])
+    assert enrich_daemon.get_pdf(pids[0], Fetch()) == b''  # no PDF there: nothing kept
+    Fetch.get = lambda self, url, max_bytes: (url, b'%PDF-1.5 other')
+    assert enrich_daemon.get_pdf(pids[0], Fetch()) == b'%PDF-1.5 other'
+    assert db.pdf_states([pids[0]])[pids[0]][0] == 'ok' and pids[0] not in db.pdfs_wanted()
     client.post('/logout')
     login(client, user='bob')
     assert client.get(f'/offline/pdf/{pids[1]}').status_code == 404  # alice's
 
     # gone after OFFLINE_KEEP_DAYS, and with the account
-    assert db.expire_pdfs(now=time.time() + 8 * 86400) == 2
+    assert db.expire_pdfs(now=time.time() + 8 * 86400) == 3
     assert not os.listdir(db.PDFS_DIR)
     db.ask_pdfs('alice', [pids[1]])
     db.save_pdf(pids[1], b'%PDF')

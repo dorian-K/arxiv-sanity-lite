@@ -24,7 +24,9 @@ gives the references, the page thumbnail and the text, and the license follows f
 
 PDFs someone wants to read offline (serve.py /offline/pdfs, static/app/offline.js) come before
 everything else but the graph page's requests: one request each, kept in data/pdfs for
-db.OFFLINE_KEEP_DAYS, then deleted (db.expire_pdfs, every round).
+db.OFFLINE_KEEP_DAYS, then deleted (db.expire_pdfs, every round). Those papers are enriched
+next (wanted), from that copy: a PDF is never downloaded twice (get_pdf), and one enrichment
+downloads anyway is kept if someone is waiting for it offline.
 
 Order: papers someone saved (the Cited tab is made of them), newest first, then the papers in
 everyone's latest digest. One request per --pause seconds (ENRICH_PAUSE, at least 15, as
@@ -156,18 +158,18 @@ def process(pid, fetch, matcher, license):
     if not may_show and refs_from:
         return rows, refs_from, figure, page, text
     try:
-        pdf_url, pdf = fetch.get(src.pdf_url(pid), MAX_PDF)
+        pdf = get_pdf(pid, fetch)
     except TooBig:
-        pdf_url, pdf = None, b''
+        pdf = b''
         print(f"  {pid}: PDF over {MAX_PDF // 1_000_000} MB, skipped", flush=True)
-    if pdf_url and pdf.startswith(b'%PDF'):
+    if pdf:
         if may_show:
             try:
                 save_thumbs(pid, 'page', thumbs.from_pdf(pdf, thumbs.BIG))
                 page = True
             except Exception as e:
                 print(f"  {pid}: rendering the PDF: {e}", flush=True)
-        if not refs_from or not text[1]:  # text and data mining (§44b UrhG): the PDF isn't kept
+        if not refs_from or not text[1]:  # text and data mining (§44b UrhG): kept only if wanted offline
             try:
                 pdf_text = thumbs.pdf_text(pdf)
                 parsed = parse_pdf(pdf_text) if not refs_from else []
@@ -179,6 +181,23 @@ def process(pid, fetch, matcher, license):
             if parsed:
                 rows, refs_from = rows_for(parsed, matcher), 'pdf'
     return rows, refs_from, figure, page, text
+
+
+def get_pdf(pid, fetch):
+    """
+    a paper's PDF (b'' if there is none): the copy downloaded for reading offline if there is one,
+    else from its site, and then kept if someone is waiting for it offline, so no PDF is ever
+    downloaded twice (TooBig and SlowDown go up)
+    """
+    pdf = db.kept_pdf(pid)
+    if pdf and pdf.startswith(b'%PDF'):
+        return pdf
+    url, pdf = fetch.get(sources.source_of(pid).pdf_url(pid), MAX_PDF)
+    if not (url and pdf.startswith(b'%PDF')):
+        return b''
+    if pid in db.offline_pids():
+        db.save_pdf(pid, pdf)
+    return pdf
 
 
 def fetch_pdfs(fetch, limit=5):
@@ -257,7 +276,7 @@ def wanted(pdb, times=None):
     """
     the papers people care about, best first: those of digests about to be mailed (send_emails.py
     prepares them hours ahead, so they have their summaries), then saved ones, newest first, then
-    the other digest ones
+    those someone keeps to read offline (For you ones too), then the other digest ones
     """
     times = times or pdb.times()
     soon = db.pending_digest_pids()
@@ -265,9 +284,10 @@ def wanted(pdb, times=None):
     for tags in db.get_all_tags().values():
         saved = saved.union(*tags.values())
     saved -= soon
-    digest = db.all_digest_pids() - saved - soon
+    offline = db.offline_pids() - saved - soon  # their PDF is here already: no download for them
+    digest = db.all_digest_pids() - saved - soon - offline
     newest = lambda ps: sorted((p for p in ps if p in times), key=lambda p: -times[p])
-    return newest(soon) + newest(saved) + newest(digest)
+    return newest(soon) + newest(saved) + newest(offline) + newest(digest)
 
 
 def needs_summary(st, now=None):
@@ -301,10 +321,10 @@ def fetch_text(pid, fetch):
         if text:
             return 'html', text
     try:
-        url, pdf = fetch.get(src.pdf_url(pid), MAX_PDF)
+        pdf = get_pdf(pid, fetch)
     except TooBig:
         return '', ''
-    if url and pdf.startswith(b'%PDF'):
+    if pdf:
         try:
             return 'pdf', summary.pdf_text(thumbs.pdf_text(pdf))
         except Exception as e:

@@ -769,6 +769,21 @@ def pdf_failed(pid, status='error'):
     )
 
 
+def offline_pids(now=None):
+    """the papers someone wants to read offline (requests still in force)"""
+    return {r[0] for r in _query('SELECT DISTINCT pid FROM offline_pdfs WHERE asked > ?', (_keep_since(now),))}
+
+
+def kept_pdf(pid):
+    """the bytes of a PDF downloaded for reading offline, else None: enrich_daemon.py reads it
+    instead of downloading it again (never served from here, see pdf_file)"""
+    try:
+        with open(_pdf_file(pid), 'rb') as f:
+            return f.read()
+    except OSError:
+        return None
+
+
 def pdf_file(pid, user, now=None):
     """the path of a downloaded PDF this user asked for (and only they), else None"""
     if not _query('SELECT 1 FROM offline_pdfs WHERE user = ? AND pid = ? AND asked > ?', (user, pid, _keep_since(now))):

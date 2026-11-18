@@ -330,6 +330,9 @@ const Prepare = ({ pack, onDevice }) => {
     </section>`;
 };
 
+// a card whose PDF is on the device: its title and pdf link open that copy, its site gets a link of its own
+const onDeviceCard = p => ({ ...p, url: pdfPath(p.id), pdf: pdfPath(p.id), source_url: p.url });
+
 const PackSection = ({ s, onDevice }) => {
     const [open, setOpen] = useState(true);
     return html`<section class="pack-section">
@@ -340,7 +343,7 @@ const PackSection = ({ s, onDevice }) => {
                     title="the PDF, from this device">📄 Read the PDF</a>`
                 : p.offline_pdf === 'waiting' ? html`<span class="pack-pdf muted">PDF on its way to this device…</span>`
                 : p.offline_pdf === 'failed' ? html`<span class="pack-pdf muted">no PDF for offline (the server couldn't get it)</span>` : null}
-            <${Paper} paper=${onDevice.has(p.id) ? { ...p, pdf: pdfPath(p.id) } : p} quickTag=${s.tag || undefined} />
+            <${Paper} paper=${onDevice.has(p.id) ? onDeviceCard(p) : p} quickTag=${s.tag || undefined} />
         </div>`)}</div>` : null}
     </section>`;
 };

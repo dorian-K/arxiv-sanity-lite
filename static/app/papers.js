@@ -406,6 +406,7 @@ export const Paper = ({ paper: p, quickTag, tagFit }) => {
             editing=${canEdit && editingNote} setEditing=${setEditingNote} />` : null}
         <div class="rel_links">
             <a href=${p.pdf}>pdf</a>
+            ${p.source_url ? html`<a href=${p.source_url} title="the paper's page on its site (needs a network)">${p.source || 'arXiv'}</a>` : null}
             <a class="rel_more" href=${'/?rank=pid&pid=' + p.id}>similar</a>
             <a href=${'/graph?pid=' + p.id} title="what it cites and what cites it, as a graph to explore">graph</a>
             ${canEdit && !note && !editingNote ? html`<button class="linkbtn" title="a note for yourself on this paper (only you see it)"

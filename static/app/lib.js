@@ -150,25 +150,69 @@ export function load(path) {
 // a page's data from /ui/...: {data, error, loading, reload}. while the next address loads, the
 // page keeps showing the data it has (with the busy bar), so nothing flickers
 export function useData(path, busyMsg) {
-    const [state, setState] = useState({ data: null, error: null, path: null });
+    const [state, setState] = useState({ data: null, error: null, path: null, kept: 0 });
     const [round, setRound] = useState(0);
     useEffect(() => {
-        let live = true;
+        let live = true, fresh = false;
         if (path === null) return undefined;
         busy(busyMsg || 'Loading…');
+        // a slow connection: the copy kept on the device shows meanwhile, marked as such
+        const slow = setTimeout(() => keptCopy(path).then(k => {
+            if (!k || !live || fresh) return;
+            setState({ data: k.data, error: null, path, kept: k.time });
+            slowCopy.set(k.time);
+            pageReady();
+        }), SLOW_MS);
         load(path).then(
-            data => { if (live) setState({ data, error: null, path }); },
-            e => { if (live) setState(s => ({ data: s.data, error: e.message, path })); },
-        ).finally(() => { idle(); if (live) pageReady(); });
-        return () => { live = false; };
+            data => { fresh = true; if (live) setState({ data, error: null, path, kept: 0 }); keepCopy(path, data); },
+            e => { fresh = true; if (live) setState(s => ({ ...s, error: e.message, path })); },
+        ).finally(() => {
+            clearTimeout(slow);
+            idle();
+            if (live) { slowCopy.set(0); pageReady(); }
+        });
+        return () => { live = false; clearTimeout(slow); slowCopy.set(0); };
     }, [path, round]);
     return {
         data: state.data,
         error: state.path === path ? state.error : null,
         loading: state.path !== path,
+        kept: state.path === path ? state.kept : 0, // the data is the copy on the device, from then (s)
         dataPath: state.path, // what data shows: the previous page's while the next one loads
         reload: () => { cache.delete(path); setRound(n => n + 1); },
     };
+}
+
+// the last pages' data, kept on the device for a slow connection: shown after SLOW_MS without an
+// answer, until the server's arrives (app.js says so above the page). only the main lists and the
+// digest; deleted on logout (forgetDevice)
+export const SLOW_MS = 2500;
+const KEPT = 'data-v1';
+const KEPT_MAX = 20;
+const KEEPABLE = /^\/ui\/(list|digest)(\?|$)/;
+export const slowCopy = store(0); // when the copy on screen was made (s), 0: the server's data
+// never a real address (sw.js and the server don't see it), per user
+const keptUrl = path => '/kept/' + encodeURIComponent((me.get() && me.get().user) || '') + path;
+
+async function keptCopy(path) {
+    if (!KEEPABLE.test(path) || typeof caches === 'undefined') return null;
+    try {
+        const r = await caches.match(keptUrl(path), { cacheName: KEPT });
+        return r ? await r.json() : null;
+    } catch (e) {
+        return null;
+    }
+}
+
+async function keepCopy(path, data) {
+    if (!KEEPABLE.test(path) || typeof caches === 'undefined' || !(me.get() && me.get().user)) return;
+    try {
+        const c = await caches.open(KEPT);
+        await c.delete(keptUrl(path)); // to the end of the line
+        await c.put(keptUrl(path), new Response(JSON.stringify({ time: Date.now() / 1000, data })));
+        const keys = await c.keys();
+        for (const k of keys.slice(0, Math.max(0, keys.length - KEPT_MAX))) await c.delete(k);
+    } catch (e) { /* not kept */ }
 }
 
 // -----------------------------------------------------------------------------
@@ -184,7 +228,9 @@ export const lastMe = () => { try { return JSON.parse(localStorage.getItem(ME_KE
 export const forgetDevice = () => {
     try { [ME_KEY, QUEUE_KEY].forEach(k => localStorage.removeItem(k)); } catch (e) { /* nothing there */ }
     unsynced.set(0);
-    return typeof caches !== 'undefined' ? caches.delete('pack-v1').catch(() => {}) : Promise.resolve();
+    return typeof caches !== 'undefined'
+        ? Promise.all(['pack-v1', KEPT].map(n => caches.delete(n))).catch(() => {})
+        : Promise.resolve();
 };
 export const canEdit = (m, page) => Boolean(m && m.user) && !m.readonly && !(page && page.viewing);
 

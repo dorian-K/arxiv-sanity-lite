@@ -12,6 +12,7 @@ import sys
 import re
 import json
 import base64
+import gzip
 import hashlib
 from urllib.parse import urlparse, quote
 import time
@@ -455,6 +456,33 @@ def security_headers(resp):
     resp.headers.setdefault('X-Frame-Options', 'DENY')
     resp.headers.setdefault('Referrer-Policy', 'same-origin')
     resp.headers.setdefault('Content-Security-Policy', CSP)  # a page may widen it for itself (oauth_authorize)
+    return resp
+
+
+# the app's data (/ui/..., an /ui/list of 25 cards is ~50 kB) and pages go out gzipped: a slow
+# connection gets a third of it. static files are left to send_file (and the proxy)
+GZIP_TYPES = ('application/json', 'text/html', 'text/plain', 'text/javascript', 'application/manifest+json')
+GZIP_MIN = 1000
+
+
+@app.after_request
+def compress(resp):
+    if (
+        resp.direct_passthrough
+        or resp.is_streamed
+        or resp.status_code < 200
+        or resp.status_code in (204, 304)
+        or 'Content-Encoding' in resp.headers
+        or resp.mimetype not in GZIP_TYPES
+        or 'gzip' not in request.headers.get('Accept-Encoding', '').lower()
+    ):
+        return resp
+    data = resp.get_data()
+    if len(data) < GZIP_MIN:
+        return resp
+    resp.set_data(gzip.compress(data, compresslevel=5))
+    resp.headers['Content-Encoding'] = 'gzip'
+    resp.vary.add('Accept-Encoding')
     return resp
 
 

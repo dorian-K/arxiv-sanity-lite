@@ -1,7 +1,7 @@
 // the app: header, footer and the page for the address. who is logged in comes first (/ui/me),
 // each page then fetches its own data (see lib.js)
 import { render } from 'preact';
-import { html, useEffect, useRef, me, refreshMe, api, load, location, shared, setAddress, SHARED_PATHS, offline, unsynced, flushChanges, rememberMe, lastMe } from 'app/lib';
+import { html, useEffect, useRef, me, refreshMe, api, load, location, shared, setAddress, SHARED_PATHS, offline, unsynced, flushChanges, rememberMe, lastMe, slowCopy, SLOW_MS } from 'app/lib';
 import { initAbout } from 'app/papers';
 import { ListPage, listPath } from 'app/list';
 import { DigestPage, InspectPage, StatsPage, TextPage } from 'app/pages';
@@ -101,8 +101,12 @@ const App = () => {
     }, [url, m]);
     // without a network every address shows the papers kept on the device (static/app/offline.js)
     const PageComponent = offline.use() ? OfflinePage : PAGES[url.pathname] || ListPage;
+    const kept = slowCopy.use();
     return html`
         <${Header} m=${m} />
+        ${kept ? html`<div class="slow-note" role="status">Slow connection: this is the page as you last saw it
+            (${new Date(kept * 1000).toLocaleString([], { weekday: 'short', hour: '2-digit', minute: '2-digit' })}).
+            The current one replaces it when it arrives.</div>` : null}
         <main><${PageComponent} key=${url.pathname} /></main>
         <${Footer} />
         ${m.ask_public ? html`<${AskPublic} m=${m} />` : null}`;
@@ -121,15 +125,26 @@ const start = m => {
     render(html`<${App} />`, root);
 };
 
+// a slow connection: whoever was logged in last starts the app after SLOW_MS (the page's data
+// still comes from the server, or its kept copy meanwhile), corrected when /ui/me answers
+let started = false;
+const slowStart = setTimeout(() => {
+    const m = lastMe();
+    if (m && m.user) { started = true; start(m); }
+}, SLOW_MS);
+
 api('/ui/me').then(m => {
+    clearTimeout(slowStart);
     rememberMe(m);
-    start(m);
+    if (started) me.set(m);
+    else start(m);
     if (m.user && !m.readonly) flushChanges();
 }).catch(() => {
+    clearTimeout(slowStart);
     const m = lastMe();
     if (m && m.user) {
         offline.set(true);
-        start(m);
+        if (!started) start(m);
         return;
     }
     document.getElementById('app').innerHTML = '<div class="page"><section class="card"><p class="form-error">The server could not be reached. Try reloading the page.</p></section></div>';

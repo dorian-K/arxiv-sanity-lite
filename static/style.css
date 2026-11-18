@@ -898,3 +898,10 @@ details.danger form { margin-top: 10px; }
 .pack-read { display: inline-block; margin: 0 0 4px; }
 .pack-pdf { display: block; font-size: 12px; margin: 0 0 4px; }
 .nav-unsynced { font-weight: 600; }
+
+/* a slow connection: the page is the copy kept on the device until the server's arrives (lib.js) */
+.slow-note {
+    max-width: 900px; margin: 8px auto 0; padding: 6px 12px;
+    border: 1px dashed var(--border); border-radius: 6px;
+    color: var(--muted); font-size: 0.9em;
+}

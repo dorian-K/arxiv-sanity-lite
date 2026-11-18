@@ -965,3 +965,19 @@ def test_the_app_works_offline(client):
     shell = client.get('/').get_data(as_text=True)
     assert '/static/app/offline.js?v=' in shell and 'manifest.webmanifest' in shell
     assert client.get('/static/manifest.webmanifest').status_code == 200
+
+
+def test_data_goes_out_gzipped(client):
+    import gzip
+    import json
+
+    plain = client.get('/ui/list', headers={'Accept': 'application/json'})
+    assert 'Content-Encoding' not in plain.headers  # the client didn't ask for it
+    r = client.get('/ui/list', headers={'Accept': 'application/json', 'Accept-Encoding': 'gzip, br'})
+    assert r.headers['Content-Encoding'] == 'gzip' and 'Accept-Encoding' in r.headers['Vary']
+    ids = lambda d: [p['id'] for p in d['papers']]
+    assert ids(json.loads(gzip.decompress(r.data))) == ids(plain.get_json())
+    small = client.get('/ui/me', headers={'Accept-Encoding': 'gzip'})
+    assert 'Content-Encoding' not in small.headers  # not worth it
+    css = client.get('/static/style.css', headers={'Accept-Encoding': 'gzip'})
+    assert 'Content-Encoding' not in css.headers  # send_file's, left alone

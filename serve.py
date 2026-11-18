@@ -2126,7 +2126,10 @@ def ui_offline_pdfs():
     if g.user is None or g.token:
         return not_logged_in()
     pids = [p for p in request.args.get('pids', '').split(',')[: OFFLINE_PDF_MAX * 2] if p]
-    return {'pdfs': pdf_offline_states(pids), 'wait': _pdf_wait()}
+    states = pdf_offline_states(pids)
+    ready = [p for p, st in states.items() if st == 'ready']
+    sizes = {p: s[1] for p, s in db.pdf_states(ready).items() if s[1]}
+    return {'pdfs': states, 'sizes': sizes, 'wait': _pdf_wait()}
 
 
 @app.route('/offline/pdf/<path:pid>')

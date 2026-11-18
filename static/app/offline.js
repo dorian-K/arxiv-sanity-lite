@@ -12,6 +12,8 @@ const PACK = 'pack-v1'; // as in sw.js
 const PACK_URL = '/ui/offline';
 const OPTS_KEY = 'resanity-pack-pdfs';
 const PDF_POLL = 10000; // ms between asking how far the PDFs are
+const PDF_TIMEOUT = 5 * 60000; // one PDF's download to the device
+const DEVICE_TRIES = 3; // downloads of one PDF to the device before giving it up
 const SUMMARY_ROUNDS = 60; // ~3 minutes of asking for AI summaries
 
 const hasCaches = () => typeof caches !== 'undefined';
@@ -184,26 +186,80 @@ async function pdfs(pack) {
     await downloadPdfs(pids);
 }
 
+// one PDF from the server into the pack, its progress told as it comes in; throws with what went wrong
+async function savePdf(c, pid, size, say) {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), PDF_TIMEOUT);
+    try {
+        const r = await fetch(pdfPath(pid), { signal: ctl.signal });
+        if (!r.ok) throw new Error(`the server answered ${r.status}`);
+        const total = Number(r.headers.get('Content-Length')) || size || 0;
+        const chunks = [];
+        let got = 0, told = 0;
+        const reader = r.body.getReader();
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            chunks.push(value);
+            got += value.length;
+            if (Date.now() - told > 400) { told = Date.now(); say(got, total); }
+        }
+        await c.put(pdfPath(pid), new Response(new Blob(chunks, { type: 'application/pdf' }), {
+            headers: { 'Content-Type': 'application/pdf', 'Content-Length': String(got) },
+        }));
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+const pdfProblem = e =>
+    e.name === 'QuotaExceededError' ? 'This device has no room left for this site: free some space, or choose fewer PDFs.'
+    : e.name === 'AbortError' ? `A PDF took over ${PDF_TIMEOUT / 60000} minutes to download; the connection may be too slow. It is tried again.`
+    : `A PDF couldn't be saved on this device (${e.message}). It is tried again.`;
+
+let pdfRun = 0; // a newer download loop ends the older one
+
+// asks the server how far these papers' PDFs are, every PDF_POLL ms, and copies the ready ones to
+// the device, one at a time, until none is left (a PDF that fails DEVICE_TRIES times is given up)
 export async function downloadPdfs(pids) {
+    const run = ++pdfRun;
     const c = await caches.open(PACK);
+    const tries = {};
     for (;;) {
         const res = await api('/ui/offline/pdfs?pids=' + encodeURIComponent(pids.join(',')));
+        if (run !== pdfRun) return;
         const have = await pdfsOnDevice();
-        for (const [pid, st] of Object.entries(res.pdfs)) {
-            if (st !== 'ready' || have.has(pid)) continue;
-            patchJob({ step: 'Downloading PDFs…' });
+        const count = st => pids.filter(p => res.pdfs[p] === st).length;
+        const due = p => res.pdfs[p] === 'ready' && !have.has(p) && (tries[p] || 0) < DEVICE_TRIES;
+        const state = () => ({
+            device: pids.filter(p => have.has(p)).length, total: pids.length, waiting: count('waiting'),
+            failed: count('failed'), stuck: pids.filter(p => res.pdfs[p] === 'ready' && !have.has(p) && tries[p] >= DEVICE_TRIES).length,
+            wait: res.wait,
+        });
+        const todo = pids.filter(due);
+        for (const [i, pid] of todo.entries()) {
+            if (run !== pdfRun) return;
+            const size = (res.sizes || {})[pid];
+            const head = `Downloading PDF ${i + 1} of ${todo.length} to this device`;
+            patchJob({ pdfs: state(), step: `${head}${size ? ` (${mb(size)})` : ''}…` });
+            tries[pid] = (tries[pid] || 0) + 1;
             try {
-                const r = await fetch(pdfPath(pid));
-                if (r.ok) { await c.put(pdfPath(pid), r); have.add(pid); }
-            } catch (e) { /* next round */ }
+                await savePdf(c, pid, size, (got, total) => run === pdfRun && patchJob({
+                    step: `${head}: ${total ? `${Math.min(100, Math.round(100 * got / total))}% of ${mb(total)}` : mb(got)}…`,
+                }));
+                have.add(pid);
+                patchJob({ pdfError: '' });
+            } catch (e) {
+                patchJob({ pdfError: pdfProblem(e) });
+                if (e.name === 'QuotaExceededError') for (const p of pids) tries[p] = DEVICE_TRIES; // no use trying the rest
+            }
         }
-        const states = Object.values(res.pdfs);
-        const count = st => states.filter(x => x === st).length;
-        const pdfState = { device: pids.filter(p => have.has(p)).length, total: pids.length, waiting: count('waiting'), failed: count('failed'), wait: res.wait };
-        patchJob({ pdfs: pdfState, step: pdfState.waiting ? 'The server is fetching PDFs…' : '' });
+        const st = state();
+        patchJob({ pdfs: st, step: st.waiting ? 'The server is fetching PDFs…' : '' });
         await updatePack(pk => allPapers(pk).forEach(p => { if (res.pdfs[p.id] !== undefined) p.offline_pdf = res.pdfs[p.id]; }));
-        if (!pdfState.waiting) return;
+        if (!st.waiting && !pids.some(due)) return;
         await sleep(PDF_POLL);
+        if (run !== pdfRun) return;
     }
 }
 
@@ -227,11 +283,13 @@ const Progress = ({ j }) => {
     if (!j) return null;
     const p = j.pdfs;
     return html`<div class="pack-progress" role="status">
-        ${j.step ? html`<div>${j.running || (p && p.waiting) ? html`<span class="pack-dot" aria-hidden="true"></span>` : null}${j.step}</div>` : null}
+        ${j.step ? html`<div><span class="pack-dot" aria-hidden="true"></span>${j.step}</div>` : null}
         ${j.summaries ? html`<div>AI summaries: ${j.summaries[0]} of ${j.summaries[1]} ready</div>` : null}
         ${p ? html`<div>PDFs on this device: ${p.device} of ${p.total}
             ${p.waiting ? html`, ${p.waiting} still being fetched (about ${Math.max(1, Math.round(p.wait / 60))} min; arXiv wants one request every 15 seconds)` : ''}
-            ${p.failed ? html`, ${p.failed} not available` : ''}</div>` : null}
+            ${p.failed ? html`, ${p.failed} not available` : ''}
+            ${p.stuck ? html`, ${p.stuck} couldn't be saved here (press the button to try again)` : ''}</div>` : null}
+        ${j.pdfError ? html`<p class="form-error">${j.pdfError}</p>` : null}
         ${p && p.waiting ? html`<div class="muted">Keep this page open, or come back later: whatever is ready is downloaded when you open it.</div>` : null}
         ${j.note ? html`<div class="muted">${j.note}</div>` : null}
         ${j.error ? html`<p class="form-error">${j.error}</p>` : null}
@@ -302,12 +360,15 @@ export const OfflinePage = () => {
         pdfsOnDevice().then(setOnDevice);
         pageReady();
         // PDFs that were still being fetched: downloaded now
-        if (pack && !isOffline && !(j && j.running) && m.user) {
-            const waiting = allPapers(pack).filter(p => p.offline_pdf === 'waiting').map(p => p.id);
-            if (waiting.length && !(j && j.resumed)) {
-                patchJob({ resumed: true });
-                downloadPdfs(waiting).catch(() => {});
-            }
+        // (and ready ones that didn't make it to the device yet)
+        if (pack && !isOffline && !(j && j.running) && !(j && j.resumed) && m.user) {
+            patchJob({ resumed: true });
+            pdfsOnDevice().then(have => {
+                const left = allPapers(pack)
+                    .filter(p => p.offline_pdf === 'waiting' || (p.offline_pdf === 'ready' && !have.has(p.id)))
+                    .map(p => p.id);
+                if (left.length) return downloadPdfs(left);
+            }).catch(e => patchJob({ pdfError: e.message }));
         }
     }, [pack, j && j.pdfs && j.pdfs.device]);
 

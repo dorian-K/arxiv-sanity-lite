@@ -916,8 +916,9 @@ def test_reading_offline_pack_and_pdfs(client, corpus, monkeypatch):
 
     assert enrich_daemon.fetch_pdfs(Fetch()) == 2
     assert db.pdfs_wanted() == []
-    states = client.get(f'/ui/offline/pdfs?pids={pids[1]},{pids[2]}').get_json()['pdfs']
-    assert states == {pids[1]: 'ready', pids[2]: 'failed'}
+    r = client.get(f'/ui/offline/pdfs?pids={pids[1]},{pids[2]}').get_json()
+    assert r['pdfs'] == {pids[1]: 'ready', pids[2]: 'failed'}
+    assert r['sizes'] == {pids[1]: len(b'%PDF-1.5 paper')}  # for the progress on the device
     r = client.get(f'/offline/pdf/{pids[1]}')
     assert r.status_code == 200 and r.data == b'%PDF-1.5 paper' and r.mimetype == 'application/pdf'
 

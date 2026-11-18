@@ -2019,7 +2019,7 @@ def ui_page(name):
 
 OFFLINE_TO_READ = 40  # papers of To read in the pack, newest first
 OFFLINE_FOR_YOU = 20  # papers of For you (all tags, FOR_YOU_DAYS) besides those
-OFFLINE_PDF_MAX = 60  # PDFs a user may have asked for at once
+OFFLINE_PDF_MAX = 60  # PDFs on a user's device at once (the newest set replaces the last)
 OFFLINE_QUEUE_MAX = 500  # PDFs waiting for the daemon, everyone's together
 ENRICH_PAUSE = float(os.environ.get('ENRICH_PAUSE') or 20)  # the daemon's, for the time estimate
 
@@ -2102,22 +2102,24 @@ def offline_files():
 
 @app.route('/offline/pdfs', methods=['POST'])
 def offline_pdfs():
-    """asks for these papers' PDFs (form field pids, comma-separated): enrich_daemon.py fetches them"""
+    """the papers whose PDFs the device wants now (form field pids, comma-separated, in order; it
+    replaces the earlier ones, at most OFFLINE_PDF_MAX): enrich_daemon.py fetches them"""
     if g.user is None or g.token:
         return not_logged_in()
     if not ENRICH_ON:
         return {'error': 'Downloading PDFs is turned off on this server (ENRICH_ENABLED).'}, 400
     papers = get_papers()
     pids = [p for p in dict.fromkeys(request.form.get('pids', '').split(',')) if p and p in papers]
+    keep, left_out = pids[:OFFLINE_PDF_MAX], len(pids[OFFLINE_PDF_MAX:])
     asked = db.offline_pdfs(g.user)
-    new = [p for p in pids if p not in asked]
-    room = max(0, OFFLINE_PDF_MAX - len(asked))
+    new = [p for p in keep if p not in asked]
     if new and rate_limited('offline'):
         return too_many('offline')
-    if len(db.pdfs_wanted()) + min(room, len(new)) > OFFLINE_QUEUE_MAX:
+    if len(db.pdfs_wanted()) + len(new) > OFFLINE_QUEUE_MAX:
         return {'error': 'Many PDFs are waiting to be fetched already. Try again in an hour.'}, 429
-    db.ask_pdfs(g.user, [p for p in pids if p in asked] + new[:room])  # asking again keeps them longer
-    return {'pdfs': pdf_offline_states(pids), 'left_out': len(new[room:]), 'wait': _pdf_wait()}
+    # the whole set the device wants: papers read or gone from the pack make room (asking again keeps them longer)
+    db.set_pdfs(g.user, keep)
+    return {'pdfs': pdf_offline_states(pids), 'left_out': left_out, 'wait': _pdf_wait()}
 
 
 @app.route('/ui/offline/pdfs')

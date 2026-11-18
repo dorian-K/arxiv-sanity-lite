@@ -717,6 +717,20 @@ def ask_pdfs(user, pids, now=None):
         con.close()
 
 
+def set_pdfs(user, pids, now=None):
+    """the PDFs this user wants on their device now, all of them: requests for other papers (read,
+    out of the digest, a section unticked) end here, and their files go with the next expire_pdfs"""
+    pids = list(pids)
+    con = users_db()
+    try:
+        with con:
+            q = ','.join('?' * len(pids))
+            con.execute(f'DELETE FROM offline_pdfs WHERE user = ? AND pid NOT IN ({q})', (user, *pids))
+        ask_pdfs(user, pids, now)
+    finally:
+        con.close()
+
+
 def offline_pdfs(user, now=None):
     """{pid: when asked} of the PDFs this user asked for that are still kept"""
     return dict(_query('SELECT pid, asked FROM offline_pdfs WHERE user = ? AND asked > ?', (user, _keep_since(now))))

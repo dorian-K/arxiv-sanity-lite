@@ -914,6 +914,15 @@ def test_reading_offline_pack_and_pdfs(client, corpus, monkeypatch):
         def get(self, url, max_bytes):
             return (url, b'%PDF-1.5 paper') if pids[1] in url else (None, b'')
 
+    # each request is the device's whole set: papers left out of it (read ones) make room
+    client.post('/offline/pdfs', data={'pids': pids[0]})
+    assert set(db.offline_pdfs('alice')) == {pids[0]}
+    monkeypatch.setattr(serve, 'OFFLINE_PDF_MAX', 1)
+    r = client.post('/offline/pdfs', data={'pids': f'{pids[1]},{pids[2]}'}).get_json()
+    assert r['left_out'] == 1 and set(db.offline_pdfs('alice')) == {pids[1]}
+    monkeypatch.setattr(serve, 'OFFLINE_PDF_MAX', 60)
+    client.post('/offline/pdfs', data={'pids': f'{pids[1]},{pids[2]}'})
+    assert set(db.offline_pdfs('alice')) == {pids[1], pids[2]}
     assert enrich_daemon.fetch_pdfs(Fetch()) == 2
     assert db.pdfs_wanted() == []
     r = client.get(f'/ui/offline/pdfs?pids={pids[1]},{pids[2]}').get_json()

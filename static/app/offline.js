@@ -119,10 +119,15 @@ async function getReady() {
         const c = await caches.open(PACK);
         const thumbs = allPapers(pack).map(p => p.thumb_url).filter(Boolean);
         await Promise.all(thumbs.map(u => fetch(u).then(r => r.ok && c.put(u, r)).catch(() => {})));
-        // PDFs of the papers no longer in the pack leave the device
+        // PDFs and thumbnails of the papers no longer in the pack (read, out of the digest) leave the device
         if (old) {
             const keep = new Set(allPapers(pack).map(p => p.id));
             for (const pid of await pdfsOnDevice()) if (!keep.has(pid)) await c.delete(pdfPath(pid));
+            const keepThumbs = new Set(thumbs.map(u => new URL(u, window.location.href).pathname));
+            for (const req of await c.keys()) {
+                const path = new URL(req.url).pathname;
+                if (path.startsWith('/thumb/') && !keepThumbs.has(path)) await c.delete(req);
+            }
         }
         await Promise.all([summaries(pack), pdfs(pack)]);
         patchJob({ running: false, step: '' });
@@ -180,9 +185,12 @@ async function pdfs(pack) {
         for (const s of pack.sections) if (s.key === key) want.push(...s.papers.map(p => p.id));
     }
     const pids = [...new Set(want)].slice(0, pack.pdf_max);
-    if (!pids.length) return;
+    // the whole set, even none: the server lets go of the rest, and so does the device
     const res = await api('/offline/pdfs', { pids: pids.join(',') }, { keep: true });
     if (res.left_out) patchJob({ note: `${res.left_out} PDFs left out: at most ${pack.pdf_max} at a time.` });
+    const keep = new Set(pids), c = await caches.open(PACK);
+    for (const pid of await pdfsOnDevice()) if (!keep.has(pid)) await c.delete(pdfPath(pid));
+    if (!pids.length) return;
     await downloadPdfs(pids);
 }
 
@@ -316,7 +324,7 @@ const Prepare = ({ pack, onDevice }) => {
             <legend>PDFs for</legend>
             ${PDF_SECTIONS.map(([k, label]) => html`<label key=${k} class="check"><input type="checkbox" checked=${o[k]}
                 onChange=${e => setOpt(k, e.target.checked)} /> ${label}</label>`)}
-            <span class="hint">at most ${pack ? pack.pdf_max : 60}; arXiv is asked for one every 15 s, so many take a while</span>
+            <span class="hint">at most ${pack ? pack.pdf_max : 60} at a time; papers you've read leave the device when you update, making room; arXiv is asked for one every 15 s, so many take a while</span>
         </fieldset>`}
         <div class="pack-actions">
             <button class="btn btn-primary" disabled=${running} onClick=${getReady}

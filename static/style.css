@@ -8,6 +8,7 @@
     --text: #1c1b19;
     --muted: #6b6963;
     --border: #e3e1da;
+    --search-mark: rgba(255, 196, 0, 0.32);
     --accent: #b31b1b;          /* arXiv red */
     --accent-text: #ffffff;
     --header: #b31b1b;
@@ -31,6 +32,7 @@
         --text: #ebe9e4;
         --muted: #a19e96;
         --border: #33322f;
+        --search-mark: rgba(255, 196, 0, 0.22);
         --accent: #c93a3a;
         --accent-text: #ffffff;
         --header: #7a1616;
@@ -918,3 +920,6 @@ details.danger form { margin-top: 10px; }
     border: 1px dashed var(--border); border-radius: 6px;
     color: var(--muted); font-size: 0.9em;
 }
+
+/* where a search matched (static/app/highlight.js, CSS Custom Highlight API): a light marker */
+::highlight(search) { background-color: var(--search-mark); color: inherit; }

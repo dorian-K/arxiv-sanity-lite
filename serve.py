@@ -1011,6 +1011,18 @@ def note_matches(q):
     return [pid for _, pid in sorted(hits) if pid in papers]
 
 
+def search_highlight(q):
+    """
+    [[word, is_stopword], ...] of a search, for the cards to mark where it matched (static/app/highlight.js):
+    the words the search used, and stopwords only as part of the query's own phrases
+    """
+    if not q or find_paper_id(q):
+        return []
+    from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
+
+    return [[w, w in ENGLISH_STOP_WORDS] for w in re.findall(r'\w+', q.lower())[:8]]
+
+
 def search_rank(q: str = ''):
     """(pids, scores) of a search: the papers whose note matches first (note_matches), then the full-text index's"""
     if not q:
@@ -1444,6 +1456,7 @@ def ui_list():
     context['gvars']['skip_have'] = opt_skip_have
     context['gvars']['search_query'] = opt_q
     context['gvars']['corrected'] = corrected
+    context['gvars']['highlight'] = search_highlight(corrected or opt_q) if opt_rank == 'search' else []
     context['gvars']['svm_c'] = '' if C is None else str(C)
     context['gvars']['feats'] = opt_feats
     context['gvars']['model'] = opt_model

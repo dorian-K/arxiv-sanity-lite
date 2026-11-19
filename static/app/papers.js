@@ -3,6 +3,7 @@
 import { html, useState, useEffect, useRef, useContext, createContext, store, api, load, tagRequest, me } from 'app/lib';
 import { MathText } from 'app/math';
 import { markdown, plainText } from 'app/markdown';
+import { mark } from 'app/highlight';
 
 // what the page around the cards is: its rank and tag, whose tags it shows (viewing someone's
 // shared page) and whether this user can vote there. userTags grows when a card makes a new tag
@@ -93,6 +94,8 @@ const openImage = (p, e) => {
 const NOTE_LINES_PX = 110; // a note taller than this is cut
 const NoteView = ({ note, onEdit }) => {
     const ref = useRef(null);
+    const { hl } = useContext(Page);
+    useEffect(() => { mark(ref.current, hl); }, [note, hl]);
     const [long, setLong] = useState(false);
     const [open, setOpen] = useState(false);
     useEffect(() => {
@@ -184,9 +187,10 @@ const useAiSummary = p => {
 };
 const AI_FIELDS = [['problem', 'Problem'], ['approach', 'Approach'], ['result', 'Result'], ['caveat', 'Caveat']];
 const AiSummary = ({ s }) => {
+    const { hl } = useContext(Page);
     const from = s.source === 'abstract' ? 'its abstract' : 'its full text';
     return html`<div class="rel_ai" role="tabpanel" title=${'written by an AI model (' + (s.model || '').split('/').pop() + ') from ' + from + '; it may contain errors'}>
-        <ul>${AI_FIELDS.filter(([k]) => s[k]).map(([k, label]) => html`<li key=${k}><b>${label}:</b> <${MathText} text=${s[k]} /></li>`)}</ul>
+        <ul>${AI_FIELDS.filter(([k]) => s[k]).map(([k, label]) => html`<li key=${k}><b>${label}:</b> <${MathText} text=${s[k]} hl=${hl} /></li>`)}</ul>
         <div class="rel_ai_note">AI summary from ${from}, may contain errors</div>
     </div>`;
 };
@@ -284,6 +288,7 @@ const QuickVote = ({ pid, tag, state, onChange, compact }) => {
 export const Paper = ({ paper: p, quickTag, tagFit }) => {
     const page = useContext(Page);
     const canEdit = page.canEdit;
+    const hl = page.hl || null; // where a search matched (highlight.js)
     const m = me.use();
     const [utags, setUtags] = useState(p.utags);
     const [ntags, setNtags] = useState(p.ntags);
@@ -366,7 +371,7 @@ export const Paper = ({ paper: p, quickTag, tagFit }) => {
             <button class="rel_expand" aria-expanded="false" title="show everything" aria-label="show details"
                     onClick=${() => setExpanded(true)}>▸</button>
             ${score}
-            <a class="rel_title_c" href=${p.url}><${MathText} text=${p.title} /></a>
+            <a class="rel_title_c" href=${p.url}><${MathText} text=${p.title} hl=${hl} /></a>
             ${utags.length ? html`<span class="rel_saved" title=${'saved to ' + utags.join(', ')}>★</span>` : null}
             ${note ? html`<span class="rel_note_c" title=${'your note: ' + plainText(note)}>✎ ${plainText(note)}</span>` : null}
             ${p.venue ? html`<span class="rel_venue_c" title=${p.venue + ' (' + venueNote(p) + ')'}>✓</span>` : null}
@@ -385,14 +390,14 @@ export const Paper = ({ paper: p, quickTag, tagFit }) => {
             ${compactView ? html`<button class="rel_expand" aria-expanded="true" title="back to one line"
                     aria-label="hide details" onClick=${() => setExpanded(false)}>▾</button>` : null}
             ${score}
-            <h2 class="rel_title"><a href=${p.url}><${MathText} text=${p.title} /></a></h2>
+            <h2 class="rel_title"><a href=${p.url}><${MathText} text=${p.title} hl=${hl} /></a></h2>
         </div>
         ${fit !== undefined ? html`
         <div class=${'rel_fit' + (fit > ho.misfit ? ' misfit' : '')}
              title="where this paper lands when the tag's other papers rank it (it isn't used to train that model)">
             ${fit > ho.misfit ? "doesn't fit " + ho.tag + ' well: ' : 'fits ' + ho.tag + ': '}${fmtPct(fit)} when held out
         </div>` : null}
-        <div class="rel_authors">${p.authors}</div>
+        <div class="rel_authors" ref=${el => mark(el, hl)}>${p.authors}</div>
         <div class="rel_meta">
             <span class="rel_time">${p.time}</span>
             <span class="rel_tags">${p.tags}</span>
@@ -424,7 +429,7 @@ export const Paper = ({ paper: p, quickTag, tagFit }) => {
         </div>` : null}
         ${tab === 'summary' ? html`<${AiSummary} s=${ai} />` : html`
         <div class=${'rel_abs' + (long && !open ? ' clamped' : '')} onClick=${() => long && !open && setOpen(true)}>
-            <${MathText} text=${p.summary} />
+            <${MathText} text=${p.summary} hl=${hl} />
             ${long ? html`<button type="button" class=${'linkbtn abs_toggle' + (open ? '' : ' over')} aria-expanded=${open}
                     onClick=${e => { e.stopPropagation(); setOpen(o => !o); }}>${open ? ' show less' : html`<span class="abs_dots">… </span>reveal more`}</button>` : null}
         </div>`}

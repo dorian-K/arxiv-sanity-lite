@@ -1,6 +1,7 @@
 // the main page, / and its ?rank=...: a list of papers (recommendations, a tag's saved papers,
 // search, newest, similar to a paper), with the user's tags, the tabs of a tag and the
 // ranking's settings. every choice changes the address and fetches /ui/list with it
+import { matcher } from 'app/highlight';
 import { html, setShared, useState, useEffect, me, api, useData, navigate, location, tagRequest, canEdit, Err, useAction, prefetchOnHover } from 'app/lib';
 import { Page, PaperList, Skeleton, ViewSwitch, WordList, TagCheck, ViewBanner, tagUrl, FOR_YOU_DAYS, withMadeTags } from 'app/papers';
 
@@ -287,7 +288,7 @@ export const ListPage = () => {
     const g = d.gvars;
     const userTags = withMadeTags(d.tags.map(t => t.name).filter(n => n !== 'all'));
     const editable = canEdit(m, d);
-    const page = { rank: g.rank, tags: g.tags, viewing: d.viewing, owner: d.owner, canEdit: editable, userTags };
+    const page = { rank: g.rank, tags: g.tags, viewing: d.viewing, owner: d.owner, canEdit: editable, userTags, hl: matcher(g.highlight) };
     // the next page's data is on its way: a model to train shows a skeleton of the list, else the
     // current list stays (dimmed) until the new one is there
     const want = new URLSearchParams(url.search);

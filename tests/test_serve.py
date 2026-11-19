@@ -996,3 +996,9 @@ def test_search_goes_over_the_notes(client, corpus):
     client.post(f'/note/{pids[7]}', data={'text': 'zorblax'})
     client.post('/logout')
     assert ids('zorblax') == []  # only the user's own search finds their notes
+
+
+def test_search_results_say_what_to_mark(client):
+    g = client.get('/ui/list?q=learning to rank').get_json()['gvars']
+    assert g['highlight'] == [['learning', False], ['to', True], ['rank', False]]
+    assert client.get('/ui/list?rank=time').get_json()['gvars']['highlight'] == []

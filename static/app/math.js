@@ -1,6 +1,7 @@
 // LaTeX in titles, abstracts and summaries: text-mode LaTeX turned into html, and math typeset by
 // KaTeX, which is only downloaded once the first piece of math scrolls into view
 import { h, useRef, useEffect } from 'app/lib';
+import { mark, repaint } from 'app/highlight';
 
 // -----------------------------------------------------------------------------
 // lazy LaTeX: KaTeX is only downloaded once the first piece of text containing math
@@ -45,6 +46,7 @@ const mathObserver = 'IntersectionObserver' in window ? new IntersectionObserver
 function typeset(elt) {
     loadKatex().then(() => {
         renderMathInElement(elt, { delimiters: MATH_DELIMITERS, throwOnError: false });
+        repaint(); // search marks in text the typesetting replaced
     }).catch(() => {}); // offline or blocked CDN: leave the raw LaTeX
 }
 
@@ -99,18 +101,20 @@ export function textLatex(text) {
 
 // text that may contain LaTeX. Preact never manages the children of the span, because
 // KaTeX replaces them, so the text is set by hand and typeset lazily
-export const MathText = ({ text, tag = 'span', className }) => {
+export const MathText = ({ text, tag = 'span', className, hl = null }) => {
     const ref = useRef(null);
     useEffect(() => {
         const elt = ref.current;
         if (HAS_TEXT_LATEX.test(text) || HAS_MATH.test(text)) elt.innerHTML = textLatex(text);
         else elt.textContent = text;
-        if (!HAS_MATH.test(text)) return;
+        mark(elt, hl); // where a search matched (highlight.js)
+        if (!HAS_MATH.test(text)) return () => mark(elt, null);
         if (mathObserver) {
             mathObserver.observe(elt);
-            return () => mathObserver.unobserve(elt);
+            return () => { mathObserver.unobserve(elt); mark(elt, null); };
         }
         typeset(elt);
-    }, [text]);
+        return () => mark(elt, null);
+    }, [text, hl]);
     return h(tag, { ref, className });
 };

@@ -1385,7 +1385,7 @@ class EmbeddingCache:
 # arrays are memory-mapped: all processes share them through the page cache, and a
 # process that is still using an old version keeps its mapping after it is deleted.
 
-_ARRAYS = ('x_data', 'x_indices', 'x_indptr', 'x_emb', 'emb_mask')
+_ARRAYS = ('x_data', 'x_indices', 'x_indptr', 'x_emb', 'emb_mask', 'x_time')
 
 
 def features_exist(path=None):
@@ -1406,10 +1406,16 @@ def save_features(features):
         arrays['x_emb'] = np.ascontiguousarray(features['x_emb'], dtype=np.float32)
     if features.get('emb_mask') is not None:
         arrays['emb_mask'] = np.ascontiguousarray(features['emb_mask'], dtype=bool)
+    if features.get('x_time') is not None:  # the time of the paper version each row was made from (compute.py)
+        arrays['x_time'] = np.ascontiguousarray(features['x_time'], dtype=np.float64)
     for k, v in arrays.items():
         np.save(os.path.join(d, k + '.npy'), v)
     # (keys with _ are what load_features adds)
-    meta = {k: v for k, v in features.items() if k not in ('x', 'x_emb', 'emb_mask', 'ptoi') and not k.startswith('_')}
+    meta = {
+        k: v
+        for k, v in features.items()
+        if k not in ('x', 'x_emb', 'emb_mask', 'x_time', 'ptoi') and not k.startswith('_')
+    }
     meta['x_shape'] = x.shape
     with open(os.path.join(d, 'meta.p'), 'wb') as f:
         pickle.dump(meta, f, -1)
@@ -1436,6 +1442,7 @@ def _load(d):
     features['x'] = sp.csr_matrix((a['x_data'], a['x_indices'], a['x_indptr']), shape=shape, copy=False)
     features['x_emb'] = a.get('x_emb')
     features['emb_mask'] = a.get('emb_mask')  # None: every paper has an embedding
+    features['x_time'] = a.get('x_time')  # None: made before rows were reused (compute.py)
     return features
 
 

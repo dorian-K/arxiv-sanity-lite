@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import pytest
 
@@ -80,3 +81,47 @@ def test_svm_with_sampled_negatives(features):
     v = [rank_of[p] for p in vision if p not in pos]
     l = [rank_of[p] for p in pids if p not in vision]
     assert np.mean([[a < b for b in l] for a in v]) >= 0.9
+
+
+def test_compute_reuses_the_rows_of_unchanged_papers(corpus, features):
+    """a second run learns no new vocabulary and makes rows only for new or updated papers, the same ones a full run would"""
+    import random
+    import subprocess
+    import sys
+    import time
+
+    import numpy as np
+    from sklearn.feature_extraction.text import TfidfVectorizer
+
+    from aslite.db import get_papers_db, load_features
+    from conftest import REPO, make_paper
+
+    with get_papers_db() as pdb:
+        new = make_paper(500, 'vision', random.Random(1))
+        new['_time'] = time.time() + 60  # the newest
+        changed = dict(corpus[sorted(corpus)[3]], _version=9, summary='a new version about quantum chromodynamics')
+        changed['_time'], changed['_idv'] = time.time() - 10, changed['_id'] + 'v9'
+        pdb.upsert([new, changed])
+    run = lambda *a: (
+        subprocess.run(
+            [sys.executable, os.path.join(REPO, 'compute.py'), '--min_df', '1', '--max_df', '1.0', *a],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+    )
+    out = run()
+    assert 'tfidf rows of 2 papers' in out and 'learning' not in out
+    f = load_features()
+    assert f['tfidf_fit_time'] == features['tfidf_fit_time'] and f['pids'][-1] == new['_id']
+    params = {k: v for k, v in f['tfidf_params'].items() if k != 'max_docs'} | {'dtype': np.float32}
+    v = TfidfVectorizer(**params, vocabulary=f['vocab'])
+    v.idf_ = f['idf']
+    with get_papers_db() as pdb:
+        got = pdb.get_many(f['pids'])
+    texts = [
+        ' '.join([got[p]['title'], got[p]['summary'], ' '.join(a['name'] for a in got[p]['authors'])])
+        for p in f['pids']
+    ]
+    assert abs(v.transform(texts) - f['x']).max() == 0
+    assert 'learning the tfidf vocabulary' in run('--refit')

@@ -10,12 +10,16 @@ import argparse
 import random
 
 import numpy as np
+import scipy.sparse as sp
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 from aslite import spell
-from aslite.db import get_papers_db, get_refs_db, hold_heavy_lock, put_job, save_features, save_terms
+from aslite.db import get_papers_db, get_refs_db, hold_heavy_lock, load_features, put_job, save_features, save_terms
 from aslite.refs import merge_twins
 from aslite.embed import embed_papers
+
+REFIT_DAYS = 30  # the tfidf vocabulary and idf are learned again after this many days
+REFIT_GROWTH = 0.1  # ... or once there are this much more papers than when they were learned
 
 # -----------------------------------------------------------------------------
 
@@ -30,6 +34,12 @@ if __name__ == '__main__':
         default=100000,
         help='learn the vocabulary and idf from a random sample of this many papers (-1: all). '
         'counting every word pair of all 657k papers takes 5 GB of RAM, a 100k sample a fraction',
+    )
+    parser.add_argument(
+        '--refit',
+        action='store_true',
+        help=f'learn the tfidf vocabulary and idf again now (else every {REFIT_DAYS} days, '
+        'reusing the rows of unchanged papers in between)',
     )
     parser.add_argument(
         '--embed_model',
@@ -58,7 +68,7 @@ if __name__ == '__main__':
     t_start = time.time()
     phases = {}  # seconds per step, for /stats
 
-    v = TfidfVectorizer(
+    params = dict(
         input='content',
         encoding='utf-8',
         decode_error='replace',
@@ -75,55 +85,103 @@ if __name__ == '__main__':
         sublinear_tf=True,
         max_df=args.max_df,
         min_df=args.min_df,
+        dtype=np.float32,
     )
+    fit_params = {**params, 'max_docs': args.max_docs, 'dtype': 'float32'}
 
     pdb = get_papers_db()
     with get_refs_db() as rdb:  # a paper users added from another site may have reached arXiv since
         for old, new in merge_twins(pdb, rdb):
             print(f"{old} is on arXiv too, as {new}: merged into it")
-    pids = pdb.keys()
-
-    def make_corpus(training: bool):
-        assert isinstance(training, bool)
-
-        # determine which papers we will use to build tfidf
-        if training and args.max_docs > 0 and args.max_docs < len(pids):
-            # crop to a random subset of papers
-            keys = list(pids)
-            random.Random(0).shuffle(keys)  # the same sample every run, so the vocabulary is stable
-            keep = set(keys[: args.max_docs])
-        else:
-            keep = None
-
-        # yield the abstracts of the papers, streamed in the same order as pids
-        for pid, d in pdb.items():
-            if keep is not None and pid not in keep:
-                continue
-            author_str = ' '.join([a['name'] for a in d['authors']])
-            yield ' '.join([d['title'], d['summary'], author_str])
-
-    t0 = time.time()
-    print("training tfidf vectors...")
-    v.fit(make_corpus(training=True))
-
-    print("running inference...")
-    x = v.transform(make_corpus(training=False)).astype(np.float32)
-    assert x.shape[0] == len(pids), "papers were added while computing, run compute.py again"
-    print(x.shape)
-
+    times = pdb.times()
     # rows oldest first, so the papers of the last N days are one slice at the end, which
     # serve.py scores without copying anything (see _model_ranking)
-    times = pdb.times()
-    order = np.argsort([times[p] for p in pids], kind='stable')
-    pids = [pids[i] for i in order]
-    x = x[order]
+    pids = sorted(pdb.keys(), key=lambda p: times[p])
+
+    def text(d):
+        return ' '.join([d['title'], d['summary'], ' '.join(a['name'] for a in d['authors'])])
+
+    def sample():
+        """the papers the vocabulary and idf are learned from: the same random sample every run"""
+        if 0 < args.max_docs < len(pids):
+            keys = sorted(pids)
+            random.Random(0).shuffle(keys)
+            keep = set(keys[: args.max_docs])
+            for pid, d in pdb.items():
+                if pid in keep:
+                    yield text(d)
+        else:
+            for _, d in pdb.items():
+                yield text(d)
+
+    def stream(want):
+        """the texts of these papers, in this order (read in chunks, so memory stays small)"""
+        for i in range(0, len(want), 5000):
+            got = pdb.get_many(want[i : i + 5000])
+            yield from (text(got[p]) for p in want[i : i + 5000])
+
+    t0 = time.time()
+    # the vocabulary and idf are learned again only now and then (--refit, every REFIT_DAYS, or once the
+    # corpus grew by REFIT_GROWTH): in between, a paper's row depends on its text alone, so the rows of
+    # the papers that didn't change are taken over from the last features and only new ones are made
+    # (learning them takes ~1 min, making every row ~4: 721k papers, one core)
+    prev = None
+    if not args.refit:
+        try:
+            prev = load_features()
+        except Exception as e:  # none yet, or unreadable: everything from scratch
+            print(f"no earlier features to build on ({type(e).__name__})")
+        if prev is not None:
+            why = (
+                'the settings changed'
+                if prev.get('tfidf_params') != fit_params
+                else 'they are older than the row times'
+                if prev.get('x_time') is None
+                else f'the vocabulary is over {REFIT_DAYS} days old'
+                if time.time() - prev.get('tfidf_fit_time', 0) > REFIT_DAYS * 86400
+                else 'the corpus grew a lot'
+                if len(pids) > prev.get('tfidf_fit_n', 0) * (1 + REFIT_GROWTH)
+                else ''
+            )
+            if why:
+                print(f"learning the vocabulary again: {why}")
+                prev = None
+    if prev is None:
+        print("learning the tfidf vocabulary and idf...")
+        v = TfidfVectorizer(**params).fit(sample())
+        fit_time, fit_n = time.time(), len(pids)
+        todo = pids
+    else:
+        v = TfidfVectorizer(**{**params, 'vocabulary': prev['vocab']})
+        v.idf_ = prev['idf']
+        fit_time, fit_n = prev['tfidf_fit_time'], prev['tfidf_fit_n']
+        ptoi, ptime = prev['ptoi'], prev['x_time']
+        todo = [p for p in pids if p not in ptoi or ptime[ptoi[p]] != times[p]]  # new, or a new version
+    print(f"tfidf rows of {len(todo)} papers (of {len(pids)})...")
+    new_x = v.transform(stream(todo)) if todo else sp.csr_matrix((0, len(v.vocabulary_)), dtype=np.float32)
+    if prev is None:
+        x = new_x
+    else:
+        # the rows taken over and the new ones, put together in pids' order (one copy of the
+        # matrix besides the result: the old one is memory-mapped)
+        n_old, new_row = prev['x'].shape[0], {p: i for i, p in enumerate(todo)}
+        sel = np.array([n_old + new_row[p] if p in new_row else ptoi[p] for p in pids], dtype=np.int64)
+        both = sp.vstack([prev['x'], new_x], format='csr')
+        x = both[sel]
+        del both
+    x = x.astype(np.float32, copy=False)
+    print(x.shape)
     phases['tfidf'] = time.time() - t0
 
     features = {
         'pids': pids,
         'x': x,
+        'x_time': np.array([times[p] for p in pids], dtype=np.float64),  # which version a row was made from
         'vocab': v.vocabulary_,
-        'idf': v.idf_,
+        'idf': np.asarray(v.idf_),
+        'tfidf_params': fit_params,
+        'tfidf_fit_time': fit_time,
+        'tfidf_fit_n': fit_n,
     }
 
     n_emb = 0

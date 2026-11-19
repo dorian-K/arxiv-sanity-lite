@@ -901,6 +901,10 @@ def test_reading_offline_pack_and_pdfs(client, corpus, monkeypatch):
     assert next(p for p in toread['papers'] if p['id'] == pids[1])['note'] == 'for the flight'
     ids = [p['id'] for s in pack['sections'] for p in s['papers']]
     assert len(ids) == len(set(ids))  # a paper is in one section only
+    # the other saved papers (read ones too) come along for searching offline, without thumbnails
+    rest = next(s for s in pack['sections'] if s['key'] == 'saved')
+    assert rest['extra'] and [p['id'] for p in rest['papers']] == [pids[0]] and not rest['papers'][0]['thumb_url']
+    assert not toread['extra'] and 'the' in pack['stopwords']
     assert any(u.endswith('katex.min.js') for u in pack['warm'])
 
     # PDFs: only with the enrich daemon, which fetches them; only the asker gets them

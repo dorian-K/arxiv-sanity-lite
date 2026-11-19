@@ -923,3 +923,7 @@ details.danger form { margin-top: 10px; }
 
 /* where a search matched (static/app/highlight.js, CSS Custom Highlight API): a light marker */
 ::highlight(search) { background-color: var(--search-mark); color: inherit; }
+.pack-search { margin-top: 14px; }
+.pack-search > .form-control { width: 100%; }
+.pack-search-count { font-size: 13px; margin: 6px 0 8px; }
+.pack-extra-hint { font-size: 12px; color: var(--muted); margin: -4px 0 0; }

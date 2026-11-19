@@ -4,9 +4,11 @@
 // enrich_daemon.py fetches for it (/offline/pdfs; arXiv gets one request per paper at its pace,
 // so that takes minutes). everything goes into the Cache Storage PACK, which sw.js answers from
 // when the server can't be reached. votes, read marks and notes made offline wait in lib.js's
-// queue, and the pack on the device follows them (onPaperChange)
+// queue, and the pack on the device follows them (onPaperChange). the pack also has the rest of
+// the saved papers (closed, no summaries, thumbnails or PDFs), so the search box finds them offline
 import { html, useState, useEffect, store, api, me, offline, unsynced, flushChanges, refreshMe, onPaperChange, canEdit, pageReady } from 'app/lib';
 import { Paper, Page } from 'app/papers';
+import { matcher } from 'app/highlight';
 
 const PACK = 'pack-v1'; // as in sw.js
 const PACK_URL = '/ui/offline';
@@ -58,6 +60,8 @@ async function pdfsOnDevice() {
 }
 
 const allPapers = pack => pack.sections.flatMap(s => s.papers);
+// the papers the pack is for; the extra sections are only there to be searched
+const mainPapers = pack => pack.sections.filter(s => !s.extra).flatMap(s => s.papers);
 
 // a vote, read mark or note (sent or kept for later): the stored copy of the card follows
 const without = (l, t) => (l || []).filter(x => x !== t);
@@ -158,8 +162,8 @@ async function keepApp(extra) {
 async function summaries(pack) {
     const m = me.get();
     if (!m.summaries_ask) return;
-    let missing = allPapers(pack).filter(p => !p.ai).map(p => p.id);
-    const total = allPapers(pack).length;
+    let missing = mainPapers(pack).filter(p => !p.ai).map(p => p.id);
+    const total = mainPapers(pack).length;
     for (let round = 0; missing.length && round < SUMMARY_ROUNDS; round++) {
         patchJob({ summaries: [total - missing.length, total] });
         const got = {}, pending = [];
@@ -317,7 +321,7 @@ const Prepare = ({ pack, onDevice }) => {
         <p>Before a flight, get your papers onto this device: what is in To read, your latest digest and the best of For you,
             with their AI summaries and PDFs. They open here without a network; votes, read marks and notes you make
             offline are sent once you are back online.</p>
-        ${pack ? html`<p class="pack-status">On this device: ${allPapers(pack).length} papers from ${ago(pack.made)},
+        ${pack ? html`<p class="pack-status">On this device: ${mainPapers(pack).length} papers from ${ago(pack.made)},
             ${onDevice.size} PDFs${usage ? html` (${mb(usage)} in all)` : null}.</p>` : null}
         ${pack && pack.pdfs_on === false ? null : html`
         <fieldset class="pack-pdfs" title="the PDFs of these lists are downloaded to this device">
@@ -341,19 +345,75 @@ const Prepare = ({ pack, onDevice }) => {
 // a card whose PDF is on the device: its title and pdf link open that copy, its site gets a link of its own
 const onDeviceCard = p => ({ ...p, url: pdfPath(p.id), pdf: pdfPath(p.id), source_url: p.url });
 
+const PackPaper = ({ p, tag, onDevice }) => html`<div class="pack-paper">
+    ${onDevice.has(p.id) ? html`<a class="btn btn-small btn-primary pack-read" href=${pdfPath(p.id)}
+            title="the PDF, from this device">📄 Read the PDF</a>`
+        : p.offline_pdf === 'waiting' ? html`<span class="pack-pdf muted">PDF on its way to this device…</span>`
+        : p.offline_pdf === 'failed' ? html`<span class="pack-pdf muted">no PDF for offline (the server couldn't get it)</span>` : null}
+    <${Paper} paper=${onDevice.has(p.id) ? onDeviceCard(p) : p} quickTag=${tag || undefined} />
+</div>`;
+
 const PackSection = ({ s, onDevice }) => {
-    const [open, setOpen] = useState(true);
+    const [open, setOpen] = useState(!s.extra);
     return html`<section class="pack-section">
         <h2 class="pack-heading"><button class="linkbtn" aria-expanded=${open} onClick=${() => setOpen(!open)}>
             ${open ? '▾' : '▸'} ${s.title}</button> <span class="muted">${s.papers.length}</span></h2>
-        ${open ? html`<div class="rel_papers">${s.papers.map(p => html`<div class="pack-paper" key=${p.id}>
-            ${onDevice.has(p.id) ? html`<a class="btn btn-small btn-primary pack-read" href=${pdfPath(p.id)}
-                    title="the PDF, from this device">📄 Read the PDF</a>`
-                : p.offline_pdf === 'waiting' ? html`<span class="pack-pdf muted">PDF on its way to this device…</span>`
-                : p.offline_pdf === 'failed' ? html`<span class="pack-pdf muted">no PDF for offline (the server couldn't get it)</span>` : null}
-            <${Paper} paper=${onDevice.has(p.id) ? onDeviceCard(p) : p} quickTag=${s.tag || undefined} />
-        </div>`)}</div>` : null}
+        ${s.extra && !open ? html`<p class="hint pack-extra-hint">Kept for searching: no PDFs or thumbnails.</p>` : null}
+        ${open ? html`<div class="rel_papers">${s.papers.map(p => html`<${PackPaper} key=${p.id} p=${p} tag=${s.tag} onDevice=${onDevice} />`)}</div>` : null}
     </section>`;
+};
+
+// searching the pack, without a network: like the site's search, every word the query has (at a
+// word's start, stopwords left out), best where it is in the title, the note or the authors
+const SEARCH_SHOW = 50;
+const WORD_RE = /[\p{L}\p{N}]+/gu;
+const FIELDS = [
+    [p => p.title, 4], [p => p.note, 4], [p => p.authors, 3], [p => p.id, 3],
+    [p => (p.ai ? [p.ai.problem, p.ai.approach, p.ai.result, p.ai.caveat].join(' ') : ''), 1], [p => p.summary, 1],
+];
+const esc = w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const wordRe = w => new RegExp('(?<![\\p{L}\\p{N}])' + esc(w) + (w.length < 3 ? '(?![\\p{L}\\p{N}])' : ''), 'iu');
+
+export function searchPack(pack, q) {
+    const stop = new Set(pack.stopwords || []);
+    const words = (String(q).toLowerCase().match(WORD_RE) || []).slice(0, 8);
+    const terms = words.map(w => [w, stop.has(w)]);
+    let need = [...new Set(words.filter(w => !stop.has(w)))];
+    if (!need.length) need = [...new Set(words)];
+    if (!need.length) return { papers: [], terms };
+    const res = need.map(wordRe);
+    const seen = new Set(), found = [];
+    pack.sections.forEach(s => s.papers.forEach((p, i) => {
+        if (seen.has(p.id)) return;
+        seen.add(p.id);
+        const texts = FIELDS.map(([f, w]) => [String(f(p) || ''), w]);
+        let score = 0;
+        for (const re of res) {
+            const hits = texts.filter(([t]) => re.test(t));
+            if (!hits.length) return;
+            score += Math.max(...hits.map(([, w]) => w));
+        }
+        found.push({ p, tag: s.tag, score, order: found.length });
+    }));
+    found.sort((a, b) => b.score - a.score || a.order - b.order);
+    return { papers: found, terms };
+}
+
+const PackSearch = ({ pack, onDevice, page, children }) => {
+    const [q, setQ] = useState('');
+    const [all, setAll] = useState(false);
+    const res = q.trim() ? searchPack(pack, q) : null;
+    const shown = res ? (all ? res.papers : res.papers.slice(0, SEARCH_SHOW)) : [];
+    return html`<div class="pack-search">
+        <input class="form-control" type="search" value=${q} placeholder="Search the papers on this device"
+            aria-label="search the papers on this device" title="titles, authors, abstracts, AI summaries and your notes; works offline"
+            onInput=${e => { setQ(e.target.value); setAll(false); }} onKeyDown=${e => { if (e.key === 'Escape') setQ(''); }} />
+        ${res ? html`<p class="muted pack-search-count">${res.papers.length ? `${res.papers.length} of the ${new Set(allPapers(pack).map(p => p.id)).size} papers on this device match` : 'No paper on this device matches.'}</p>
+            <${Page.Provider} value=${{ ...page, hl: matcher(res.terms) }}>
+                <div class="rel_papers">${shown.map(r => html`<${PackPaper} key=${r.p.id} p=${r.p} tag=${r.tag} onDevice=${onDevice} />`)}</div>
+            </${Page.Provider}>
+            ${res.papers.length > shown.length ? html`<button class="btn" onClick=${() => setAll(true)}>Show all ${res.papers.length}</button>` : null}` : children}
+    </div>`;
 };
 
 export const OfflinePage = () => {
@@ -399,8 +459,10 @@ export const OfflinePage = () => {
             ${' '}<button class="linkbtn" onClick=${() => refreshMe().then(() => { offline.set(false); flushChanges(); }).catch(() => {})}
                     title="look whether the server can be reached again">Try to connect</button>
         </section>` : html`<${Prepare} pack=${pack} onDevice=${onDevice} />`}
-        ${pack ? html`<${Page.Provider} value=${page}>
-            ${pack.sections.map(s => html`<${PackSection} key=${s.key + s.title} s=${s} onDevice=${onDevice} />`)}
-        </${Page.Provider}>` : null}
+        ${pack ? html`<${PackSearch} pack=${pack} onDevice=${onDevice} page=${page}>
+            <${Page.Provider} value=${page}>
+                ${pack.sections.map(s => html`<${PackSection} key=${s.key + s.title} s=${s} onDevice=${onDevice} />`)}
+            </${Page.Provider}>
+        </${PackSearch}>` : null}
     </div>`;
 };

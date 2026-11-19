@@ -21,6 +21,7 @@ from collections import OrderedDict
 from itertools import zip_longest
 
 import numpy as np
+from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
 
 import click
 from flask import Flask, request, redirect, url_for, abort
@@ -642,12 +643,12 @@ def summaries():
     return {'summaries': ready, 'pending': pending}
 
 
-def render_pid(pid, d=None):
-    # render a single paper with just the information we need for the UI
+def render_pid(pid, d=None, thumb=True):
+    # render a single paper with just the information we need for the UI (thumb=False: without its thumbnail)
     tags = get_tags()
     neg_tags = get_neg_tags()
     d = d or get_papers()[pid]
-    t_url, t_label, t_license = thumb_info(pid)
+    t_url, t_label, t_license = thumb_info(pid) if thumb else ('', '', '')
     return dict(
         ai=summary_info(pid),
         weight=0.0,
@@ -1018,8 +1019,6 @@ def search_highlight(q):
     """
     if not q or find_paper_id(q):
         return []
-    from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
-
     return [[w, w in ENGLISH_STOP_WORDS] for w in re.findall(r'\w+', q.lower())[:8]]
 
 
@@ -2098,6 +2097,7 @@ def ui_page(name):
 
 OFFLINE_TO_READ = 40  # papers of To read in the pack, newest first
 OFFLINE_FOR_YOU = 20  # papers of For you (all tags, FOR_YOU_DAYS) besides those
+OFFLINE_SAVED_MAX = 1000  # the rest of the saved papers, read ones too, for searching offline (no thumbnails)
 OFFLINE_PDF_MAX = 60  # PDFs on a user's device at once (the newest set replaces the last)
 OFFLINE_QUEUE_MAX = 500  # PDFs waiting for the daemon, everyone's together
 ENRICH_PAUSE = float(os.environ.get('ENRICH_PAUSE') or 20)  # the daemon's, for the time estimate
@@ -2132,13 +2132,14 @@ def ui_offline():
     sections, taken = [], set()
     papers = get_papers()
 
-    def add(key, title, pids, tag=''):
+    def add(key, title, pids, tag='', extra=False):
         pids = [p for p in dict.fromkeys(pids) if p not in taken]
         found = papers.get_many(pids)
-        cards = [render_pid(p, found[p]) for p in pids if p in found]
+        cards = [render_pid(p, found[p], thumb=not extra) for p in pids if p in found]
         taken.update(c['id'] for c in cards)
         if cards:
-            sections.append({'key': key, 'title': title, 'tag': tag, 'papers': cards})
+            # extra: there to be searched, so the page shows it closed and gets no summaries or PDFs for it
+            sections.append({'key': key, 'title': title, 'tag': tag, 'papers': cards, 'extra': extra})
 
     add('toread', 'To read', unread_rank('all')[0][:OFFLINE_TO_READ])
     d = db.get_digest(g.user)
@@ -2151,6 +2152,7 @@ def ui_offline():
             add('foryou', 'For you', [p for p in res['pids'] if p not in taken][:OFFLINE_FOR_YOU])
         except Exception as e:  # the pack still has the rest
             print("offline pack, for you: %s" % (e,))
+    add('saved', 'All other saved papers', saved_rank('all')[0][:OFFLINE_SAVED_MAX], extra=True)
     states = pdf_offline_states(list(taken))
     for s in sections:
         for c in s['papers']:
@@ -2163,6 +2165,7 @@ def ui_offline():
         'pdf_max': OFFLINE_PDF_MAX,
         'keep_days': db.OFFLINE_KEEP_DAYS,
         'warm': offline_files(),
+        'stopwords': sorted(ENGLISH_STOP_WORDS),  # for searching the pack as the site searches
     }
 
 

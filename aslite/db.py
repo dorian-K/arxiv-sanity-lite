@@ -927,6 +927,11 @@ def get_notes(user, pids=None):
     return out
 
 
+def notes_by_time(user):
+    """[(pid, text, time)] of the user's notes, the latest written first"""
+    return _query('SELECT pid, text, time FROM notes WHERE user = ? ORDER BY time DESC', (user,))
+
+
 def set_note(user, pid, text):
     """the user's note on a paper; empty deletes it"""
     text = (text or '').strip()[:NOTE_MAX]

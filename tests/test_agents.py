@@ -108,6 +108,12 @@ def test_a_token_reads_and_organizes_the_users_papers(client, corpus):
     assert got['note'] == 'the segmentation baseline'
     got, _ = call(client, 'get_papers', token, ids=[vision[2]])
     assert got['papers'][0]['note'] == 'the segmentation baseline' and got['papers'][0]['saved_to'] == ['cv']
+    # notes are listed, and searched: a word only the note has finds the paper, first
+    got, _ = call(client, 'list_notes', token)
+    assert [p['id'] for p in got['papers']] == [vision[2]] and 'abstract' not in got['papers'][0]
+    got, _ = call(client, 'search', token, query='baselin')
+    assert got['papers'][0]['id'] == vision[2]
+    assert call(client, 'search', None, query='baselin')[0]['papers'] == []  # nobody else's notes
     call(client, 'mark_not_for', token, ids=[language[0]], tag='cv')
     assert db.get_tags('alice', neg=True) == {'cv': {language[0]}}
     got, _ = call(client, 'rank_like', token, like=vision[:2], exclude_rated=True, limit=20)
@@ -469,7 +475,7 @@ def test_tools_carry_titles_and_hints_for_connector_directories(client, corpus):
     login(client)
     token = make_token(client, 'write')
     tools = rpc(client, 'tools/list', token=token)['result']['tools']
-    assert len(tools) == 15
+    assert len(tools) == 16
     for t in tools:
         a = t['annotations']
         assert t['title'] and a['title'] == t['title'] and len(t['name']) <= 64

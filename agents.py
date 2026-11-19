@@ -189,9 +189,10 @@ def _top(pct):
 
 
 @tool(
-    """Full-text search over titles, authors and abstracts. Every word must match (word prefixes
-    count), falling back to any word when few papers have them all; best match first. For
-    "papers like these", rank_like is much better.""",
+    """Full-text search over titles, authors and abstracts, and (with a token) the user's own notes:
+    papers whose note has every word come first. Every word must match (word prefixes count),
+    falling back to any word when few papers have them all; best match first. For "papers like
+    these", rank_like is much better.""",
     {
         'query': {'type': 'string', 'maxLength': 500},
         'days': DAYS,
@@ -604,9 +605,23 @@ def mark_read(ids, read=True):
 
 
 @tool(
-    f"""Sets the user's note on a paper (shown on its card on the site; empty text deletes it).
-    At most {db.NOTE_MAX} characters. Replaces the note that was there: read it first with
-    get_papers to add to it.""",
+    """The user's notes on papers (written by them or their agents, Markdown), the latest written
+    first, with the papers. To find notes about a topic, search also looks through them.""",
+    {'limit': LIMIT, 'offset': OFFSET, 'abstracts': {**ABSTRACTS, 'default': False}},
+    access='user',
+    title='List my notes',
+)
+def list_notes(limit=20, offset=0, abstracts=False):
+    rows = [r for r in db.notes_by_time(g.user) if r[0] in site.get_papers()]
+    extra = {pid: {'note_written': _iso(t)} for pid, _, t in rows}
+    return _page([r[0] for r in rows], offset, limit, abstracts, extra, total=len(rows))
+
+
+@tool(
+    f"""Sets the user's note on a paper (shown on its card on the site, rendered as Markdown:
+    **bold**, *italic*, `code`, [links](url), - lists, $math$; empty text deletes it). At most
+    {db.NOTE_MAX} characters. Replaces the note that was there: read it first with get_papers or
+    list_notes to add to it. The site's search finds papers by their notes too.""",
     {'id': {'type': 'string', 'maxLength': 200}, 'text': {'type': 'string', 'maxLength': db.NOTE_MAX}},
     required=('id', 'text'),
     access='write',

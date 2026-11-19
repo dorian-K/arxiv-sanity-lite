@@ -981,3 +981,18 @@ def test_data_goes_out_gzipped(client):
     assert 'Content-Encoding' not in small.headers  # not worth it
     css = client.get('/static/style.css', headers={'Accept-Encoding': 'gzip'})
     assert 'Content-Encoding' not in css.headers  # send_file's, left alone
+
+
+def test_search_goes_over_the_notes(client, corpus):
+    pids = sorted(corpus)
+    login(client)
+    client.post(f'/note/{pids[7]}', data={'text': 'Read **again** for the Zorblax trick, see [here](https://x.org)'})
+    ids = lambda q: [p['id'] for p in client.get('/ui/list?q=' + q).get_json()['papers']]
+    assert ids('zorblax') == [pids[7]]  # a word only the note has, not "corrected" away
+    assert ids('zorbl trick')[0] == pids[7]  # word prefixes, every word
+    assert ids('zorblax nothere') == []
+    client.post(f'/note/{pids[7]}', data={'text': ''})
+    assert ids('zorblax') == []  # the cached result went with the note
+    client.post(f'/note/{pids[7]}', data={'text': 'zorblax'})
+    client.post('/logout')
+    assert ids('zorblax') == []  # only the user's own search finds their notes

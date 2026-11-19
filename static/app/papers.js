@@ -2,6 +2,7 @@
 // sections, the tag check and the model's words. used by the list, the digest and inspect
 import { html, useState, useEffect, useRef, useContext, createContext, store, api, load, tagRequest, me } from 'app/lib';
 import { MathText } from 'app/math';
+import { markdown, plainText } from 'app/markdown';
 
 // what the page around the cards is: its rank and tag, whose tags it shows (viewing someone's
 // shared page) and whether this user can vote there. userTags grows when a card makes a new tag
@@ -87,12 +88,35 @@ const openImage = (p, e) => {
     imageView.showModal();
 };
 
-// the user's note on a paper: shown under the abstract, edited in place (agents can write them too)
+// the user's note on a paper (Markdown, see markdown.js): always shown under the abstract, a long
+// one cut to a few lines with "show more"; edited in place (agents can write them too)
+const NOTE_LINES_PX = 110; // a note taller than this is cut
+const NoteView = ({ note, onEdit }) => {
+    const ref = useRef(null);
+    const [long, setLong] = useState(false);
+    const [open, setOpen] = useState(false);
+    useEffect(() => {
+        const elt = ref.current;
+        if (elt) setLong(elt.scrollHeight > NOTE_LINES_PX + 20);
+    }, [note]);
+    const edit = e => {
+        if (!onEdit || e.target.closest('a, button, .katex')) return;
+        if (window.getSelection && String(window.getSelection())) return; // selecting text to copy
+        onEdit();
+    };
+    return html`<div class=${'rel_note' + (long && !open ? ' clamped' : '') + (onEdit ? ' editable' : '')}
+            title=${onEdit ? 'your note (only you see it); click to edit' : 'your note (only you see it)'} onClick=${edit}>
+        <div class="rel_note_body" ref=${ref}>${markdown(note)}</div>
+        ${long ? html`<button type="button" class="linkbtn note_toggle" aria-expanded=${open}
+            onClick=${e => { e.stopPropagation(); setOpen(o => !o); }}>${open ? 'show less' : 'show more'}</button>` : null}
+    </div>`;
+};
+
 const NoteBox = ({ pid, note, setNote, editing, setEditing }) => {
     const [text, setText] = useState(note);
     const [busy, setBusy] = useState(false);
     if (!editing) {
-        return note ? html`<div class="rel_note" title="your note (only you see it)" onClick=${() => { setText(note); setEditing(true); }}>${note}</div>` : null;
+        return note ? html`<${NoteView} note=${note} onEdit=${setNote && (() => { setText(note); setEditing(true); })} />` : null;
     }
     const save = () => {
         setBusy(true);
@@ -105,10 +129,12 @@ const NoteBox = ({ pid, note, setNote, editing, setEditing }) => {
             .finally(() => setBusy(false));
     };
     return html`<div class="rel_note_edit">
-        <textarea class="form-control" rows="3" maxlength="5000" placeholder="Why you saved it, what to remember… (only you see it)"
-                  value=${text} onInput=${e => setText(e.target.value)} />
+        <textarea class="form-control" rows="4" maxlength="5000" placeholder="Why you saved it, what to remember… (only you see it)"
+                  value=${text} onInput=${e => setText(e.target.value)} ref=${e => e && !e.dataset.focused && (e.dataset.focused = '1', e.focus())}
+                  onKeyDown=${e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) save(); if (e.key === 'Escape') setEditing(false); }} />
         <div><button class="btn btn-small btn-primary" disabled=${busy} onClick=${save}>Save note</button>
-            <button class="btn btn-small" onClick=${() => setEditing(false)}>Cancel</button></div>
+            <button class="btn btn-small" onClick=${() => setEditing(false)}>Cancel</button>
+            <span class="hint">Markdown: **bold**, *italic*, \`code\`, [link](url), - lists, $math$. Ctrl+Enter saves</span></div>
     </div>`;
 };
 
@@ -342,7 +368,7 @@ export const Paper = ({ paper: p, quickTag, tagFit }) => {
             ${score}
             <a class="rel_title_c" href=${p.url}><${MathText} text=${p.title} /></a>
             ${utags.length ? html`<span class="rel_saved" title=${'saved to ' + utags.join(', ')}>★</span>` : null}
-            ${note ? html`<span class="rel_note_c" title=${'your note: ' + note}>✎</span>` : null}
+            ${note ? html`<span class="rel_note_c" title=${'your note: ' + plainText(note)}>✎ ${plainText(note)}</span>` : null}
             ${p.venue ? html`<span class="rel_venue_c" title=${p.venue + ' (' + venueNote(p) + ')'}>✓</span>` : null}
             <span class="rel_time">${p.time}</span>
             ${readBox}
@@ -402,7 +428,7 @@ export const Paper = ({ paper: p, quickTag, tagFit }) => {
             ${long ? html`<button type="button" class=${'linkbtn abs_toggle' + (open ? '' : ' over')} aria-expanded=${open}
                     onClick=${e => { e.stopPropagation(); setOpen(o => !o); }}>${open ? ' show less' : html`<span class="abs_dots">… </span>reveal more`}</button>` : null}
         </div>`}
-        ${canEdit || note ? html`<${NoteBox} pid=${p.id} note=${note} setNote=${setNote}
+        ${canEdit || note ? html`<${NoteBox} pid=${p.id} note=${note} setNote=${canEdit ? setNote : null}
             editing=${canEdit && editingNote} setEditing=${setEditingNote} />` : null}
         <div class="rel_links">
             <a href=${p.pdf}>pdf</a>

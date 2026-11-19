@@ -989,7 +989,30 @@ def missing_paper(q):
     return {'pid': pid, 'source': src.label, 'url': src.abs_url(pid)}
 
 
+def note_matches(q):
+    """
+    the papers whose note (the user's own, on their own pages) has every word of the query, at the
+    start of a word ('diffus' finds diffusion), the most mentions first. a user has few notes: a scan
+    """
+    notes = get_notes()
+    if not notes or not q:
+        return []
+    words = [w for w in re.findall(r'\w+', q.lower()) if len(w) > 1]
+    if not words:
+        return []
+    pats = [re.compile(r'(?<!\w)' + re.escape(w)) for w in words]
+    hits = []
+    for pid, text in notes.items():
+        low = text.lower()
+        counts = [len(p.findall(low)) for p in pats]
+        if all(counts):
+            hits.append((-sum(counts), pid))
+    papers = get_papers()
+    return [pid for _, pid in sorted(hits) if pid in papers]
+
+
 def search_rank(q: str = ''):
+    """(pids, scores) of a search: the papers whose note matches first (note_matches), then the full-text index's"""
     if not q:
         return [], []  # no query? no results
     # a paper's link or id in the query: show that paper first
@@ -997,6 +1020,13 @@ def search_rank(q: str = ''):
     if pid and pid not in get_papers() and len(q.split()) == 1:
         return [], []  # just a link to a paper that isn't here: the page offers to add it (missing_paper)
     pids, scores = get_papers().search(q)  # full-text index, see aslite/db.py
+    noted = note_matches(q)
+    if noted:
+        top = max(scores, default=0) + 1
+        seen = set(noted)
+        rest = [(p, sc) for p, sc in zip(pids, scores, strict=True) if p not in seen]
+        pids = noted + [p for p, _ in rest]
+        scores = [top + len(noted) - i for i in range(len(noted))] + [sc for _, sc in rest]
     if pid and pid in get_papers():
         pids, scores = (
             [pid] + [p for p in pids if p != pid],
@@ -1273,7 +1303,13 @@ def ui_list():
         opt_rank = 'search'
     # typos fixed ('difusion' -> 'diffusion'), unless the user asked for exactly what they typed
     corrected = ''
-    if opt_rank == 'search' and opt_q and request.args.get('exact') != 'yes' and not find_paper_id(opt_q):
+    if (
+        opt_rank == 'search'
+        and opt_q
+        and request.args.get('exact') != 'yes'
+        and not find_paper_id(opt_q)
+        and not note_matches(opt_q)  # a word of the user's own notes is no typo
+    ):
         try:
             speller = get_speller()
             corrected = (speller and speller.correct(opt_q, get_papers().term_docs)) or ''
@@ -1324,6 +1360,8 @@ def ui_list():
     )
     cacheable = opt_rank in ('search', 'tags', 'pid') and page_number * RET_NUM <= RANK_CACHE_RESULTS
     key = (g.owner, query, features_ok and db.features_version(), db.db_mtime(PAPERS_DB_FILE), _tags_fingerprint())
+    if opt_rank == 'search':
+        key += (hash(frozenset(get_notes().items())),)  # searches go over the notes too
     res = _rank_cache_get(key) if cacheable else None
     if res is None:
         if opt_rank in ('tags', 'pid', 'search') and rate_limited('search' if opt_rank == 'search' else 'rank'):

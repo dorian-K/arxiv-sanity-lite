@@ -7,8 +7,9 @@
 // queue, and the pack on the device follows them (onPaperChange). the pack also has the rest of
 // the saved papers (closed, no summaries, thumbnails or PDFs), so the search box finds them offline.
 // a PDF whose paper leaves the PDF set (read, out of the digest) but stays in the pack isn't deleted:
-// it becomes a light copy (shrink.js: the same text and fonts, images scaled down to JPEG), up to
-// LIGHT_BUDGET for all of them, the oldest let go of first
+// it becomes a light copy of at most ~200 kB (shrink.js: smaller images, the reader's own fonts for
+// the text, and for long papers only their first pages), up to LIGHT_BUDGET for all of them, the
+// oldest let go of first
 import { html, useState, useEffect, store, api, me, offline, unsynced, flushChanges, refreshMe, onPaperChange, canEdit, pageReady } from 'app/lib';
 import { Paper, Page } from 'app/papers';
 import { matcher } from 'app/highlight';
@@ -22,7 +23,7 @@ const DEVICE_TRIES = 3; // downloads of one PDF to the device before giving it u
 const SUMMARY_ROUNDS = 60; // ~3 minutes of asking for AI summaries
 const LIGHT = 'X-Resanity-Light'; // header of a light copy on the device: its size in bytes
 const LIGHT_BUDGET = 300e6; // bytes of light copies on the device, all together
-const LIGHT_MAX_ONE = 3e6; // a light copy bigger than this (nothing in it to shrink) isn't kept
+const LIGHT_MAX_ONE = 300e3; // a PDF that can't be made this small (pdf-lib can't read it) isn't kept
 
 const hasCaches = () => typeof caches !== 'undefined';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -221,12 +222,13 @@ export async function lighten(pids, inPack) {
     for (const [i, pid] of pids.entries()) {
         const r = await c.match(pdfPath(pid));
         if (!r || !inPack.has(pid)) { await c.delete(pdfPath(pid)); continue; }
-        patchJob({ step: `Making light copies of the PDFs you no longer need in full: ${i + 1} of ${pids.length}…` });
+        const head = `Making light copies of the PDFs you no longer need in full: ${i + 1} of ${pids.length}`;
+        patchJob({ step: head + '…' });
         const bytes = new Uint8Array(await r.arrayBuffer());
         let light = null;
         try {
             shrinkPdf = shrinkPdf || (await import('app/shrink')).shrinkPdf;
-            light = await shrinkPdf(bytes);
+            light = await shrinkPdf(bytes, { progress: t => patchJob({ step: `${head} (${t})…` }) });
         } catch (e) { /* kept as it is if it is small, else let go of */ }
         const out = light || bytes;
         if (out.length > LIGHT_MAX_ONE) { await c.delete(pdfPath(pid)); continue; }
@@ -404,7 +406,7 @@ const PackPaper = ({ p, tag, onDevice }) => html`<div class="pack-paper">
     ${onDevice.get(p.id) === 'full' ? html`<a class="btn btn-small btn-primary pack-read" href=${pdfPath(p.id)}
             title="the PDF, from this device">📄 Read the PDF</a>`
         : onDevice.get(p.id) === 'light' ? html`<a class="btn btn-small pack-read" href=${pdfPath(p.id)}
-            title="kept with smaller images, to save space on this device: the text is all there">📄 Read the PDF (light copy)</a>`
+            title="kept small to save space on this device: smaller images (or gray boxes), standard fonts for the text, long papers cut short (the copy says where)">📄 Read the PDF (light copy)</a>`
         : p.offline_pdf === 'waiting' ? html`<span class="pack-pdf muted">PDF on its way to this device…</span>`
         : p.offline_pdf === 'failed' ? html`<span class="pack-pdf muted">no PDF for offline (the server couldn't get it)</span>` : null}
     <${Paper} paper=${onDevice.has(p.id) ? onDeviceCard(p) : p} quickTag=${tag || undefined} />

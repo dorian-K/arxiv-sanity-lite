@@ -22,6 +22,7 @@ const PDF_TIMEOUT = 5 * 60000; // one PDF's download to the device
 const DEVICE_TRIES = 3; // downloads of one PDF to the device before giving it up
 const SUMMARY_ROUNDS = 60; // ~3 minutes of asking for AI summaries
 const LIGHT = 'X-Resanity-Light'; // header of a light copy on the device: its size in bytes
+const PACKED = 'X-Resanity-Packed'; // a light copy stored packed by shrink.js (sw.js unpacks it)
 const LIGHT_BUDGET = 300e6; // bytes of light copies on the device, all together
 const LIGHT_MAX_ONE = 300e3; // a PDF that can't be made this small (pdf-lib can't read it) isn't kept
 
@@ -234,9 +235,9 @@ export async function lighten(pids, inPack) {
         if (out.length > LIGHT_MAX_ONE) { await c.delete(pdfPath(pid)); continue; }
         try {
             await c.delete(pdfPath(pid)); // so the copy goes to the end of the order: the newest
-            await c.put(pdfPath(pid), new Response(new Blob([out], { type: 'application/pdf' }), {
-                headers: { 'Content-Type': 'application/pdf', 'Content-Length': String(out.length), [LIGHT]: String(out.length) },
-            }));
+            const headers = { 'Content-Type': 'application/pdf', 'Content-Length': String(out.length), [LIGHT]: String(out.length) };
+            if (light) headers[PACKED] = '1';
+            await c.put(pdfPath(pid), new Response(new Blob([out]), { headers }));
         } catch (e) { /* no room: it is gone, as it was before light copies */ }
     }
     let total = 0;

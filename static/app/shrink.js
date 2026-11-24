@@ -1,14 +1,18 @@
 // a light copy of a PDF, made on the device (offline.js, for papers that leave the offline set),
-// aiming at TARGET bytes. it goes step by step and stops at the first that is small enough:
+// aiming at TARGET bytes as stored. it is stored packed (see pack(): the PDF with its streams
+// uncompressed and its Type 1 fonts decrypted, LZMA-compressed as a whole, which takes a third or
+// less of what the same PDF does; sw.js unpacks it when it is opened). it goes step by step and
+// stops at the first that is small enough:
 //   1. what no reader needs goes (XMP metadata, the info dicts of included figures, which can hold
 //      a whole draw.io source, tagging, colour profiles, embedded files); raster images (photos,
 //      screenshots, plots saved as PNG) are scaled down and stored as JPEG
 //   2. text fonts are left out and drawn with the reader's own Times, Helvetica or Courier (the 14
 //      standard fonts every PDF reader has; the widths stay, so lines and spacing don't move). math
 //      and symbol fonts stay: a stand-in would turn the symbols into wrong letters
-//   3. images smaller still
+//   3. images smaller still (400, then 250 px)
 //   4. images become gray boxes
-//   5. big vector drawings become gray boxes, and if that isn't enough,
+//   5. big vector drawings become gray boxes, text fonts with glyphs beyond Latin (Δ, arrows) go too,
+//      and if that isn't enough,
 //      a long paper keeps its first pages, as many as fit, and a last page saying what was left out
 //      (appendices go first, then the references)
 // text and layout of the pages kept never change. images it can't read safely (CMYK, JPEG 2000, 16-bit,
@@ -20,12 +24,16 @@ const STEPS = [
     { side: 800, quality: 0.5 },
     { side: 800, quality: 0.5, fonts: true },
     { side: 400, quality: 0.35, fonts: true },
+    { side: 250, quality: 0.3, fonts: true },
     { side: 0, fonts: true },
-    { side: 0, fonts: true, drawings: true, pages: true },
+    { side: 0, fonts: 'all', drawings: true, pages: true },
 ];
 const MIN_BYTES = 8000; // smaller images stay as they are
 const MAX_PIXELS = 40e6; // bigger ones aren't decoded (a phone's memory), only boxed in step 4
-const BIG_DRAWING = 30000; // bytes of a vector drawing (form xobject) that step 5 boxes
+const BIG_DRAWING = 120e3; // bytes of a vector drawing (form xobject, uncompressed) that step 5 boxes
+const GUESS = 0.85; // packed size / gzip size until one packing has measured it (LZMA does better)
+const LZMA_URL = '/static/vendor/lzma-2.3.2/src/lzma_worker-min.js'; // a classic script: sets window.LZMA
+const MAGIC = 'RSPDF1'; // as in sw.js
 const GRAY = 0.9; // the boxes
 
 const N = PDFName.of;
@@ -313,6 +321,28 @@ const SANS = /sans|arial|helvetica|verdana|calibri|myriad|segoe|tahoma|roboto|la
 const BOLD = /bold|medi|semibold|demi|heavy|black|cmbx|cmb\d|bx\d/i;
 const ITALIC = /ital|oblique|slant|cmti|cmsl|cmmi|-it\b|-it[a-z]|kursiv|ti\d+$/i;
 
+// glyphs the standard Times, Helvetica and Courier have (Adobe's standard Latin set, and TeX's ff ligatures,
+// which the readers draw fine); a text font using any other (CMR's Greek capitals in math, arrows) stays
+const LATIN = new RegExp('^([A-Za-z]|[A-Za-z]{1,2}(acute|grave|circumflex|dieresis|tilde|ring|cedilla|caron|breve|macron|ogonek|dotaccent|hungarumlaut|commaaccent)|' +
+    'zero|one|two|three|four|five|six|seven|eight|nine|space|nbspace|exclam|quotedbl|numbersign|dollar|percent|ampersand|' +
+    'quoteright|quoteleft|quotesingle|parenleft|parenright|asterisk|plus|comma|hyphen|period|slash|colon|semicolon|less|' +
+    'equal|greater|question|at|bracketleft|backslash|bracketright|asciicircum|underscore|grave|braceleft|bar|braceright|' +
+    'asciitilde|exclamdown|cent|sterling|fraction|yen|florin|section|currency|quotedblleft|quotedblright|quotesinglbase|' +
+    'quotedblbase|guillemotleft|guillemotright|guilsinglleft|guilsinglright|fi|fl|ff|ffi|ffl|endash|emdash|dagger|' +
+    'daggerdbl|periodcentered|paragraph|bullet|ellipsis|perthousand|questiondown|acute|circumflex|tilde|macron|breve|' +
+    'dotaccent|dieresis|ring|cedilla|hungarumlaut|ogonek|caron|AE|ae|OE|oe|Oslash|oslash|Lslash|lslash|dotlessi|' +
+    'germandbls|Eth|eth|Thorn|thorn|copyright|registered|trademark|degree|plusminus|multiply|divide|minus|logicalnot|' +
+    'mu|onehalf|onequarter|threequarters|onesuperior|twosuperior|threesuperior|ordfeminine|ordmasculine|brokenbar|' +
+    'visiblespace|cwm|compwordmark|\\.notdef)$');
+
+// the glyphs a simple font has: its subset's CharSet, else every name its encoding gives
+function glyphNames(font, fd) {
+    const cs = fd.lookup(N('CharSet'));
+    if (cs instanceof PDFString || cs instanceof PDFHexString) return cs.decodeText().split('/').filter(Boolean);
+    const enc = font.lookup(N('Encoding'));
+    return enc instanceof PDFDict ? [...differences(enc).values()] : [];
+}
+
 const STD = {
     serif: ['Times-Roman', 'Times-Bold', 'Times-Italic', 'Times-BoldItalic'],
     sans: ['Helvetica', 'Helvetica-Bold', 'Helvetica-Oblique', 'Helvetica-BoldOblique'],
@@ -375,7 +405,7 @@ const FONT_FILES = ['FontFile', 'FontFile2', 'FontFile3', 'CIDSet', 'CharSet'];
 
 // simple text fonts (Type 1, TrueType, CFF) without their programs, as the standard font of their
 // style; composite ones (Word's, PowerPoint's) without theirs, read through their ToUnicode map
-function dropTextFonts(doc) {
+function dropTextFonts(doc, all) {
     const { context } = doc;
     for (const [, font] of context.enumerateIndirectObjects()) {
         try {
@@ -398,6 +428,8 @@ function dropTextFonts(doc) {
             const name = fontName(font);
             if (!name || MATH_FONT.test(name)) continue;
             if (!spellOutEncoding(context, font, fd.lookup(N(kind)), kind)) continue;
+            // Δ, ↓, ...: the standard fonts lack them, so such a font goes only when pages would go otherwise
+            if (!all && glyphNames(font, fd).some(g => !LATIN.test(g))) continue;
             const flags = num(fd, 'Flags') || 0;
             const bold = BOLD.test(name) || (num(fd, 'FontWeight') || 0) >= 600;
             const italic = ITALIC.test(name) || (num(fd, 'ItalicAngle') || 0) !== 0 || (flags & 64) !== 0;
@@ -465,8 +497,128 @@ async function keepPages(doc, keep, cut) {
 
 // -----------------------------------------------------------------------------
 
-// bytes of the light copy (the smallest step that reaches `target`, else the smallest of them), or
-// null when it can't be read or comes out no smaller. progress(text) says how far it is
+// -----------------------------------------------------------------------------
+// packing: what is stored on the device. general-purpose compression over the whole file finds
+// what each stream's own Flate can't (the same words and operators on every page), and Type 1
+// fonts compress 3-6x better decrypted (their eexec part is encrypted, so it looks random). the
+// eexec cipher is undone exactly by redoing it, so the PDF comes back byte for byte:
+//   'RSPDF1', uint32 length of a JSON header {eexec: [[offset, length], ...]}, the header,
+//   LZMA of (a 0 byte, which keeps lzma-js from handing back text, + the PDF with those parts decrypted)
+
+const PLAIN_FILTERS = new Set(['FlateDecode', 'LZWDecode', 'ASCII85Decode', 'ASCIIHexDecode', 'RunLengthDecode']);
+
+// every stream but images uncompressed (the packing compresses them better, all together)
+function decodeStreams(doc) {
+    const { context } = doc;
+    for (const [ref, o] of context.enumerateIndirectObjects()) {
+        if (!isStream(o) || o.dict.lookup(N('Subtype')) === N('Image')) continue;
+        const f = o.dict.lookup(N('Filter'));
+        if (!f) continue;
+        const filters = f instanceof PDFArray ? f.asArray().map(x => context.lookup(x)) : [f];
+        if (!filters.every(x => x instanceof PDFName && PLAIN_FILTERS.has(x.decodeText()))) continue;
+        const parms = o.dict.lookup(N('DecodeParms'));
+        if (parms instanceof PDFDict || parms instanceof PDFArray) continue; // predictors aren't undone by pdf-lib
+        try {
+            const data = decodePDFRawStream(o).decode();
+            const d = o.dict.clone(context);
+            d.delete(N('Filter'));
+            d.delete(N('DecodeParms'));
+            context.assign(ref, PDFRawStream.of(d, data));
+        } catch (e) {
+            // stays compressed
+        }
+    }
+}
+
+// Type 1 eexec: the same r feeds on the cipher byte both ways, so encrypt(decrypt(x)) is x for any bytes
+function eexec(buf, decrypt) {
+    let r = 55665;
+    for (let i = 0; i < buf.length; i++) {
+        const b = buf[i];
+        const out = b ^ (r >> 8);
+        r = (((decrypt ? b : out) + r) * 52845 + 22719) & 0xffff;
+        buf[i] = out;
+    }
+}
+
+function find(hay, needle, from = 0) {
+    const first = needle[0];
+    for (let i = hay.indexOf(first, from); i >= 0 && i <= hay.length - needle.length; i = hay.indexOf(first, i + 1)) {
+        let j = 1;
+        while (j < needle.length && hay[i + j] === needle[j]) j++;
+        if (j === needle.length) return i;
+    }
+    return -1;
+}
+
+// {plain, regions}: what gets compressed, from the saved PDF and the document it was saved from
+function prepare(pdf, doc) {
+    const plain = new Uint8Array(pdf.length + 1);
+    plain.set(pdf, 1);
+    const regions = [];
+    const taken = new Set();
+    for (const [, fd] of doc.context.enumerateIndirectObjects()) {
+        if (!(fd instanceof PDFDict) || fd.lookup(N('Type')) !== N('FontDescriptor')) continue;
+        const file = fd.lookup(N('FontFile'));
+        if (!isStream(file) || file.dict.lookup(N('Filter'))) continue;
+        const l1 = num(file.dict, 'Length1'), l2 = num(file.dict, 'Length2');
+        if (!l1 || !l2 || l1 + l2 > file.contents.length || l2 < 64) continue;
+        const part = file.contents.subarray(l1, l1 + l2);
+        let at = find(pdf, part.subarray(0, 64));
+        while (at >= 0 && taken.has(at)) at = find(pdf, part.subarray(0, 64), at + 1);
+        if (at < 0) continue;
+        taken.add(at);
+        eexec(plain.subarray(at + 1, at + 1 + l2), true);
+        regions.push([at, l2]);
+    }
+    return { pdf, plain, regions };
+}
+
+let lzmaLoad = null;
+function lzma() {
+    if (globalThis.LZMA && globalThis.LZMA.compress) return Promise.resolve(globalThis.LZMA);
+    lzmaLoad = lzmaLoad || new Promise((res, rej) => {
+        const el = document.createElement('script');
+        el.src = LZMA_URL;
+        el.onload = () => res(globalThis.LZMA);
+        el.onerror = () => { lzmaLoad = null; rej(new Error("the compressor didn't load")); };
+        document.head.appendChild(el);
+    });
+    return lzmaLoad;
+}
+
+const gzipSize = async b => (await new Response(new Blob([b]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer()).byteLength;
+
+async function pack({ plain, regions }) {
+    const L = await lzma();
+    const z = await new Promise((res, rej) => L.compress(plain, 1, (r, e) => (e ? rej(e) : res(r))));
+    const head = new TextEncoder().encode(JSON.stringify({ eexec: regions }));
+    const out = new Uint8Array(10 + head.length + z.length);
+    out.set(new TextEncoder().encode(MAGIC));
+    new DataView(out.buffer).setUint32(6, head.length);
+    out.set(head, 10);
+    out.set(Uint8Array.from(z), 10 + head.length); // lzma-js gives signed bytes
+    return out;
+}
+
+export const isPacked = b => b.length > 10 && new TextDecoder().decode(b.subarray(0, 6)) === MAGIC;
+
+// the PDF back from what pack() made
+export async function unpackPdf(b) {
+    const L = await lzma();
+    const n = new DataView(b.buffer, b.byteOffset).getUint32(6);
+    const { eexec: regions } = JSON.parse(new TextDecoder().decode(b.subarray(10, 10 + n)));
+    const plain = await new Promise((res, rej) => L.decompress(b.subarray(10 + n), (r, e) => (e ? rej(e) : res(r))));
+    if (typeof plain === 'string' || plain[0] !== 0) throw new Error('not a packed PDF');
+    const pdf = Uint8Array.from(plain).subarray(1);
+    for (const [at, len] of regions.slice().reverse()) eexec(pdf.subarray(at, at + len), false);
+    return pdf;
+}
+
+// -----------------------------------------------------------------------------
+
+// the packed light copy (the first step whose copy fits in `target`, else the smallest it got),
+// or null when the PDF can't be read or it can't be packed safely. progress(text) says how far it is
 export async function shrinkPdf(bytes, { target = TARGET, progress = () => {} } = {}) {
     let doc;
     try {
@@ -475,36 +627,66 @@ export async function shrinkPdf(bytes, { target = TARGET, progress = () => {} } 
         return null; // encrypted, or broken beyond what pdf-lib reads
     }
     strip(doc);
-    let best = null;
+    decodeStreams(doc);
+    // the size packed, guessed from gzip (native, fast) of all but the JPEGs (which neither compresses),
+    // at the ratio LZMA got over gzip on the rest, once measured
+    let ratio = null;
+    const save = d => d.save({ useObjectStreams: false, updateFieldAppearances: false });
+    const jpegBytes = d => imagesOf(d.context).reduce((n, [, o]) => n + (filterOf(o.dict) === N('DCTDecode') ? o.contents.length : 0), 0);
+    const guess = async (p, d) => {
+        const j = jpegBytes(d);
+        return j + Math.max(0, (await gzipSize(p.plain)) - j) * (ratio ?? GUESS);
+    };
+    const packed = async (p, d) => {
+        progress('compressing');
+        const out = await pack(p);
+        const j = jpegBytes(d);
+        ratio = Math.max(0.1, (out.length - j) / Math.max(1, (await gzipSize(p.plain)) - j));
+        return out;
+    };
+    let chosen = null;
     for (const [i, step] of STEPS.entries()) {
+        const last = i === STEPS.length - 1;
         const say = (done, total) => progress(`step ${i + 1} of ${STEPS.length}, image ${done} of ${total}`);
         if (step.side) await shrinkImages(doc, step.side, step.quality, say);
         else boxImages(doc);
-        if (step.fonts) dropTextFonts(doc);
+        if (step.fonts) dropTextFonts(doc, step.fonts === 'all');
         if (step.drawings) boxDrawings(doc);
         collectGarbage(doc);
         progress(`step ${i + 1} of ${STEPS.length}, saving`);
         await tick();
-        let out = await doc.save({ useObjectStreams: true, updateFieldAppearances: false });
-        if (step.pages && out.length > target) {
-            // the most first pages that fit, found by halving (each try starts from the copy so far)
-            const base = out;
+        let p = prepare(await save(doc), doc);
+        let pd = doc;
+        let est = await guess(p, doc);
+        // it might fit: measure (the guess can be off either way)
+        if (est > target && est * 0.6 <= target) {
+            const out = await packed(p, doc);
+            if (out.length <= target) { chosen = { p, out }; break; }
+            est = out.length;
+        }
+        if (step.pages && est > target) {
+            // the most first pages that fit, found by halving (each try starts from this step's copy)
             const total = doc.getPageCount();
             let lo = 1, hi = total - 1, fit = null;
             while (lo <= hi) {
                 const keep = (lo + hi) >> 1;
                 progress(`step ${i + 1} of ${STEPS.length}, trying ${keep} of ${total} pages`);
-                const d = await PDFDocument.load(base, { updateMetadata: false });
+                const d = await PDFDocument.load(p.pdf, { updateMetadata: false });
                 await keepPages(d, keep, { total });
                 collectGarbage(d);
-                const tried = await d.save({ useObjectStreams: true, updateFieldAppearances: false });
-                if (tried.length <= target) { fit = tried; lo = keep + 1; } else hi = keep - 1;
-                if (!fit || tried.length < fit.length) out = tried;
+                const tried = prepare(await save(d), d);
+                if ((await guess(tried, d)) <= target * 0.97) { fit = { p: tried, d }; lo = keep + 1; } else hi = keep - 1;
             }
-            if (fit) out = fit;
+            if (fit) { p = fit.p; pd = fit.d; est = await guess(p, pd); }
         }
-        if (!best || out.length < best.length) best = out;
-        if (out.length <= target) break;
+        if (est <= target || last) {
+            const out = await packed(p, pd);
+            chosen = { p, out };
+            if (out.length <= target || last) break;
+        }
     }
-    return best.length < bytes.byteLength * 0.9 ? best : null;
+    // it must come back byte for byte, or it isn't kept
+    const back = await unpackPdf(chosen.out);
+    if (back.length !== chosen.p.pdf.length || back.some((v, k) => v !== chosen.p.pdf[k])) return null;
+    return chosen.out;
 }

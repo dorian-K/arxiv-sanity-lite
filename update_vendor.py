@@ -23,6 +23,8 @@ PACKAGES = {
     # the css refers to fonts/ next to it; woff2 is what every current browser picks
     # read and rewritten on the device: old offline PDFs keep their text and fonts, with their images shrunk (static/app/shrink.js)
     'pdf-lib': ('1.17.1', ['dist/pdf-lib.esm.min.js', 'LICENSE.md']),
+    # LZMA for the light copies on the device (packed by shrink.js, unpacked by sw.js); classic scripts
+    'lzma': ('2.3.2', ['src/lzma_worker-min.js', 'src/lzma-d-min.js', 'LICENSE']),
     'katex': ('0.16.11', ['dist/katex.min.css', 'dist/katex.min.js', 'dist/contrib/auto-render.min.js', 'LICENSE']),
 }
 DEST = os.path.join('static', 'vendor')

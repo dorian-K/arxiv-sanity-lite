@@ -6,12 +6,20 @@
 //   versioned static files (?v=, vendor/): from the device once fetched (they never change
 //     under their url); versions the kept html doesn't name are dropped when it is replaced
 //   the reading pack (static/app/offline.js writes it into PACK): PDFs from the device first,
-//     thumbnails from the server, else the device
+//     thumbnails from the server, else the device. light copies (X-Resanity-Packed) are stored
+//     packed by static/app/shrink.js and unpacked here (unpack: LZMA, then the Type 1 fonts'
+//     eexec cipher redone), so the reader gets the PDF itself
 // a broken service worker could keep the site from loading: keep this small. to take it off
 // everyone's browsers, serve one whose install calls self.registration.unregister()
 const SHELL = 'shell-v1';
 const STATIC = 'static-v1';
 const PACK = 'pack-v1'; // as in offline.js
+const PACKED = 'X-Resanity-Packed'; // as in offline.js
+try {
+    importScripts('/static/vendor/lzma-2.3.2/src/lzma-d-min.js'); // self.LZMA
+} catch (e) {
+    // light copies can't be opened, everything else works
+}
 const SLOW_PAGE = 3000; // ms the server gets for a page before the copy on the device is shown
 const APP_PATHS = ['/', '/digest', '/profile', '/import', '/inspect', '/stats', '/agents', '/graph', '/offline', '/about', '/privacy', '/imprint'];
 
@@ -72,8 +80,29 @@ async function staticFile(req, url, e) {
     return r;
 }
 
+// shrink.js's pack(), undone: 'RSPDF1', uint32 header length, JSON header, LZMA of (0, the PDF with eexec parts decrypted)
+async function unpack(r) {
+    const b = new Uint8Array(await r.arrayBuffer());
+    const n = new DataView(b.buffer).getUint32(6);
+    const head = JSON.parse(new TextDecoder().decode(b.subarray(10, 10 + n)));
+    const plain = await new Promise((res, rej) => self.LZMA.decompress(b.subarray(10 + n), (x, err) => (err ? rej(err) : res(x))));
+    const pdf = Uint8Array.from(plain).subarray(1);
+    for (const [at, len] of head.eexec.slice().reverse()) {
+        let k = 55665;
+        for (let i = at; i < at + len; i++) {
+            const c = pdf[i] ^ (k >> 8);
+            k = ((c + k) * 52845 + 22719) & 0xffff;
+            pdf[i] = c;
+        }
+    }
+    return new Response(pdf, { headers: { 'Content-Type': 'application/pdf', 'Content-Length': String(pdf.length) } });
+}
+
 async function fromPack(req, deviceFirst) {
-    const stored = () => caches.match(req, { cacheName: PACK, ignoreVary: true, ignoreSearch: true });
+    const stored = async () => {
+        const hit = await caches.match(req, { cacheName: PACK, ignoreVary: true, ignoreSearch: true });
+        return hit && hit.headers.get(PACKED) ? unpack(hit) : hit;
+    };
     if (deviceFirst) {
         const hit = await stored();
         if (hit) return hit;

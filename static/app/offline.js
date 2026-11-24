@@ -7,8 +7,8 @@
 // queue, and the pack on the device follows them (onPaperChange). the pack also has the rest of
 // the saved papers (closed, no summaries, thumbnails or PDFs), so the search box finds them offline.
 // a PDF whose paper leaves the PDF set (read, out of the digest) but stays in the pack isn't deleted:
-// it becomes a light copy of at most ~200 kB (shrink.js: smaller images, the reader's own fonts for
-// the text, and for long papers only their first pages), up to LIGHT_BUDGET for all of them, the
+// it becomes a light copy of ~200 kB (shrink.js: worse images, the reader's own fonts for the text,
+// rounded drawings, stored LZMA-packed; nothing left out), up to LIGHT_BUDGET for all of them, the
 // oldest let go of first
 import { html, useState, useEffect, store, api, me, offline, unsynced, flushChanges, refreshMe, onPaperChange, canEdit, pageReady } from 'app/lib';
 import { Paper, Page } from 'app/papers';
@@ -24,7 +24,7 @@ const SUMMARY_ROUNDS = 60; // ~3 minutes of asking for AI summaries
 const LIGHT = 'X-Resanity-Light'; // header of a light copy on the device: its size in bytes
 const PACKED = 'X-Resanity-Packed'; // a light copy stored packed by shrink.js (sw.js unpacks it)
 const LIGHT_BUDGET = 300e6; // bytes of light copies on the device, all together
-const LIGHT_MAX_ONE = 300e3; // a PDF that can't be made this small (pdf-lib can't read it) isn't kept
+const LIGHT_MAX_ONE = 300e3; // a PDF shrink.js can't make lighter (pdf-lib can't read it) is kept only up to this
 
 const hasCaches = () => typeof caches !== 'undefined';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -231,8 +231,8 @@ export async function lighten(pids, inPack) {
             shrinkPdf = shrinkPdf || (await import('app/shrink')).shrinkPdf;
             light = await shrinkPdf(bytes, { progress: t => patchJob({ step: `${head} (${t})…` }) });
         } catch (e) { /* kept as it is if it is small, else let go of */ }
-        const out = light || bytes;
-        if (out.length > LIGHT_MAX_ONE) { await c.delete(pdfPath(pid)); continue; }
+        const out = light || bytes; // a light copy is kept even above shrink.js's TARGET: it never leaves anything out
+        if (!light && out.length > LIGHT_MAX_ONE) { await c.delete(pdfPath(pid)); continue; }
         try {
             await c.delete(pdfPath(pid)); // so the copy goes to the end of the order: the newest
             const headers = { 'Content-Type': 'application/pdf', 'Content-Length': String(out.length), [LIGHT]: String(out.length) };
@@ -407,7 +407,7 @@ const PackPaper = ({ p, tag, onDevice }) => html`<div class="pack-paper">
     ${onDevice.get(p.id) === 'full' ? html`<a class="btn btn-small btn-primary pack-read" href=${pdfPath(p.id)}
             title="the PDF, from this device">📄 Read the PDF</a>`
         : onDevice.get(p.id) === 'light' ? html`<a class="btn btn-small pack-read" href=${pdfPath(p.id)}
-            title="kept small to save space on this device: smaller images (or gray boxes), standard fonts for the text, long papers cut short (the copy says where)">📄 Read the PDF (light copy)</a>`
+            title="kept small to save space on this device: every page, with lower-quality images and standard fonts for the text">📄 Read the PDF (light copy)</a>`
         : p.offline_pdf === 'waiting' ? html`<span class="pack-pdf muted">PDF on its way to this device…</span>`
         : p.offline_pdf === 'failed' ? html`<span class="pack-pdf muted">no PDF for offline (the server couldn't get it)</span>` : null}
     <${Paper} paper=${onDevice.has(p.id) ? onDeviceCard(p) : p} quickTag=${tag || undefined} />

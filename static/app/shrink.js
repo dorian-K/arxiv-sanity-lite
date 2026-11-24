@@ -9,32 +9,29 @@
 //   2. text fonts are left out and drawn with the reader's own Times, Helvetica or Courier (the 14
 //      standard fonts every PDF reader has; the widths stay, so lines and spacing don't move). math
 //      and symbol fonts stay: a stand-in would turn the symbols into wrong letters
-//   3. images smaller still (400, then 250 px)
-//   4. images become gray boxes
-//   5. big vector drawings become gray boxes, text fonts with glyphs beyond Latin (Δ, arrows) go too,
-//      and if that isn't enough,
-//      a long paper keeps its first pages, as many as fit, and a last page saying what was left out
-//      (appendices go first, then the references)
-// text and layout of the pages kept never change. images it can't read safely (CMYK, JPEG 2000, 16-bit,
-// colour-key masks) only go in step 4. loaded only when needed: pdf-lib is ~0.5 MB
-import { PDFDocument, StandardFonts, PDFName, PDFRawStream, PDFArray, PDFDict, PDFNumber, PDFRef, PDFString, PDFHexString, decodePDFRawStream } from 'pdf-lib';
+//   3. images smaller and worse still, down to 100 px
+//   from step 2, the numbers of vector drawings (plots) are rounded to 4 significant digits, from
+//   the last steps to 3 (see roundNumbers), and small-caps fonts go too.
+// nothing is ever left out: no page, no image, no drawing (user decision), so a paper with more
+// than fits keeps its smallest copy even above TARGET.
+// text and layout never change. images it can't read safely (CMYK, JPEG 2000, 16-bit, colour-key
+// masks) stay as they are. loaded only when needed: pdf-lib is ~0.5 MB
+import { PDFDocument, PDFName, PDFRawStream, PDFArray, PDFDict, PDFNumber, PDFRef, PDFString, PDFHexString, decodePDFRawStream } from 'pdf-lib';
 
 export const TARGET = 200e3;
 const STEPS = [
     { side: 800, quality: 0.5 },
-    { side: 800, quality: 0.5, fonts: true },
-    { side: 400, quality: 0.35, fonts: true },
-    { side: 250, quality: 0.3, fonts: true },
-    { side: 0, fonts: true },
-    { side: 0, fonts: 'all', drawings: true, pages: true },
+    { side: 800, quality: 0.5, fonts: true, round: 4 },
+    { side: 400, quality: 0.35, fonts: true, round: 4 },
+    { side: 250, quality: 0.3, fonts: true, round: 4 },
+    { side: 160, quality: 0.25, fonts: 'all', round: 3 },
+    { side: 100, quality: 0.2, fonts: 'all', round: 3 },
 ];
-const MIN_BYTES = 8000; // smaller images stay as they are
-const MAX_PIXELS = 40e6; // bigger ones aren't decoded (a phone's memory), only boxed in step 4
-const BIG_DRAWING = 120e3; // bytes of a vector drawing (form xobject, uncompressed) that step 5 boxes
+const MIN_BYTES = 8000; // smaller images within the step's size stay as they are (not worth a lossy copy)
+const MAX_PIXELS = 40e6; // bigger ones aren't decoded (a phone's memory) and stay as they are
 const GUESS = 0.85; // packed size / gzip size until one packing has measured it (LZMA does better)
 const LZMA_URL = '/static/vendor/lzma-2.3.2/src/lzma_worker-min.js'; // a classic script: sets window.LZMA
 const MAGIC = 'RSPDF1'; // as in sw.js
-const GRAY = 0.9; // the boxes
 
 const N = PDFName.of;
 const tick = () => new Promise(r => setTimeout(r, 0));
@@ -261,7 +258,7 @@ async function shrinkImages(doc, side, quality, say) {
         say(i, images.length);
         await tick();
         try {
-            if (uses.has(ref) || img.contents.length < MIN_BYTES) continue;
+            if (uses.has(ref)) continue;
             const { dict } = img;
             if (dict.lookup(N('ImageMask')) || dict.lookup(N('Decode')) || dict.lookup(N('Mask'))) continue;
             const w = num(dict, 'Width'), h = num(dict, 'Height');
@@ -270,7 +267,7 @@ async function shrinkImages(doc, side, quality, say) {
             if (smRef && (!(smRef instanceof PDFRef) || uses.get(smRef) > 1)) continue;
             const s = Math.min(1, side / Math.max(w, h));
             const nw = Math.max(1, Math.round(w * s)), nh = Math.max(1, Math.round(h * s));
-            if (s === 1 && filterOf(dict) === N('DCTDecode') && quality >= 0.5) continue; // already a small JPEG
+            if (s === 1 && (filterOf(dict) === N('DCTDecode') || img.contents.length < MIN_BYTES)) continue; // small enough already
             const bmp = await bitmap(img, w, h);
             if (!bmp) continue;
             const [c] = draw(bmp, nw, nh);
@@ -299,18 +296,6 @@ async function shrinkImages(doc, side, quality, say) {
     }
 }
 
-// every image a light gray box (a 1x1 image is stretched over the image's place); stencil masks paint nothing
-function boxImages(doc) {
-    const { context } = doc;
-    for (const [ref, img] of imagesOf(context)) {
-        const stencil = img.dict.lookup(N('ImageMask'));
-        const d = context.obj({ Type: 'XObject', Subtype: 'Image', Width: 1, Height: 1, BitsPerComponent: stencil ? 1 : 8 });
-        if (stencil) d.set(N('ImageMask'), img.dict.lookup(N('ImageMask')));
-        else d.set(N('ColorSpace'), N('DeviceGray'));
-        context.assign(ref, PDFRawStream.of(d, new Uint8Array([stencil ? 0xff : Math.round(GRAY * 255)])));
-    }
-}
-
 // -----------------------------------------------------------------------------
 // fonts
 
@@ -334,6 +319,8 @@ const LATIN = new RegExp('^([A-Za-z]|[A-Za-z]{1,2}(acute|grave|circumflex|dieres
     'germandbls|Eth|eth|Thorn|thorn|copyright|registered|trademark|degree|plusminus|multiply|divide|minus|logicalnot|' +
     'mu|onehalf|onequarter|threequarters|onesuperior|twosuperior|threesuperior|ordfeminine|ordmasculine|brokenbar|' +
     'visiblespace|cwm|compwordmark|\\.notdef)$');
+
+const SMALL_CAPS = /csc|smallcap|caps\b|-sc\b/i;
 
 // the glyphs a simple font has: its subset's CharSet, else every name its encoding gives
 function glyphNames(font, fd) {
@@ -428,8 +415,10 @@ function dropTextFonts(doc, all) {
             const name = fontName(font);
             if (!name || MATH_FONT.test(name)) continue;
             if (!spellOutEncoding(context, font, fd.lookup(N(kind)), kind)) continue;
-            // Δ, ↓, ...: the standard fonts lack them, so such a font goes only when pages would go otherwise
-            if (!all && glyphNames(font, fd).some(g => !LATIN.test(g))) continue;
+            // Δ, ≠, β: the standard fonts lack them (pdfium draws nothing, so math would be wrong): such a
+            // font stays. small caps come out as spaced-out lowercase: they go only in the last steps
+            if (glyphNames(font, fd).some(g => !LATIN.test(g))) continue;
+            if (!all && SMALL_CAPS.test(name)) continue;
             const flags = num(fd, 'Flags') || 0;
             const bold = BOLD.test(name) || (num(fd, 'FontWeight') || 0) >= 600;
             const italic = ITALIC.test(name) || (num(fd, 'ItalicAngle') || 0) !== 0 || (flags & 64) !== 0;
@@ -446,56 +435,86 @@ function dropTextFonts(doc, all) {
 }
 
 // -----------------------------------------------------------------------------
-// vector drawings
+// vector drawings: their numbers rounded to a few significant digits. a plot of thousands of
+// points is mostly coordinates written to 4-6 decimals; at 4 digits nothing visibly moves (523.456
+// becomes 523.5, 0.12345 becomes 0.1235: relative, so it is as safe in a scaled-up coordinate
+// system as in page points), at 3 a line may move by up to half a point
 
-function boxDrawings(doc) {
+const isSpace = c => c === 32 || c === 10 || c === 13 || c === 9 || c === 12 || c === 0;
+const isDelim = c => c === 40 || c === 41 || c === 60 || c === 62 || c === 91 || c === 93 || c === 123 || c === 125 || c === 47 || c === 37;
+const isNumChar = c => (c >= 48 && c <= 57) || c === 46 || c === 45 || c === 43;
+
+function roundTo(v, digits) {
+    if (!v || !Number.isFinite(v)) return '0';
+    const d = Math.max(0, digits - 1 - Math.floor(Math.log10(Math.abs(v))));
+    let t = v.toFixed(Math.min(d, 10));
+    if (t.includes('.')) t = t.replace(/0+$/, '').replace(/\.$/, '');
+    return t === '-0' ? '0' : t;
+}
+
+// the content stream with its decimal numbers rounded; null if it has an inline image (binary data
+// that a scan for numbers could break) or doesn't scan cleanly
+function roundNumbers(data, digits) {
+    const out = [];
+    let i = 0, start = 0;
+    const n = data.length;
+    const flush = to => { if (to > start) out.push(data.subarray(start, to)); };
+    while (i < n) {
+        const c = data[i];
+        if (isSpace(c)) { i++; continue; }
+        if (c === 37) { while (i < n && data[i] !== 10 && data[i] !== 13) i++; continue; } // comment
+        if (c === 40) { // (string), nested, with escapes
+            let depth = 0;
+            for (; i < n; i++) {
+                if (data[i] === 92) { i++; continue; }
+                if (data[i] === 40) depth++;
+                else if (data[i] === 41 && --depth === 0) { i++; break; }
+            }
+            continue;
+        }
+        if (c === 60 && data[i + 1] !== 60) { while (i < n && data[i] !== 62) i++; i++; continue; } // <hex>
+        if (isDelim(c) && c !== 47) { i++; continue; }
+        // a token: a name (/...), an operator or a number
+        let j = i + 1;
+        while (j < n && !isSpace(data[j]) && !isDelim(data[j])) j++;
+        if (c !== 47) {
+            let num = true, dot = false;
+            for (let k = i; k < j; k++) {
+                if (!isNumChar(data[k])) { num = false; break; }
+                if (data[k] === 46) dot = true;
+            }
+            if (num && dot) {
+                const v = Number(String.fromCharCode(...data.subarray(i, j)));
+                if (!Number.isNaN(v)) {
+                    flush(i);
+                    out.push(new TextEncoder().encode(roundTo(v, digits)));
+                    start = j;
+                }
+            } else if (!num && j - i === 2 && data[i] === 66 && data[i + 1] === 73) return null; // BI
+        }
+        i = j;
+    }
+    flush(n);
+    const len = out.reduce((a, b) => a + b.length, 0);
+    const res = new Uint8Array(len);
+    let at = 0;
+    for (const b of out) { res.set(b, at); at += b.length; }
+    return res;
+}
+
+// form xobjects (figures included as PDF: plots, diagrams), uncompressed ones only
+function roundDrawings(doc, digits) {
     const { context } = doc;
     for (const [ref, o] of context.enumerateIndirectObjects()) {
-        if (!isStream(o) || o.dict.lookup(N('Subtype')) !== N('Form') || o.contents.length < BIG_DRAWING) continue;
-        const bbox = o.dict.lookup(N('BBox'));
-        if (!(bbox instanceof PDFArray) || bbox.size() !== 4) continue;
-        const [x0, y0, x1, y1] = bbox.asArray().map(v => (v instanceof PDFNumber ? v.asNumber() : 0));
-        const d = o.dict.clone(context);
-        d.set(N('Resources'), context.obj({}));
-        for (const k of ['Filter', 'DecodeParms', 'Group']) d.delete(N(k));
-        const ops = `q ${GRAY} g ${x0} ${y0} ${x1 - x0} ${y1 - y0} re f Q`;
-        context.assign(ref, PDFRawStream.of(d, new TextEncoder().encode(ops)));
+        if (!isStream(o) || o.dict.lookup(N('Subtype')) !== N('Form') || o.dict.lookup(N('Filter'))) continue;
+        try {
+            const data = roundNumbers(o.contents, digits);
+            if (data && data.length < o.contents.length) context.assign(ref, PDFRawStream.of(o.dict.clone(context), data));
+        } catch (e) {
+            // stays as it is
+        }
     }
 }
-
-// -----------------------------------------------------------------------------
-// pages
-
-// the first `keep` pages and a last one saying what was left out; links and bookmarks to the pages
-// left out lead to that one. cut: {total}, the paper's pages
-async function keepPages(doc, keep, cut) {
-    const { context } = doc;
-    const pages = doc.getPages();
-    const gone = new Set(pages.slice(keep).map(p => p.ref));
-    for (let i = pages.length - 1; i >= keep; i--) doc.removePage(i);
-    const total = cut.total;
-    const { width: w, height: h } = pages[0].getSize();
-    const note = doc.addPage([w, h]);
-    const font = await doc.embedFont(StandardFonts.Helvetica);
-    const left = keep + 1 === total ? `page ${total} was` : `pages ${keep + 1} to ${total} were`;
-    const lines = [
-        `This light copy ends here: ${left} left out to save space on this device.`,
-        'The full PDF is on the paper\'s page when you are online.',
-    ];
-    lines.forEach((t, i) => note.drawText(t, { x: 50, y: h - 80 - i * 18, size: 11, font, maxWidth: w - 100 }));
-    // destinations are arrays [page ...], also deep inside annotations (/A << /D [...] >>) and name trees
-    const redirect = o => {
-        if (isStream(o)) redirect(o.dict);
-        else if (o instanceof PDFDict) o.values().forEach(redirect);
-        else if (o instanceof PDFArray) {
-            if (o.size() && gone.has(o.get(0))) o.set(0, note.ref);
-            o.asArray().forEach(redirect);
-        }
-    };
-    for (const [, o] of context.enumerateIndirectObjects()) redirect(o);
-}
-
-// -----------------------------------------------------------------------------
 
 // -----------------------------------------------------------------------------
 // packing: what is stored on the device. general-purpose compression over the whole file finds
@@ -648,43 +667,21 @@ export async function shrinkPdf(bytes, { target = TARGET, progress = () => {} } 
     for (const [i, step] of STEPS.entries()) {
         const last = i === STEPS.length - 1;
         const say = (done, total) => progress(`step ${i + 1} of ${STEPS.length}, image ${done} of ${total}`);
-        if (step.side) await shrinkImages(doc, step.side, step.quality, say);
-        else boxImages(doc);
+        await shrinkImages(doc, step.side, step.quality, say);
         if (step.fonts) dropTextFonts(doc, step.fonts === 'all');
-        if (step.drawings) boxDrawings(doc);
+        if (step.round) roundDrawings(doc, step.round);
         collectGarbage(doc);
         progress(`step ${i + 1} of ${STEPS.length}, saving`);
         await tick();
-        let p = prepare(await save(doc), doc);
-        let pd = doc;
-        let est = await guess(p, doc);
-        // it might fit: measure (the guess can be off either way)
-        if (est > target && est * 0.6 <= target) {
+        const p = prepare(await save(doc), doc);
+        // packed (slow) only when the guess says it may fit (the guess can be off either way), and at the end
+        if ((await guess(p, doc)) * 0.6 <= target || last) {
             const out = await packed(p, doc);
-            if (out.length <= target) { chosen = { p, out }; break; }
-            est = out.length;
-        }
-        if (step.pages && est > target) {
-            // the most first pages that fit, found by halving (each try starts from this step's copy)
-            const total = doc.getPageCount();
-            let lo = 1, hi = total - 1, fit = null;
-            while (lo <= hi) {
-                const keep = (lo + hi) >> 1;
-                progress(`step ${i + 1} of ${STEPS.length}, trying ${keep} of ${total} pages`);
-                const d = await PDFDocument.load(p.pdf, { updateMetadata: false });
-                await keepPages(d, keep, { total });
-                collectGarbage(d);
-                const tried = prepare(await save(d), d);
-                if ((await guess(tried, d)) <= target * 0.97) { fit = { p: tried, d }; lo = keep + 1; } else hi = keep - 1;
-            }
-            if (fit) { p = fit.p; pd = fit.d; est = await guess(p, pd); }
-        }
-        if (est <= target || last) {
-            const out = await packed(p, pd);
-            chosen = { p, out };
-            if (out.length <= target || last) break;
+            if (!chosen || out.length < chosen.out.length) chosen = { p, out };
+            if (out.length <= target) break;
         }
     }
+    if (chosen.out.length >= bytes.byteLength) return null;
     // it must come back byte for byte, or it isn't kept
     const back = await unpackPdf(chosen.out);
     if (back.length !== chosen.p.pdf.length || back.some((v, k) => v !== chosen.p.pdf[k])) return null;

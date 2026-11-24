@@ -5,7 +5,10 @@
 // so that takes minutes). everything goes into the Cache Storage PACK, which sw.js answers from
 // when the server can't be reached. votes, read marks and notes made offline wait in lib.js's
 // queue, and the pack on the device follows them (onPaperChange). the pack also has the rest of
-// the saved papers (closed, no summaries, thumbnails or PDFs), so the search box finds them offline
+// the saved papers (closed, no summaries, thumbnails or PDFs), so the search box finds them offline.
+// a PDF whose paper leaves the PDF set (read, out of the digest) but stays in the pack isn't deleted:
+// it becomes a light copy (shrink.js: the same text and fonts, images scaled down to JPEG), up to
+// LIGHT_BUDGET for all of them, the oldest let go of first
 import { html, useState, useEffect, store, api, me, offline, unsynced, flushChanges, refreshMe, onPaperChange, canEdit, pageReady } from 'app/lib';
 import { Paper, Page } from 'app/papers';
 import { matcher } from 'app/highlight';
@@ -17,6 +20,9 @@ const PDF_POLL = 10000; // ms between asking how far the PDFs are
 const PDF_TIMEOUT = 5 * 60000; // one PDF's download to the device
 const DEVICE_TRIES = 3; // downloads of one PDF to the device before giving it up
 const SUMMARY_ROUNDS = 60; // ~3 minutes of asking for AI summaries
+const LIGHT = 'X-Resanity-Light'; // header of a light copy on the device: its size in bytes
+const LIGHT_BUDGET = 300e6; // bytes of light copies on the device, all together
+const LIGHT_MAX_ONE = 3e6; // a light copy bigger than this (nothing in it to shrink) isn't kept
 
 const hasCaches = () => typeof caches !== 'undefined';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -53,10 +59,18 @@ async function savePack(pack) {
     packStore.set(pack);
 }
 
-async function pdfsOnDevice() {
-    if (!hasCaches()) return new Set();
-    const keys = await (await caches.open(PACK)).keys();
-    return new Set(keys.map(k => new URL(k.url).pathname).filter(p => p.startsWith('/offline/pdf/')).map(p => p.slice(13)));
+// pid -> 'full' or 'light', for the PDFs on the device, in the order they were stored
+export async function pdfsOnDevice() {
+    const out = new Map();
+    if (!hasCaches()) return out;
+    const c = await caches.open(PACK);
+    for (const k of await c.keys()) {
+        const path = new URL(k.url).pathname;
+        if (!path.startsWith('/offline/pdf/')) continue;
+        const r = await c.match(k);
+        out.set(path.slice(13), r && r.headers.get(LIGHT) ? 'light' : 'full');
+    }
+    return out;
 }
 
 const allPapers = pack => pack.sections.flatMap(s => s.papers);
@@ -126,7 +140,7 @@ async function getReady() {
         // PDFs and thumbnails of the papers no longer in the pack (read, out of the digest) leave the device
         if (old) {
             const keep = new Set(allPapers(pack).map(p => p.id));
-            for (const pid of await pdfsOnDevice()) if (!keep.has(pid)) await c.delete(pdfPath(pid));
+            for (const pid of (await pdfsOnDevice()).keys()) if (!keep.has(pid)) await c.delete(pdfPath(pid));
             const keepThumbs = new Set(thumbs.map(u => new URL(u, window.location.href).pathname));
             for (const req of await c.keys()) {
                 const path = new URL(req.url).pathname;
@@ -192,10 +206,49 @@ async function pdfs(pack) {
     // the whole set, even none: the server lets go of the rest, and so does the device
     const res = await api('/offline/pdfs', { pids: pids.join(',') }, { keep: true });
     if (res.left_out) patchJob({ note: `${res.left_out} PDFs left out: at most ${pack.pdf_max} at a time.` });
-    const keep = new Set(pids), c = await caches.open(PACK);
-    for (const pid of await pdfsOnDevice()) if (!keep.has(pid)) await c.delete(pdfPath(pid));
+    const keep = new Set(pids);
+    const leaving = [...(await pdfsOnDevice())].filter(([pid, kind]) => kind === 'full' && !keep.has(pid)).map(([pid]) => pid);
+    await lighten(leaving, new Set(allPapers(pack).map(p => p.id)));
     if (!pids.length) return;
     await downloadPdfs(pids);
+}
+
+// the full PDFs of papers that left the set: a light copy each if the paper is still in the pack
+// (shrink.js; pdf-lib is loaded only now), else deleted; then the oldest light copies over LIGHT_BUDGET go
+export async function lighten(pids, inPack) {
+    const c = await caches.open(PACK);
+    let shrinkPdf = null;
+    for (const [i, pid] of pids.entries()) {
+        const r = await c.match(pdfPath(pid));
+        if (!r || !inPack.has(pid)) { await c.delete(pdfPath(pid)); continue; }
+        patchJob({ step: `Making light copies of the PDFs you no longer need in full: ${i + 1} of ${pids.length}…` });
+        const bytes = new Uint8Array(await r.arrayBuffer());
+        let light = null;
+        try {
+            shrinkPdf = shrinkPdf || (await import('app/shrink')).shrinkPdf;
+            light = await shrinkPdf(bytes);
+        } catch (e) { /* kept as it is if it is small, else let go of */ }
+        const out = light || bytes;
+        if (out.length > LIGHT_MAX_ONE) { await c.delete(pdfPath(pid)); continue; }
+        try {
+            await c.delete(pdfPath(pid)); // so the copy goes to the end of the order: the newest
+            await c.put(pdfPath(pid), new Response(new Blob([out], { type: 'application/pdf' }), {
+                headers: { 'Content-Type': 'application/pdf', 'Content-Length': String(out.length), [LIGHT]: String(out.length) },
+            }));
+        } catch (e) { /* no room: it is gone, as it was before light copies */ }
+    }
+    let total = 0;
+    const copies = [];
+    for (const k of await c.keys()) {
+        if (!new URL(k.url).pathname.startsWith('/offline/pdf/')) continue;
+        const n = Number((await c.match(k)).headers.get(LIGHT) || 0);
+        if (n) { copies.push([k, n]); total += n; }
+    }
+    for (const [k, n] of copies) { // oldest first
+        if (total <= LIGHT_BUDGET) break;
+        await c.delete(k);
+        total -= n;
+    }
 }
 
 // one PDF from the server into the pack, its progress told as it comes in; throws with what went wrong
@@ -242,10 +295,11 @@ export async function downloadPdfs(pids) {
         if (run !== pdfRun) return;
         const have = await pdfsOnDevice();
         const count = st => pids.filter(p => res.pdfs[p] === st).length;
-        const due = p => res.pdfs[p] === 'ready' && !have.has(p) && (tries[p] || 0) < DEVICE_TRIES;
+        const full = p => have.get(p) === 'full'; // a light copy is replaced by the full PDF
+        const due = p => res.pdfs[p] === 'ready' && !full(p) && (tries[p] || 0) < DEVICE_TRIES;
         const state = () => ({
-            device: pids.filter(p => have.has(p)).length, total: pids.length, waiting: count('waiting'),
-            failed: count('failed'), stuck: pids.filter(p => res.pdfs[p] === 'ready' && !have.has(p) && tries[p] >= DEVICE_TRIES).length,
+            device: pids.filter(full).length, total: pids.length, waiting: count('waiting'),
+            failed: count('failed'), stuck: pids.filter(p => res.pdfs[p] === 'ready' && !full(p) && tries[p] >= DEVICE_TRIES).length,
             wait: res.wait,
         });
         const todo = pids.filter(due);
@@ -259,7 +313,7 @@ export async function downloadPdfs(pids) {
                 await savePdf(c, pid, size, (got, total) => run === pdfRun && patchJob({
                     step: `${head}: ${total ? `${Math.min(100, Math.round(100 * got / total))}% of ${mb(total)}` : mb(got)}…`,
                 }));
-                have.add(pid);
+                have.set(pid, 'full');
                 patchJob({ pdfError: '' });
             } catch (e) {
                 patchJob({ pdfError: pdfProblem(e) });
@@ -289,6 +343,7 @@ const ago = t => {
     const s = Date.now() / 1000 - t;
     return s < 3600 ? Math.max(1, Math.round(s / 60)) + ' min ago' : s < 86400 * 2 ? Math.round(s / 3600) + ' h ago' : Math.round(s / 86400) + ' days ago';
 };
+const kinds = (m, kind) => [...m.values()].filter(k => k === kind).length;
 const mb = n => (n / 1e6 < 10 ? (n / 1e6).toFixed(1) : Math.round(n / 1e6)) + ' MB';
 
 const Progress = ({ j }) => {
@@ -322,7 +377,7 @@ const Prepare = ({ pack, onDevice }) => {
             with their AI summaries and PDFs. They open here without a network; votes, read marks and notes you make
             offline are sent once you are back online.</p>
         ${pack ? html`<p class="pack-status">On this device: ${mainPapers(pack).length} papers from ${ago(pack.made)},
-            ${onDevice.size} PDFs${usage ? html` (${mb(usage)} in all)` : null}.</p>` : null}
+            ${kinds(onDevice, 'full')} PDFs${kinds(onDevice, 'light') ? `, ${kinds(onDevice, 'light')} light copies of PDFs you're done with` : ''}${usage ? html` (${mb(usage)} in all)` : null}.</p>` : null}
         ${pack && pack.pdfs_on === false ? null : html`
         <fieldset class="pack-pdfs" title="the PDFs of these lists are downloaded to this device">
             <legend>PDFs for</legend>
@@ -346,8 +401,10 @@ const Prepare = ({ pack, onDevice }) => {
 const onDeviceCard = p => ({ ...p, url: pdfPath(p.id), pdf: pdfPath(p.id), source_url: p.url });
 
 const PackPaper = ({ p, tag, onDevice }) => html`<div class="pack-paper">
-    ${onDevice.has(p.id) ? html`<a class="btn btn-small btn-primary pack-read" href=${pdfPath(p.id)}
+    ${onDevice.get(p.id) === 'full' ? html`<a class="btn btn-small btn-primary pack-read" href=${pdfPath(p.id)}
             title="the PDF, from this device">📄 Read the PDF</a>`
+        : onDevice.get(p.id) === 'light' ? html`<a class="btn btn-small pack-read" href=${pdfPath(p.id)}
+            title="kept with smaller images, to save space on this device: the text is all there">📄 Read the PDF (light copy)</a>`
         : p.offline_pdf === 'waiting' ? html`<span class="pack-pdf muted">PDF on its way to this device…</span>`
         : p.offline_pdf === 'failed' ? html`<span class="pack-pdf muted">no PDF for offline (the server couldn't get it)</span>` : null}
     <${Paper} paper=${onDevice.has(p.id) ? onDeviceCard(p) : p} quickTag=${tag || undefined} />
@@ -422,7 +479,7 @@ export const OfflinePage = () => {
     const pack = packStore.use();
     const j = job.use();
     const n = unsynced.use();
-    const [onDevice, setOnDevice] = useState(new Set());
+    const [onDevice, setOnDevice] = useState(new Map());
     useEffect(() => {
         if (pack === undefined) readPack().then(p => packStore.set(p));
     }, []);
@@ -436,7 +493,7 @@ export const OfflinePage = () => {
             patchJob({ resumed: true });
             pdfsOnDevice().then(have => {
                 const left = allPapers(pack)
-                    .filter(p => p.offline_pdf === 'waiting' || (p.offline_pdf === 'ready' && !have.has(p.id)))
+                    .filter(p => p.offline_pdf === 'waiting' || (p.offline_pdf === 'ready' && have.get(p.id) !== 'full'))
                     .map(p => p.id);
                 if (left.length) return downloadPdfs(left);
             }).catch(e => patchJob({ pdfError: e.message }));

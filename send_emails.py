@@ -211,7 +211,7 @@ def send(to, subject, text, body, user, dry_run):
     return msg
 
 
-if __name__ == "__main__":
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(description='Sends the digest emails')
     parser.add_argument(
         '-n', '--per-tag', type=int, default=digest.PER_TAG, help="papers per tag, where the user didn't pick a number"
@@ -234,8 +234,11 @@ if __name__ == "__main__":
         action='store_true',
         help='with AI summaries on: make the digests DIGEST_PREPARE_HOURS before the slot (send nothing)',
     )
-    args = parser.parse_args()
-    started = time.time()
+    return parser.parse_args(argv)
+
+
+def main(args, started=None):
+    started = started or time.time()
     if args.prepare_if_due:
         if not summary.enabled() or db.get_last_digest() is None or not db.features_exist():
             raise SystemExit(0)  # nothing to summarize, or the schedule hasn't started
@@ -267,35 +270,61 @@ if __name__ == "__main__":
     pdb = get_papers_db()
     times = pdb.times()
 
+    # a run that died halfway (and is started again by the updater a few minutes later) must not
+    # mail anyone twice: every user who got this slot's mail is marked, and skipped from then on
+    slot = last_slot(started) if args.if_due else None
     todo = []
+    num_failed = 0
     for user, email in sorted(emails.items()):
-        d = db.get_digest(user)
-        if args.if_due and summary.enabled() and prepared(d, started):
-            sections, days = d['sections'], d['days']  # made ahead, so its papers have their summaries
-        else:
-            days = args.time_delta or db.get_digest_days(user)
-            sections = digest.compute_for(user, features, times, days, args.per_tag, feats=args.feats, model=args.model)
-            if sections:
-                db.save_digest(user, sections, days)
+        if slot is not None and db.get_digest_sent(user) >= slot:
+            print(f"skipping {user}: already sent this week's digest")
+            continue
+        try:
+            d = db.get_digest(user)
+            if args.if_due and summary.enabled() and prepared(d, started):
+                sections, days = d['sections'], d['days']  # made ahead, so its papers have their summaries
+            else:
+                days = args.time_delta or db.get_digest_days(user)
+                sections = digest.compute_for(
+                    user, features, times, days, args.per_tag, feats=args.feats, model=args.model
+                )
+                if sections:
+                    db.save_digest(user, sections, days)
+        except Exception as e:  # one user's broken digest must not stop everyone else's
+            print(f"failed to make the digest of {user}: {type(e).__name__}: {e}")
+            num_failed += 1
+            continue
         if not sections:
             print(f"skipping {user}: no recommendations (no tags, or nothing new)")
             continue
         todo.append((user, email, sections, days))
     ais = ensure_summaries(list(dict.fromkeys(p for _, _, ss, _ in todo for s in ss for p, _ in s['papers'])))
 
-    num_sent = num_failed = 0
+    num_sent = 0
     for user, email, sections, days in todo:
-        papers = pdb.get_many(p for s in sections for p, _ in s['papers'])
-        subject, text, body = render(user, sections, papers, days, ais)
-        if args.save:
-            with open(args.save, 'w') as f:
-                f.write(body)
         try:
+            papers = pdb.get_many(p for s in sections for p, _ in s['papers'])
+            # a paper can be gone since the digest was prepared (merged into its arXiv twin by compute.py)
+            sections = [{**s, 'papers': [(p, sc) for p, sc in s['papers'] if p in papers]} for s in sections]
+            sections = [s for s in sections if s['papers']]
+            if not sections:
+                print(f"skipping {user}: none of the digest's papers are left")
+                continue
+            subject, text, body = render(user, sections, papers, days, ais)
+            if args.save:
+                with open(args.save, 'w') as f:
+                    f.write(body)
             send(formataddr((user, email)), subject, text, body, user, args.dry_run)
         except (smtplib.SMTPException, OSError) as e:
             print(f"failed to send to {user}: {e}")
             num_failed += 1
             continue
+        except Exception as e:
+            print(f"failed to send to {user}: {type(e).__name__}: {e}")
+            num_failed += 1
+            continue
+        if slot is not None and not args.dry_run:
+            db.set_digest_sent(user, time.time())
         num_sent += 1
         print(f"{'composed' if args.dry_run else 'sent'} digest for {user}: {subject}")
         time.sleep(0.5)  # no need to burst
@@ -307,3 +336,7 @@ if __name__ == "__main__":
         else:
             print("every send failed: trying again on the next run")
             raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    main(parse_args())

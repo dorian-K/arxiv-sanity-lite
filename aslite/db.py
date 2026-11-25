@@ -391,7 +391,8 @@ CREATE TABLE IF NOT EXISTS users (
     pending_email TEXT NOT NULL DEFAULT '',  -- entered, but the confirmation link not clicked yet
     email_confirmed REAL,  -- when the owner of `email` confirmed it (double opt-in): the consent record
     digest_days INTEGER NOT NULL DEFAULT 0,  -- the digest takes papers of the last this many days (0: DIGEST_DAYS)
-    card_tab TEXT NOT NULL DEFAULT ''  -- what paper cards open on: '' (the AI summary) or 'abstract'
+    card_tab TEXT NOT NULL DEFAULT '',  -- what paper cards open on: '' (the AI summary) or 'abstract'
+    digest_sent REAL NOT NULL DEFAULT 0  -- when the last scheduled digest mail went out to this user
 ) WITHOUT ROWID;
 -- one row per (user, tag, paper): liked (neg = 0), downvoted (neg = 1) or seen without an
 -- opinion (neg = 2, the digest's neutral button: not shown again, not used for training)
@@ -501,6 +502,7 @@ def users_db():
                 'email_confirmed': 'REAL',
                 'digest_days': 'INTEGER NOT NULL DEFAULT 0',
                 'card_tab': "TEXT NOT NULL DEFAULT ''",
+                'digest_sent': 'REAL NOT NULL DEFAULT 0',
             },
             'tokens': {'client': "TEXT NOT NULL DEFAULT ''"},
         }
@@ -576,6 +578,16 @@ def get_digest_days(name):
 def set_digest_days(name, days):
     days = min(DIGEST_DAYS_MAX, max(1, int(days)))
     _run('UPDATE users SET digest_days = ? WHERE name = ?', (0 if days == DIGEST_DAYS else days, name))
+
+
+def get_digest_sent(name):
+    """when the last scheduled digest mail went out to this user (0: never), so a rerun after a crash skips them"""
+    r = _query('SELECT digest_sent FROM users WHERE name = ?', (name,))
+    return r[0][0] if r else 0
+
+
+def set_digest_sent(name, t):
+    _run('UPDATE users SET digest_sent = ? WHERE name = ?', (t, name))
 
 
 def set_card_tab(name, tab):
@@ -675,6 +687,7 @@ def export_user(name):
             for p, t in _query('SELECT pid, time FROM reads WHERE user = ? ORDER BY time', (name,))
         ],
         'latest_digest': get_digest(name),
+        'latest_digest_mailed_at': get_digest_sent(name) or None,
         'papers_to_read_offline': [
             {'pid': p, 'time': t}
             for p, t in _query('SELECT pid, asked FROM offline_pdfs WHERE user = ? ORDER BY asked', (name,))

@@ -162,6 +162,61 @@ def test_if_due_waits_for_the_next_slot(features, monkeypatch):
     assert not send_emails.due(t0 + 7 * 86400 + 1200)  # then only once
 
 
+def test_a_crashed_send_mails_nobody_twice(features, corpus, monkeypatch):
+    import send_emails
+
+    v = vision(corpus)
+    for u in ('alice', 'bob', 'carol'):
+        db.tag_paper(u, v[0], 'cv')
+        db.request_email(u, f'{u}@example.org')
+        db.confirm_email(u, f'{u}@example.org')
+    monkeypatch.setenv('PUBLIC_URL', 'https://sanity.example.org')
+    # carol's digest names a paper that is gone by now (merged into its arXiv twin)
+    monkeypatch.setattr(
+        send_emails.digest, 'compute_for', lambda user, *a, **k: [{'tag': 'cv', 'papers': [('gone', 1.0), (v[1], 0.5)]}]
+    )
+    t0 = 1793000000.0
+    db.set_last_digest(t0)
+    now = t0 + 7 * 86400
+    mailed = []
+
+    def crash_at_bob(to, subject, text, body, user, dry_run):
+        if user == 'bob':
+            raise KeyboardInterrupt  # the container restarted, the script was killed, ...
+        mailed.append(user)
+        assert 'gone' not in body
+
+    monkeypatch.setattr(send_emails, 'send', crash_at_bob)
+    monkeypatch.setattr(send_emails.time, 'sleep', lambda s: None)
+    args = send_emails.parse_args(['--if-due'])
+    try:
+        send_emails.main(args, now)
+    except KeyboardInterrupt:
+        pass
+    assert mailed == ['alice'] and db.get_last_digest() == t0  # still due
+
+    monkeypatch.setattr(send_emails, 'send', lambda to, subject, text, body, user, dry_run: mailed.append(user))
+    send_emails.main(args, now + 300)  # the updater's next try
+    assert mailed == ['alice', 'bob', 'carol']  # alice only once
+    assert db.get_last_digest() == now + 300
+    assert db.export_user('alice')['latest_digest_mailed_at'] is not None
+
+
+def test_old_users_table_gets_digest_sent(tmp_path, monkeypatch):
+    import sqlite3
+
+    path = str(tmp_path / 'old_users.sqlite')
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE users (name TEXT PRIMARY KEY, pw_hash TEXT, email TEXT NOT NULL DEFAULT '')")
+    con.execute("INSERT INTO users (name) VALUES ('old')")
+    con.commit()
+    con.close()
+    monkeypatch.setattr(db, 'USERS_DB_FILE', path)
+    assert db.get_digest_sent('old') == 0
+    db.set_digest_sent('old', 5.0)
+    assert db.get_digest_sent('old') == 5.0
+
+
 def test_neutral_hides_without_training(client, corpus):
     from conftest import login
 

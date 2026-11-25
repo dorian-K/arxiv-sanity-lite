@@ -192,7 +192,11 @@ def get_pdf(pid, fetch):
     pdf = db.kept_pdf(pid)
     if pdf and pdf.startswith(b'%PDF'):
         return pdf
-    url, pdf = fetch.get(sources.source_of(pid).pdf_url(pid), MAX_PDF)
+    src = sources.source_of(pid)
+    allowed = getattr(src, 'allowed', None)  # the proceedings sites' robots.txt (arXiv's PDFs are allowed)
+    if allowed and not allowed(src.pdf_url(pid)):
+        return b''
+    url, pdf = fetch.get(src.pdf_url(pid), MAX_PDF)
     if not (url and pdf.startswith(b'%PDF')):
         return b''
     if pid in db.offline_pids():

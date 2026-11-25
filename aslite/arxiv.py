@@ -67,8 +67,14 @@ def parse_response(response):
     parse = feedparser.parse(response)
     for e in parse.entries:
         j = encode_feedparser_dict(e)
-        # extract / parse id information
-        idv, rawid, version = parse_arxiv_url(j['id'])
+        # extract / parse id information. old-style ids (cs/0701001) can't be stored: taken at their
+        # last part they lose the archive, so links break and math/0701001 overwrote cs/0701001
+        try:
+            idv, rawid, version = parse_arxiv_url(j['id'])
+        except (AssertionError, ValueError):  # arXiv's error entry for a malformed id, say
+            continue
+        if not ARXIV_ID_RE.fullmatch(rawid):
+            continue
         j['_idv'] = idv
         j['_id'] = rawid
         j['_version'] = version

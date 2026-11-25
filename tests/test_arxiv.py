@@ -47,3 +47,22 @@ def test_venue_from_comment_or_journal_ref():
         'Not accepted',
     ):
         assert venue(no) == '', no
+
+
+def test_feed_entries_with_old_style_or_broken_ids_are_skipped():
+    from aslite.arxiv import parse_response
+
+    def entry(url):
+        return (
+            f'<entry><id>{url}</id><updated>2026-01-02T00:00:00Z</updated><published>2026-01-01T00:00:00Z</published>'
+            '<title>T</title><summary>S</summary><author><name>A B</name></author></entry>'
+        )
+
+    feed = (
+        '<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">'
+        + entry('http://arxiv.org/abs/2601.00001v2')
+        + entry('http://arxiv.org/abs/cs/0701001v3')  # old-style: would be stored as 0701001
+        + entry('http://arxiv.org/api/errors#incorrect_id_format_for_1234')  # arXiv's error entry
+        + '</feed>'
+    )
+    assert [p['_id'] for p in parse_response(feed)] == ['2601.00001']

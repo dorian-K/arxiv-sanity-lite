@@ -156,7 +156,8 @@ const DeleteAccount = ({ onDeleted }) => {
     const [state, run] = useAction();
     const submit = e => {
         e.preventDefault();
-        run(() => api('/delete_account', { password })).then(r => r && refreshMe().then(onDeleted));
+        // nothing of the account stays on the device either (its pack, queued changes, kept lists)
+        run(() => api('/delete_account', { password })).then(r => r && forgetDevice().then(refreshMe).then(onDeleted));
     };
     return html`
     <details class="danger">

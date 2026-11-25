@@ -223,11 +223,27 @@ export const me = store(null);
 export const refreshMe = () => api('/ui/me').then(m => { changed(); rememberMe(m); me.set(m); return m; });
 // who was logged in last, for opening the site without a network (offline.js)
 const ME_KEY = 'resanity-me';
-export const rememberMe = m => { try { localStorage.setItem(ME_KEY, JSON.stringify(m)); } catch (e) { /* not remembered */ } };
+export const rememberMe = m => {
+    claimDevice(m);
+    try { localStorage.setItem(ME_KEY, JSON.stringify(m)); } catch (e) { /* not remembered */ }
+};
+// whose the reading pack, the queued changes and the kept lists on this device are. someone else logging
+// in (a session that ended without a logout on a shared computer) must neither see them nor have the
+// changes sent into their account: they are deleted, as on logout. the same user again keeps them
+const OWNER_KEY = 'resanity-owner';
+function claimDevice(m) {
+    if (!m || !m.user) return; // not logged in (a session that ran out): kept for when they are back
+    try {
+        let owner = localStorage.getItem(OWNER_KEY);
+        if (owner === null) owner = (lastMe() || {}).user || null; // from before owners were written down
+        if (owner && owner !== m.user) forgetDevice();
+        localStorage.setItem(OWNER_KEY, m.user);
+    } catch (e) { /* no localStorage: nothing kept either */ }
+}
 export const lastMe = () => { try { return JSON.parse(localStorage.getItem(ME_KEY)); } catch (e) { return null; } };
 // logging out: nothing of the account stays on the device (a shared computer)
 export const forgetDevice = () => {
-    try { [ME_KEY, QUEUE_KEY].forEach(k => localStorage.removeItem(k)); } catch (e) { /* nothing there */ }
+    try { [ME_KEY, QUEUE_KEY, OWNER_KEY].forEach(k => localStorage.removeItem(k)); } catch (e) { /* nothing there */ }
     unsynced.set(0);
     return typeof caches !== 'undefined'
         ? Promise.all(['pack-v1', KEPT].map(n => caches.delete(n))).catch(() => {})

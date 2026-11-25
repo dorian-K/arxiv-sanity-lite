@@ -990,6 +990,13 @@ def test_the_app_works_offline(client):
     shell = client.get('/').get_data(as_text=True)
     assert '/static/app/offline.js?v=' in shell and 'manifest.webmanifest' in shell
     assert client.get('/static/manifest.webmanifest').status_code == 200
+    # the PDF reader: an app page, and pdf.js's worker and fonts go onto the device with the pack
+    import serve
+
+    assert client.get('/read?pid=x').status_code == 200 and '/static/app/reader.js?v=' in shell
+    warm = serve.offline_files()
+    assert any(u.endswith('pdf.worker.min.mjs') for u in warm) and any(u.endswith('FoxitSerif.pfb') for u in warm)
+    assert all(client.get(u).status_code == 200 for u in warm if 'pdfjs' in u)
 
 
 def test_data_goes_out_gzipped(client):

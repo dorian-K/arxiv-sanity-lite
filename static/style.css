@@ -945,3 +945,43 @@ details.danger form { margin-top: 10px; }
 .pack-refs-list { margin: 4px 0 8px; padding-left: 26px; display: grid; gap: 4px; }
 .pack-refs-list .btn-small { padding: 0 6px; font-size: 12px; }
 .pack-ref-saved { color: var(--tag); font-size: 12px; }
+
+/* the PDF reader (reader.js): pages drawn by pdf.js, a link layer of our own, the reference popover */
+.reader { padding: 0 0 40px; }
+.reader-bar {
+    position: sticky; top: var(--header-h, 0); z-index: 5; display: flex; align-items: center; gap: 6px;
+    padding: 6px 8px; background: var(--bg); border-bottom: 1px solid var(--border);
+}
+.reader-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; font-size: 14px; }
+.reader-raw { font-size: 12px; white-space: nowrap; }
+.reader-hint { font-size: 12px; color: var(--muted); text-align: center; margin: 6px 8px; }
+.pdf-pages { display: flex; flex-direction: column; align-items: center; gap: 10px; overflow-x: auto; }
+.pdf-page { position: relative; background: #fff; box-shadow: 0 1px 4px rgb(0 0 0 / .25); flex: none; }
+.pdf-page canvas { display: block; }
+.pdf-link { position: absolute; z-index: 2; border-radius: 2px; }
+.pdf-link:hover, .pdf-link:focus-visible { background: rgb(255 200 0 / .25); outline: none; }
+.cite-pop {
+    position: fixed; z-index: 20; left: 50%; bottom: 12px; transform: translateX(-50%);
+    width: min(560px, calc(100vw - 24px)); max-height: 60vh; overflow-y: auto; margin: 0;
+    padding: 12px 36px 12px 14px; box-shadow: 0 4px 24px rgb(0 0 0 / .3);
+}
+.cite-close { position: absolute; top: 4px; right: 8px; font-size: 22px; line-height: 1; }
+.cite-title { font-weight: 600; margin-bottom: 4px; }
+.cite-text { font-size: 13px; margin-bottom: 4px; overflow-wrap: anywhere; }
+.cite-meta { font-size: 12px; margin-bottom: 6px; }
+.cite-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.cite-pop .hint { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
+
+/* pdf.js's text layer (from its pdf_viewer.css): invisible text over the canvas, for selecting and finding */
+.textLayer {
+    position: absolute; text-align: initial; inset: 0; overflow: clip; opacity: 1; line-height: 1;
+    -webkit-text-size-adjust: none; text-size-adjust: none; forced-color-adjust: none; transform-origin: 0 0; z-index: 0;
+}
+.textLayer :is(span, br) { color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0% 0%; }
+.textLayer > :not(.markedContent), .textLayer .markedContent span:not(.markedContent) { z-index: 1; }
+.textLayer span.markedContent { top: 0; height: 0; }
+.textLayer ::selection { background: rgb(0 0 255 / .25); }
+.textLayer br::selection { background: transparent; }
+.textLayer .endOfContent { display: block; position: absolute; inset: 100% 0 0; z-index: 0; cursor: default; user-select: none; }
+@media (max-width: 500px) { .reader-title { display: none; } .reader-bar { justify-content: flex-end; } .reader-bar > a:first-child { margin-right: auto; } }
+.cite-text.muted { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }

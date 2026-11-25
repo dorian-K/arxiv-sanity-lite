@@ -21,7 +21,7 @@ try {
     // light copies can't be opened, everything else works
 }
 const SLOW_PAGE = 3000; // ms the server gets for a page before the copy on the device is shown
-const APP_PATHS = ['/', '/digest', '/profile', '/import', '/inspect', '/stats', '/agents', '/graph', '/offline', '/about', '/privacy', '/imprint'];
+const APP_PATHS = ['/', '/digest', '/profile', '/import', '/inspect', '/stats', '/agents', '/graph', '/offline', '/read', '/about', '/privacy', '/imprint'];
 
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));

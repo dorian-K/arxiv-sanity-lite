@@ -8,6 +8,7 @@ import { DigestPage, InspectPage, StatsPage, TextPage } from 'app/pages';
 import { ProfilePage, ImportPage, AgentsPage } from 'app/account';
 import { GraphPage } from 'app/graph';
 import { OfflinePage } from 'app/offline';
+import { ReaderPage } from 'app/reader';
 
 const PAGES = {
     '/': ListPage,
@@ -19,6 +20,7 @@ const PAGES = {
     '/agents': AgentsPage,
     '/graph': GraphPage,
     '/offline': OfflinePage,
+    '/read': ReaderPage,
     '/about': () => html`<${TextPage} name="about" />`,
     '/privacy': () => html`<${TextPage} name="privacy" />`,
     '/imprint': () => html`<${TextPage} name="imprint" />`,
@@ -99,8 +101,9 @@ const App = () => {
             setAddress(here.href);
         }
     }, [url, m]);
-    // without a network every address shows the papers kept on the device (static/app/offline.js)
-    const PageComponent = offline.use() ? OfflinePage : PAGES[url.pathname] || ListPage;
+    // without a network every address shows the papers kept on the device (static/app/offline.js),
+    // but the reader, which reads them from there
+    const PageComponent = offline.use() && url.pathname !== '/read' ? OfflinePage : PAGES[url.pathname] || ListPage;
     const kept = slowCopy.use();
     return html`
         <${Header} m=${m} />

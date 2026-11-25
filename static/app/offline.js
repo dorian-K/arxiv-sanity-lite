@@ -30,7 +30,7 @@ const LIGHT_MAX_ONE = 300e3; // a PDF shrink.js can't make lighter (pdf-lib can'
 
 const hasCaches = () => typeof caches !== 'undefined';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-const pdfPath = pid => '/offline/pdf/' + pid;
+export const pdfPath = pid => '/offline/pdf/' + pid;
 
 // -----------------------------------------------------------------------------
 // the pack on the device
@@ -405,17 +405,38 @@ const Prepare = ({ pack, onDevice }) => {
 };
 
 // a card whose PDF is on the device: its title and pdf link open that copy, its site gets a link of its own
-const onDeviceCard = p => ({ ...p, url: pdfPath(p.id), pdf: pdfPath(p.id), source_url: p.url });
+export const readerPath = pid => '/read?pid=' + encodeURIComponent(pid);
+const onDeviceCard = p => ({ ...p, url: readerPath(p.id), pdf: pdfPath(p.id), source_url: p.url });
 
 // what a paper cites, from the pack: the ones with a known id can be saved to a tag (then they are in
 // To read), offline too: /add for papers the site has, /import (it fetches the paper) for the others
-const refTag = store('');
+export const refTag = store(''); // the tag cited papers are saved to, as last chosen
+
+// the tag a cited paper of p goes to: the one last chosen, else the list's, else one p is in
+export const refTagFor = (chosen, tags, tag, p) =>
+    tags.includes(chosen) ? chosen : (tag && tags.includes(tag) ? tag : '') || ((p && p.utags) || []).find(t => tags.includes(t)) || tags[0] || '';
+
+// saves a cited paper ({id, here}) to a tag: /add if the site has it, else /import (which fetches it);
+// offline both wait in lib.js's queue. resolves to a note to show ('' if none), throws with the reason
+export async function saveRef(r, tag) {
+    const res = r.here ? await tagRequest('/add/' + r.id + '/' + encodeURIComponent(tag))
+        : await api('/import', { text: r.id, tag });
+    const got = res && res.results && res.results[0];
+    if (got && (!got.pid || !/already here|added from/.test(got.status))) throw new Error(got.status); // not found, over the limit
+    await updatePack(pack => allPapers(pack).forEach(q => (q.refs || []).forEach(x => {
+        if (x.id === r.id && !(x.saved || []).includes(tag)) x.saved = [...(x.saved || []), tag];
+    })));
+    return typeof res === 'string' && res.includes('kept on this device') ? 'sent when you are back online' : '';
+}
+
+// the paper in the pack, from its first list
+export const packPaper = (pack, pid) => (pack ? allPapers(pack).find(p => p.id === pid) : null) || null;
 const PackRefs = ({ p, tag, tags, canEdit }) => {
     const [open, setOpen] = useState(false);
     const chosen = refTag.use();
     const refs = p.refs || [];
     if (!refs.length) return null;
-    const to = tags.includes(chosen) ? chosen : tag || p.utags.find(t => tags.includes(t)) || tags[0] || '';
+    const to = refTagFor(chosen, tags, tag, p);
     return html`<div class="pack-refs">
         <button class="linkbtn" aria-expanded=${open} onClick=${() => setOpen(!open)}
                 title="the papers this one cites; save the ones you want to read to a tag, offline too">
@@ -435,21 +456,12 @@ const PackRefs = ({ p, tag, tags, canEdit }) => {
 const PackRef = ({ r, to, canEdit }) => {
     const [saved, setSaved] = useState(r.saved || []);
     const [msg, setMsg] = useState('');
-    const keep = tag => updatePack(pack => allPapers(pack).forEach(q => (q.refs || []).forEach(x => {
-        if (x.id === r.id && !(x.saved || []).includes(tag)) x.saved = [...(x.saved || []), tag];
-    })));
     const save = async () => {
         const tag = to;
         setSaved(s => [...s, tag]);
         setMsg('');
         try {
-            const res = r.here ? await tagRequest('/add/' + r.id + '/' + encodeURIComponent(tag))
-                : await api('/import', { text: r.id, tag });
-            const got = res && res.results && res.results[0];
-            if (got && !got.pid) throw new Error(got.status);
-            if (got && !/already here|added from/.test(got.status)) throw new Error(got.status); // over the limit, not reached
-            if (typeof res === 'string' && res.includes('kept on this device')) setMsg('sent when you are back online');
-            keep(tag);
+            setMsg(await saveRef(r, tag));
         } catch (e) {
             setSaved(s => s.filter(t => t !== tag));
             setMsg(e.message);
@@ -467,9 +479,9 @@ const PackRef = ({ r, to, canEdit }) => {
 };
 
 const PackPaper = ({ p, tag, onDevice, tags, canEdit }) => html`<div class="pack-paper">
-    ${onDevice.get(p.id) === 'full' ? html`<a class="btn btn-small btn-primary pack-read" href=${pdfPath(p.id)}
-            title="the PDF, from this device">📄 Read the PDF</a>`
-        : onDevice.get(p.id) === 'light' ? html`<a class="btn btn-small pack-read" href=${pdfPath(p.id)}
+    ${onDevice.get(p.id) === 'full' ? html`<a class="btn btn-small btn-primary pack-read" href=${readerPath(p.id)}
+            title="the PDF, from this device; tap a citation in it to see the reference and save it to a tag">📄 Read the PDF</a>`
+        : onDevice.get(p.id) === 'light' ? html`<a class="btn btn-small pack-read" href=${readerPath(p.id)}
             title="kept small to save space on this device: every page, with lower-quality images and standard fonts for the text">📄 Read the PDF (light copy)</a>`
         : p.offline_pdf === 'waiting' ? html`<span class="pack-pdf muted">PDF on its way to this device…</span>`
         : p.offline_pdf === 'failed' ? html`<span class="pack-pdf muted">no PDF for offline (the server couldn't get it)</span>` : null}

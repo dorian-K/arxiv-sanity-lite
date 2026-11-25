@@ -25,6 +25,9 @@ PACKAGES = {
     'pdf-lib': ('1.17.1', ['dist/pdf-lib.esm.min.js', 'LICENSE.md']),
     # LZMA for the light copies on the device (packed by shrink.js, unpacked by sw.js); classic scripts
     'lzma': ('2.3.2', ['src/lzma_worker-min.js', 'src/lzma-d-min.js', 'LICENSE']),
+    # the offline reader (static/app/reader.js): pages drawn here, so a click on a citation can show the
+    # reference and save it to a tag; standard_fonts for PDFs that use the standard 14 (light copies do)
+    'pdfjs-dist': ('4.10.38', ['build/pdf.min.mjs', 'build/pdf.worker.min.mjs', 'LICENSE']),
     'katex': ('0.16.11', ['dist/katex.min.css', 'dist/katex.min.js', 'dist/contrib/auto-render.min.js', 'LICENSE']),
 }
 DEST = os.path.join('static', 'vendor')
@@ -43,6 +46,8 @@ if __name__ == '__main__':
             wanted = list(files)
             if name == 'katex':
                 wanted += [f for f in members if f.startswith('dist/fonts/') and f.endswith('.woff2')]
+            if name == 'pdfjs-dist':
+                wanted += [f for f in members if f.startswith('standard_fonts/')]
             for f in wanted:
                 target = os.path.join(out, f.removeprefix('dist/'))
                 os.makedirs(os.path.dirname(target), exist_ok=True)

@@ -2212,7 +2212,7 @@ def offline_refs(pids):
 
 
 def offline_files():
-    """the static files a page loads only when needed (KaTeX for math), for the device to have them offline"""
+    """the static files a page loads only when needed (KaTeX for math, the PDF reader's), for the device to have them offline"""
     vendor = os.path.join(app.static_folder, 'vendor')
     out = []
     for d in sorted(os.listdir(vendor)):
@@ -2221,6 +2221,11 @@ def offline_files():
             out += [base + 'katex.min.css', base + 'katex.min.js', base + 'contrib/auto-render.min.js']
             fonts = os.path.join(vendor, d, 'fonts')
             out += [base + 'fonts/' + f for f in sorted(os.listdir(fonts)) if f.endswith('.woff2')]
+        if d.startswith('pdfjs-dist-'):  # the reader (static/app/reader.js): its worker and the standard 14 fonts
+            base = f'/static/vendor/{d}/'
+            out += [base + 'build/pdf.worker.min.mjs']
+            fonts = os.path.join(vendor, d, 'standard_fonts')
+            out += [base + 'standard_fonts/' + f for f in sorted(os.listdir(fonts)) if not f.startswith('LICENSE')]
     return out
 
 
@@ -2284,9 +2289,18 @@ def service_worker():
 # every page of the site is the app (static/app): one html file that loads its modules, which
 # then fetch the page's data from /ui/. the addresses stay what they were, so links and
 # bookmarks keep working
-APP_PAGES = ('/', '/digest', '/profile', '/import', '/inspect', '/stats', '/agents', '/graph', '/offline') + tuple(
-    '/' + p for p in TEXT_PAGES
-)
+APP_PAGES = (
+    '/',
+    '/digest',
+    '/profile',
+    '/import',
+    '/inspect',
+    '/stats',
+    '/agents',
+    '/graph',
+    '/offline',
+    '/read',
+) + tuple('/' + p for p in TEXT_PAGES)
 SHELL_FILE = os.path.join(app.static_folder, 'app', 'index.html')
 STATIC_REF = re.compile(r'"/static/([^"?]+\.(?:js|css))"')
 IMPORT_MAP = re.compile(r'<script type="importmap">(.*?)</script>', re.S)

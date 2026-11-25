@@ -147,6 +147,7 @@ END;
 _COLS = 'id, version, time, time_str, published, title, summary, authors, categories, comment, journal_ref, venue'
 # fewer papers that have every word of a query: also show those with any of them
 SEARCH_MIN_ALL = 50
+SEARCH_OR_MAX_DOCS = 20000  # words in more papers than this are left out of the any-word fallback
 
 # bm25 weights per column: a word in the title counts for more than one in the abstract
 SEARCH_WEIGHTS = (20.0, 10.0, 1.0)
@@ -358,10 +359,17 @@ class PapersDB:
             ).fetchall()
 
         rows = run(' AND '.join(terms), limit)
+        # the fallback ORs only the rarer words: bm25 costs time per matching paper, and "learning" alone
+        # matches a third of them (0.3-2 s for a typo next to it). papers with a common word but not the
+        # rare one weren't what was searched for anyway
         if len(terms) > 1 and len(rows) < SEARCH_MIN_ALL:
+            rare = [
+                t for t, w in zip(terms, words, strict=True) if self._docs(w, t.endswith('*')) <= SEARCH_OR_MAX_DOCS
+            ]
+        if len(terms) > 1 and len(rows) < SEARCH_MIN_ALL and rare:
             seen = {r[0] for r in rows}
             low = min((r[1] for r in rows), default=0.0)
-            rest = [r for r in run(' OR '.join(terms), limit) if r[0] not in seen]
+            rest = [r for r in run(' OR '.join(rare), limit) if r[0] not in seen]
             # below every paper that has all the words
             rows += [(p, min(sc, low) - 1e-6 * (i + 1)) for i, (p, sc) in enumerate(rest)][: limit - len(rows)]
         return [r[0] for r in rows], [float(r[1]) for r in rows]
@@ -373,6 +381,18 @@ class PapersDB:
         """{word: number of papers} of the search index, for the words in at least min_docs (seconds)"""
         self._vocab()
         return dict(self.con.execute('SELECT term, doc FROM temp.papers_vocab WHERE doc >= ?', (min_docs,)))
+
+    def _docs(self, word, prefix):
+        """about how many papers have this word (with prefix, words starting with it; capped, it only
+        decides whether a word is common)"""
+        if not prefix:
+            return self.term_docs(word)
+        self._vocab()
+        row = self.con.execute(
+            'SELECT sum(doc) FROM (SELECT doc FROM temp.papers_vocab WHERE term >= ? AND term < ? LIMIT 500)',
+            (word, word + '\uffff'),
+        ).fetchone()
+        return row[0] or 0
 
     def term_docs(self, word):
         """in how many papers this word is (a few ms)"""

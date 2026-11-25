@@ -699,10 +699,26 @@ def random_rank(opt_time_filter=''):
     return [pids[i] for i in rows], [0] * len(rows)
 
 
-def time_rank(opt_time_filter=''):
-    _, pids, tarr, _ = get_times()
+def time_rank(opt_time_filter='', skip_have=False, published=False, limit=None):
+    """
+    the newest papers of the window, filtered as _filtered would (skip_have: not rated ones; published),
+    the first `limit` of them: walks from the newest and stops there, instead of copying and filtering
+    every paper of the corpus on each page (~200 ms on 721k with a filter)
+    """
+    _, pids, tarr, venues = get_times()
     n = _newer_than(opt_time_filter)
-    return pids[:n], ((time.time() - tarr[:n]) / 86400).tolist()  # time delta in days
+    have = _rated() if skip_have else ()
+    limit = n if limit is None else limit
+    out, ages, now = [], [], time.time()
+    for i in range(n):
+        p = pids[i]
+        if (have and p in have) or (published and p not in venues):
+            continue
+        out.append(p)
+        ages.append((now - tarr[i]) / 86400)  # time delta in days
+        if len(out) >= limit:
+            break
+    return out, ages
 
 
 def own_tags(*tag_dbs):
@@ -1254,8 +1270,8 @@ def _ranked(
     elif opt_rank == 'unread':
         pids, scores = unread_rank(tags=opt_tags)
     elif opt_rank == 'time':
-        pids, scores = time_rank(opt_time_filter)
-        opt_time_filter = ''  # done
+        pids, scores = time_rank(opt_time_filter, opt_skip_have == 'yes', opt_published, limit)
+        opt_time_filter, opt_skip_have, opt_published = '', 'no', False  # done
     else:
         pids, scores = random_rank(opt_time_filter)
         opt_time_filter = ''

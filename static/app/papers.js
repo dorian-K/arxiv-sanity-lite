@@ -146,23 +146,30 @@ const NoteBox = ({ pid, note, setNote, editing, setEditing }) => {
 // meanwhile, and the page asks again until each is there (or gives up after ~2 minutes)
 const aiSummaries = {}; // pid -> fields | 'pending' | 'none'
 const aiListeners = new Set();
+const aiShown = new Map(); // pid -> cards showing it now: only those are asked about again
+const aiNoneAt = {}; // pid -> when it was given up on: asked again after NONE_RETRY_MS (a rate limit, a hiccup)
+const NONE_RETRY_MS = 60000;
 let aiWanted = new Set();
 let aiTimer = null;
 const aiNotify = () => aiListeners.forEach(f => f());
+const giveUp = p => { aiSummaries[p] = 'none'; aiNoneAt[p] = Date.now(); };
 const askSummaries = (pids, round) => {
     api('/summaries', { pids: pids.join(',') }, { keep: true })
         .then(res => {
             Object.assign(aiSummaries, res.summaries);
             const pending = res.pending.filter(p => !res.summaries[p]);
-            pids.forEach(p => { if (!res.summaries[p] && !pending.includes(p)) aiSummaries[p] = 'none'; });
-            if (pending.length && round < 50) setTimeout(() => askSummaries(pending, round + 1), 2500);
-            else pending.forEach(p => { aiSummaries[p] = 'none'; });
+            pids.forEach(p => { if (!res.summaries[p] && !pending.includes(p)) giveUp(p); });
+            // cards left behind (another page by now) aren't polled for: asked again if they show again
+            const still = pending.filter(p => aiShown.get(p) > 0);
+            pending.filter(p => !still.includes(p)).forEach(p => { delete aiSummaries[p]; });
+            if (still.length && round < 50) setTimeout(() => askSummaries(still, round + 1), 2500);
+            else still.forEach(giveUp);
             aiNotify();
         })
-        .catch(() => { pids.forEach(p => { aiSummaries[p] = 'none'; }); aiNotify(); });
+        .catch(() => { pids.forEach(giveUp); aiNotify(); });
 };
 const wantSummary = pid => {
-    if (pid in aiSummaries) return;
+    if (pid in aiSummaries && !(aiSummaries[pid] === 'none' && Date.now() - aiNoneAt[pid] > NONE_RETRY_MS)) return;
     aiSummaries[pid] = 'pending';
     aiWanted.add(pid);
     clearTimeout(aiTimer);
@@ -178,8 +185,9 @@ const useAiSummary = p => {
     useEffect(() => {
         const f = () => bump(x => x + 1);
         aiListeners.add(f);
+        aiShown.set(p.id, (aiShown.get(p.id) || 0) + 1);
         if (m.summaries_ask && !p.ai) wantSummary(p.id);
-        return () => aiListeners.delete(f);
+        return () => { aiListeners.delete(f); aiShown.set(p.id, aiShown.get(p.id) - 1); };
     }, [p.id]);
     if (!m.summaries_on) return null;
     // only logged-in users' pages ask for missing ones (each is a model call); others show what exists

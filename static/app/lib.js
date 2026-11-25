@@ -154,7 +154,7 @@ export function useData(path, busyMsg) {
     const [state, setState] = useState({ data: null, error: null, path: null, kept: 0 });
     const [round, setRound] = useState(0);
     useEffect(() => {
-        let live = true, fresh = false;
+        let live = true, fresh = false, ok = false, shownKept = false;
         if (path === null) return undefined;
         busy(busyMsg || 'Loading…');
         // a slow connection: the copy kept on the device shows meanwhile, marked as such
@@ -162,15 +162,17 @@ export function useData(path, busyMsg) {
             if (!k || !live || fresh) return;
             setState({ data: k.data, error: null, path, kept: k.time });
             slowCopy.set(k.time);
+            shownKept = true;
             pageReady();
         }), SLOW_MS);
         load(path).then(
-            data => { fresh = true; if (live) setState({ data, error: null, path, kept: 0 }); keepCopy(path, data); },
+            data => { fresh = ok = true; if (live) setState({ data, error: null, path, kept: 0 }); keepCopy(path, data); },
             e => { fresh = true; if (live) setState(s => ({ ...s, error: e.message, path })); },
         ).finally(() => {
             clearTimeout(slow);
             idle();
-            if (live) { slowCopy.set(0); pageReady(); }
+            // a failed load leaves the kept copy on screen: its note stays with it
+            if (live) { if (ok || !shownKept) slowCopy.set(0); pageReady(); }
         });
         return () => { live = false; clearTimeout(slow); slowCopy.set(0); };
     }, [path, round]);

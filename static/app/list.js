@@ -278,7 +278,7 @@ export const ListPage = () => {
     const url = location.use();
     const m = me.use();
     const path = listPath(url);
-    const { data: d, error, loading, reload, dataPath } = useData(path, waitingFor(url));
+    const { data: d, error, loading, reload, dataPath, kept } = useData(path, waitingFor(url));
     if (!d) {
         if (error) return html`<div class="page"><section class="card"><p class="form-error">${error}</p>
             <button type="button" class="btn" onClick=${reload}>Try again</button></section></div>`;
@@ -324,7 +324,7 @@ export const ListPage = () => {
                 ${' '}<a href=${'/?' + exact.toString()}>Search for “${g.search_query}” instead</a></div>` : null}
             ${d.notice ? html`<div class="notice">${d.notice}</div>` : null}
             ${d.missing ? html`<${MissingPaper} miss=${d.missing} editable=${editable} userTags=${userTags} key=${d.missing.pid} />` : null}
-            ${d.missing && !d.papers.length ? null : html`<${PaperList} papers=${d.papers} key=${dataPath} />`}`}
+            ${d.missing && !d.papers.length ? null : html`<${PaperList} papers=${d.papers} key=${dataPath + ':' + kept} />`}`}
         </section>
         <nav id="pagination" aria-label="pages">
             <button class="btn" disabled=${pageNo <= 1} onClick=${() => goPage(pageNo - 1)}>← prev</button>

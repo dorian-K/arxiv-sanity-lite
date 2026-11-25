@@ -9,7 +9,7 @@ import { MathText } from 'app/math';
 export const DigestPage = () => {
     const url = location.use();
     const m = me.use();
-    const { data: d, error, reload, dataPath } = useData('/ui/digest' + url.search, 'Loading your digest…');
+    const { data: d, error, reload, dataPath, kept } = useData('/ui/digest' + url.search, 'Loading your digest…');
     const [state, run] = useAction();
     if (!d) return error ? html`<${LoadError} error=${error} reload=${reload} />` : null;
     setShared(d, m);
@@ -39,7 +39,7 @@ export const DigestPage = () => {
             </section>
             ${d.sections.length ? html`
             <${ViewSwitch} share=${true} />
-            <${DigestSections} sections=${d.sections} key=${dataPath + d.digest_time} />` : null}
+            <${DigestSections} sections=${d.sections} key=${dataPath + d.digest_time + ':' + kept} />` : null}
         </div>
     </${Page.Provider}>`;
 };

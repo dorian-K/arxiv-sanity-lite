@@ -1316,7 +1316,8 @@ def ui_list():
     default_skip_have = 'no'
     # (page_number, u and published don't count: page 2 of the default is /?page_number=2, ?u=
     # is a shared link, and published=yes a filter on top; all stay "For you")
-    if not (set(request.args) - {'page_number', 'u', 'published'}) and get_tags():
+    # own tags: 'all' trains on those alone, so a user with only an agent's tags would land on an empty list
+    if not (set(request.args) - {'page_number', 'u', 'published'}) and own_tags(get_tags()):
         # the main use: a user with tags lands on the best recent papers for them (FOR_YOU_DAYS)
         default_rank, default_tags, default_time_filter, default_skip_have = 'tags', 'all', str(FOR_YOU_DAYS), 'yes'
 
@@ -2759,14 +2760,14 @@ def tag_check():
         return {'error': 'no features yet'}, 400
     features = load_features()
     key = (g.owner, tag, hash(frozenset(pos)), hash(frozenset(neg)), db.features_version())
-    if key not in _check_cache:
+    ranks = _check_cache.get(key)  # one lookup: another thread may clear the cache in between two
+    if ranks is None:
         if rate_limited('check'):
             return {'error': 'too many tag checks, try again later'}, 429
         ranks = holdout_ranks(features, pos, neg, folds=CHECK_FOLDS)
         if len(_check_cache) > 1000:
             _check_cache.clear()
         _check_cache[key] = ranks
-    ranks = _check_cache[key]
     if not ranks:
         return {'tag': tag, 'n': len(pos), 'min_papers': CHECK_FOLDS, 'ranks': {}}
     v = sorted(ranks.values())

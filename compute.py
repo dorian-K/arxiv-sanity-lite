@@ -95,8 +95,9 @@ if __name__ == '__main__':
             print(f"{old} is on arXiv too, as {new}: merged into it")
     times = pdb.times()
     # rows oldest first, so the papers of the last N days are one slice at the end, which
-    # serve.py scores without copying anything (see _model_ranking)
-    pids = sorted(pdb.keys(), key=lambda p: times[p])
+    # serve.py scores without copying anything (see _model_ranking). the ids from the same read as
+    # the times: a paper imported in between was in keys() but not in times (a KeyError)
+    pids = sorted(times, key=lambda p: (times[p], p))
 
     def text(d):
         return ' '.join([d['title'], d['summary'], ' '.join(a['name'] for a in d['authors'])])

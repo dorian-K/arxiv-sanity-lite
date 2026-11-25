@@ -84,23 +84,34 @@ class Fetcher:
         """(final url, body), or (None, b'') if arXiv has no such page (404/410)"""
         time.sleep(max(0.0, self.last + self.pause - time.time()))
         src = sources.source_of_url(url) or sources.ARXIV
+        # arxiv.org's pages: the shared slot only gives the turn (it notes the time), the download runs
+        # outside it. held for a whole 50 MB PDF, it made every user's /import and graph lookup (the
+        # API, through the same slot) wait behind it. our own pace to arxiv.org is self.pause (>= 15 s).
+        # the other sites' requests stay inside their slot: theirs is the only pace they get
+        if src is sources.ARXIV:
+            with src.slot():
+                self.last = time.time()
+            return self._get(url, max_bytes, timeout)
         with src.slot():
             self.last = time.time()
-            req = urllib.request.Request(url, headers={'User-Agent': USER_AGENT})
-            try:
-                with urllib.request.urlopen(req, timeout=timeout) as r:
-                    body = r.read(max_bytes + 1)
-                    final = r.geturl()
-            except urllib.error.HTTPError as e:
-                if e.code in (429, 503):
-                    try:
-                        wait = int(e.headers.get('Retry-After') or 600)
-                    except ValueError:
-                        wait = 600
-                    raise SlowDown(max(60, wait)) from e
-                if e.code in (404, 410):
-                    return None, b''
-                raise
+            return self._get(url, max_bytes, timeout)
+
+    def _get(self, url, max_bytes, timeout):
+        req = urllib.request.Request(url, headers={'User-Agent': USER_AGENT})
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                body = r.read(max_bytes + 1)
+                final = r.geturl()
+        except urllib.error.HTTPError as e:
+            if e.code in (429, 503):
+                try:
+                    wait = int(e.headers.get('Retry-After') or 600)
+                except ValueError:
+                    wait = 600
+                raise SlowDown(max(60, wait)) from e
+            if e.code in (404, 410):
+                return None, b''
+            raise
         if len(body) > max_bytes:
             raise TooBig(url)
         return final, body

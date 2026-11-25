@@ -201,15 +201,17 @@ const PdfPage = ({ doc, i, scale, onLink, dpr, view }) => {
     }, [doc, i, scale, view, drawnAt]);
     useEffect(() => {
         const el = ref.current;
-        let drawn = false, live = true, cancel = null;
+        let drawn = false, live = true, cancel = null, pg = null;
         const draw = async () => {
             if (drawn) return;
             drawn = true;
-            const page = await doc.pdf.getPage(i + 1);
+            const page = pg = await doc.pdf.getPage(i + 1);
             if (live && drawn) cancel = await drawPage(el, page, scale, onLink, doc.lib, () => live && drawn);
             if (live && drawn) setDrawnAt(Date.now());
         };
-        const drop = () => { if (!drawn) return; drawn = false; if (cancel) cancel(); cancel = null; el.replaceChildren(); };
+        // let go of a page far from the screen: its canvas, and what pdf.js keeps of it (its operator list
+        // and decoded images, which otherwise stay for every page ever looked at)
+        const drop = () => { if (!drawn) return; drawn = false; if (cancel) cancel(); cancel = null; el.replaceChildren(); if (pg) pg.cleanup(); };
         const near = new IntersectionObserver(es => es.forEach(e => e.isIntersecting && draw()), { rootMargin: NEAR });
         const far = new IntersectionObserver(es => es.forEach(e => !e.isIntersecting && drop()), { rootMargin: `${FAR * 100}% 0px` });
         near.observe(el);
@@ -332,10 +334,13 @@ export const ReaderPage = () => {
             const r = await fetch(pdfPath(pid));
             if (!r.ok) throw new Error(r.status === 404 ? "This PDF isn't on this device, and the server doesn't keep it for you (it keeps a PDF for a week after you last got ready for offline)." : `The PDF couldn't be opened (the server answered ${r.status}).`);
             const data = new Uint8Array(await r.arrayBuffer());
+            if (!live) return; // left meanwhile (unpacking a light copy takes seconds): no document nobody destroys
             task = L.getDocument({ data, isEvalSupported: false, standardFontDataUrl: PDFJS + 'standard_fonts/' });
             const pdf = await task.promise;
             const sizes = [];
-            for (let i = 1; i <= pdf.numPages; i++) sizes.push((await pdf.getPage(i)).getViewport({ scale: 1 }));
+            // all pages' sizes at once (one after the other kept a long paper on the skeleton for long)
+            const pages = await Promise.all(Array.from({ length: pdf.numPages }, (_, i) => pdf.getPage(i + 1)));
+            sizes.push(...pages.map(pg => pg.getViewport({ scale: 1 })));
             if (live) setDoc({ pdf, sizes, lib: L });
         })().catch(e => live && setError(e.message || String(e))).finally(() => live && pageReady());
         return () => { live = false; if (task) task.destroy(); };

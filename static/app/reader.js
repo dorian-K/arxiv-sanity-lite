@@ -15,6 +15,9 @@ const MAX_PIXELS = 16e6; // per canvas (browsers refuse bigger ones)
 const ENTRY_CHARS = 350; // text taken from where a citation points: about one bibliography entry
 const MAX_WIDTH = 1200; // px a page is drawn at, at most (zoom aside): the whole width on phones and laptops
 const ZOOMS = [0.75, 1, 1.25, 1.5, 2, 3];
+const SHARP_FROM = 1.1; // pinch zoom (the browser's, not ZOOMS) above which the visible part is drawn again, sharper
+const SHARP_MARGIN = 0.25; // of the screen, drawn sharp around it too, so a small pan doesn't show the blurry page
+const SETTLE_MS = 200; // after the last pinch or scroll
 
 let lib = null;
 async function pdfjs() {
@@ -143,9 +146,59 @@ const drawPage = async (el, page, scale, onLink, L, isLive) => {
     return cancel;
 };
 
-const PdfPage = ({ doc, i, scale, onLink }) => {
+// the part of a page on screen while the browser is pinch-zoomed in, drawn at the zoomed resolution over
+// the page's own canvas (that one is drawn for the unzoomed screen only: the whole page at 3x would be a
+// canvas too big to keep). the browser's own PDF viewer does the same
+const drawSharp = (el, page, scale) => {
+    const vv = window.visualViewport;
+    const box = el.getBoundingClientRect();
+    const mx = vv.width * SHARP_MARGIN, my = vv.height * SHARP_MARGIN;
+    const x0 = Math.max(0, vv.offsetLeft - mx - box.left), y0 = Math.max(0, vv.offsetTop - my - box.top);
+    const x1 = Math.min(box.width, vv.offsetLeft + vv.width + mx - box.left);
+    const y1 = Math.min(box.height, vv.offsetTop + vv.height + my - box.top);
+    if (x1 <= x0 || y1 <= y0) return null; // not on screen
+    const w = x1 - x0, h = y1 - y0;
+    const ratio = Math.min((window.devicePixelRatio || 1) * vv.scale, Math.sqrt(MAX_PIXELS / (w * h)));
+    const canvas = document.createElement('canvas');
+    canvas.className = 'pdf-sharp';
+    canvas.width = Math.ceil(w * ratio);
+    canvas.height = Math.ceil(h * ratio);
+    Object.assign(canvas.style, { left: x0 + 'px', top: y0 + 'px', width: w + 'px', height: h + 'px' });
+    const task = page.render({
+        canvasContext: canvas.getContext('2d'),
+        viewport: page.getViewport({ scale }),
+        transform: [ratio, 0, 0, ratio, -x0 * ratio, -y0 * ratio],
+    });
+    return { canvas, task };
+};
+
+const PdfPage = ({ doc, i, scale, onLink, dpr, view }) => {
     const ref = useRef(null);
     const vp = doc.sizes[i];
+    const [drawnAt, setDrawnAt] = useState(0); // a page drawn while zoomed in gets its sharp part too
+    useEffect(() => {
+        // pinch-zoomed in: the visible part again at that resolution, swapped in once drawn (no blank meanwhile)
+        const el = ref.current;
+        const old = () => el.querySelector('.pdf-sharp');
+        if (!view || view.zoom < SHARP_FROM || !window.visualViewport || !el.querySelector('canvas')) {
+            if (old()) old().remove();
+            return undefined;
+        }
+        let live = true, task = null;
+        doc.pdf.getPage(i + 1).then(page => {
+            if (!live) return;
+            const got = drawSharp(el, page, scale);
+            if (!got) { if (old()) old().remove(); return; }
+            task = got.task;
+            task.promise.then(() => {
+                const base = live && el.querySelector('canvas:not(.pdf-sharp)');
+                if (!base) return;
+                if (old()) old().remove();
+                base.after(got.canvas);
+            }, () => {}); // cancelled
+        });
+        return () => { live = false; if (task) task.cancel(); };
+    }, [doc, i, scale, view, drawnAt]);
     useEffect(() => {
         const el = ref.current;
         let drawn = false, live = true, cancel = null;
@@ -154,6 +207,7 @@ const PdfPage = ({ doc, i, scale, onLink }) => {
             drawn = true;
             const page = await doc.pdf.getPage(i + 1);
             if (live && drawn) cancel = await drawPage(el, page, scale, onLink, doc.lib, () => live && drawn);
+            if (live && drawn) setDrawnAt(Date.now());
         };
         const drop = () => { if (!drawn) return; drawn = false; if (cancel) cancel(); cancel = null; el.replaceChildren(); };
         const near = new IntersectionObserver(es => es.forEach(e => e.isIntersecting && draw()), { rootMargin: NEAR });
@@ -161,7 +215,7 @@ const PdfPage = ({ doc, i, scale, onLink }) => {
         near.observe(el);
         far.observe(el);
         return () => { live = false; near.disconnect(); far.disconnect(); if (cancel) cancel(); el.replaceChildren(); };
-    }, [doc, i, scale]);
+    }, [doc, i, scale, dpr]);
     return html`<div class="pdf-page" data-page=${i + 1} ref=${ref}
         style=${{ width: vp.width * scale + 'px', height: vp.height * scale + 'px' }}></div>`;
 };
@@ -222,6 +276,8 @@ export const ReaderPage = () => {
     const [pack, setPack] = useState(null);
     const [zoom, setZoom] = useState(1);
     const [width, setWidth] = useState(0);
+    const [dpr, setDpr] = useState(window.devicePixelRatio || 1); // changes with the browser's ctrl +/- zoom
+    const [view, setView] = useState(null); // the browser's pinch zoom once it settled: {zoom}
     const [pop, setPop] = useState(null);
     const [back, setBack] = useState([]); // where jumps came from (scroll positions)
     const box = useRef(null);
@@ -236,6 +292,29 @@ export const ReaderPage = () => {
             else if (!offline.get()) api('/ui/inspect?pid=' + encodeURIComponent(pid)).then(d => d && d.paper && setPaper(d.paper)).catch(() => {});
         });
     }, [pid]);
+    useEffect(() => {
+        // pages are drawn for the screen's pixels: zooming in (pinch, or ctrl +) draws them again, sharper
+        const vv = window.visualViewport;
+        let t = null;
+        const settle = () => {
+            clearTimeout(t);
+            t = setTimeout(() => {
+                setDpr(window.devicePixelRatio || 1);
+                const zoom = vv ? vv.scale : 1;
+                // not zoomed in: scrolling redraws nothing (the same state, so no render)
+                setView(v => (zoom < SHARP_FROM && (!v || v.zoom < SHARP_FROM) ? v : { zoom }));
+            }, SETTLE_MS);
+        };
+        window.addEventListener('resize', settle);
+        window.addEventListener('scroll', settle, { passive: true });
+        if (vv) { vv.addEventListener('resize', settle); vv.addEventListener('scroll', settle); }
+        return () => {
+            clearTimeout(t);
+            window.removeEventListener('resize', settle);
+            window.removeEventListener('scroll', settle);
+            if (vv) { vv.removeEventListener('resize', settle); vv.removeEventListener('scroll', settle); }
+        };
+    }, []);
     useEffect(() => {
         // the box's width (it changes with the window, and when the scrollbar comes)
         const measure = () => box.current && setWidth(box.current.clientWidth);
@@ -317,7 +396,7 @@ export const ReaderPage = () => {
         : !doc ? html`<div class="pdf-pages" role="status" aria-busy="true">
             <div class="skel-caption">Opening the PDF…</div>
             <div class="pdf-page skel" style=${{ width: Math.min(width || 600, MAX_WIDTH) + 'px', height: Math.min(width || 600, MAX_WIDTH) * 1.3 + 'px' }}></div></div>`
-        : html`<div class="pdf-pages">${doc.sizes.map((_, i) => html`<${PdfPage} key=${i} doc=${doc} i=${i} scale=${scale} onLink=${follow} />`)}</div>`}
+        : html`<div class="pdf-pages">${doc.sizes.map((_, i) => html`<${PdfPage} key=${i} doc=${doc} i=${i} scale=${scale} onLink=${follow} dpr=${dpr} view=${view} />`)}</div>`}
         ${pop ? html`<${CitePop} key=${(pop.ref && pop.ref.id) || pop.text || pop.url} pop=${pop} tags=${tags} defTag=${paper && (paper.utags || [])[0]}
             editable=${editable} onClose=${() => setPop(null)} onGo=${() => { scrollTo(pop.target); setPop(null); }} />` : null}
     </div>`;

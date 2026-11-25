@@ -13,6 +13,7 @@ const NEAR = '1500px'; // pages this close to the screen are drawn
 const FAR = 4; // screens away from the visible part: a drawn page is let go of
 const MAX_PIXELS = 16e6; // per canvas (browsers refuse bigger ones)
 const ENTRY_CHARS = 350; // text taken from where a citation points: about one bibliography entry
+const MAX_WIDTH = 1200; // px a page is drawn at, at most (zoom aside): the whole width on phones and laptops
 const ZOOMS = [0.75, 1, 1.25, 1.5, 2, 3];
 
 let lib = null;
@@ -236,10 +237,12 @@ export const ReaderPage = () => {
         });
     }, [pid]);
     useEffect(() => {
+        // the box's width (it changes with the window, and when the scrollbar comes)
         const measure = () => box.current && setWidth(box.current.clientWidth);
         measure();
-        window.addEventListener('resize', measure);
-        return () => window.removeEventListener('resize', measure);
+        const ro = new ResizeObserver(measure);
+        ro.observe(box.current);
+        return () => ro.disconnect();
     }, []);
     useEffect(() => {
         let live = true, task = null;
@@ -259,7 +262,7 @@ export const ReaderPage = () => {
         return () => { live = false; if (task) task.destroy(); };
     }, [pid]);
 
-    const fit = doc && width ? Math.min(width, 1000) / Math.max(...doc.sizes.map(v => v.width)) : 1;
+    const fit = doc && width ? Math.min(width, MAX_WIDTH) / Math.max(...doc.sizes.map(v => v.width)) : 1;
     const scale = fit * zoom;
     const tags = (pack && pack.tags) || [];
     const editable = canEdit(m);
@@ -313,7 +316,7 @@ export const ReaderPage = () => {
             ${paper ? html`<p><a href=${paper.pdf}>The PDF on ${paper.source || 'its site'}</a> (needs a network).</p>` : null}</section>`
         : !doc ? html`<div class="pdf-pages" role="status" aria-busy="true">
             <div class="skel-caption">Opening the PDF…</div>
-            <div class="pdf-page skel" style=${{ width: Math.min(width || 600, 1000) + 'px', height: Math.min(width || 600, 1000) * 1.3 + 'px' }}></div></div>`
+            <div class="pdf-page skel" style=${{ width: Math.min(width || 600, MAX_WIDTH) + 'px', height: Math.min(width || 600, MAX_WIDTH) * 1.3 + 'px' }}></div></div>`
         : html`<div class="pdf-pages">${doc.sizes.map((_, i) => html`<${PdfPage} key=${i} doc=${doc} i=${i} scale=${scale} onLink=${follow} />`)}</div>`}
         ${pop ? html`<${CitePop} key=${(pop.ref && pop.ref.id) || pop.text || pop.url} pop=${pop} tags=${tags} defTag=${paper && (paper.utags || [])[0]}
             editable=${editable} onClose=${() => setPop(null)} onGo=${() => { scrollTo(pop.target); setPop(null); }} />` : null}

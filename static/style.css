@@ -956,7 +956,7 @@ details.danger form { margin-top: 10px; }
 .reader-raw { white-space: nowrap; }
 .reader-bar { flex-wrap: wrap; }
 .reader-hint { font-size: 12px; color: var(--muted); text-align: center; margin: 6px 8px; }
-.pdf-pages { display: flex; flex-direction: column; align-items: center; gap: 10px; overflow-x: auto; }
+.pdf-pages { display: flex; flex-direction: column; align-items: safe center; gap: 10px; overflow-x: auto; }
 .pdf-page { position: relative; background: #fff; box-shadow: 0 1px 4px rgb(0 0 0 / .25); flex: none; }
 .pdf-page canvas { display: block; }
 .pdf-link { position: absolute; z-index: 2; border-radius: 2px; }
@@ -988,3 +988,7 @@ details.danger form { margin-top: 10px; }
 .cite-text.muted { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
 .pack-read-more { display: inline-flex; gap: 10px; align-items: baseline; margin-left: 10px; font-size: 13px; }
 .pack-read-more .linkbtn { font-size: 13px; }
+/* the reader uses the whole width: no page margin around it, no max width */
+main:has(> .reader) { max-width: none; padding: 0 0 40px; }
+.reader .reader-hint { margin: 4px 8px; }
+.reader .pdf-pages { gap: 6px; }

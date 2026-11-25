@@ -133,3 +133,23 @@ def test_no_embedding_session_while_compute_runs(corpus):
     held.close()  # compute.py exits
     with db.heavy_slot() as free:
         assert free
+
+
+def test_liked_papers_without_embeddings_dont_train_or_look_like_misfits(features):
+    from test_rank import with_fake_embeddings
+
+    f = with_fake_embeddings(features)
+    v = vision_pids(f)
+    masked, embedded = v[::4], [p for p in v if p not in v[::4]]
+    mask = np.ones(len(f['pids']), dtype=bool)
+    mask[[f['ptoi'][p] for p in masked]] = False
+    f['x_emb'] = f['x_emb'] * mask[:, None]
+    f['emb_mask'] = mask
+    # "similar to" a paper still waiting for its embedding: by its words, not at random
+    m, s = rank.fit(f, masked[:1], feats='emb', model='logreg')
+    assert m['feats'] == 'tfidf'
+    own = s[f['ptoi'][masked[0]]]
+    assert (s > own).sum() < 5
+    # the tag check only judges (and compares with) papers the model can score
+    ranks = rank.holdout_ranks(f, embedded[:8] + masked[:3], feats='concat', model='logreg')
+    assert set(ranks) == set(embedded[:8])

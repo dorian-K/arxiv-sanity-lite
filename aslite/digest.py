@@ -72,9 +72,9 @@ def compute(
         rows = rows[np.argsort(-s[rows], kind='stable')][
             : n + sum(sizes.get(t, default_size(t, per_tag)) for t in tags)
         ]
-        ordered = np.sort(s)
-        higher = len(s) - np.searchsorted(ordered, s[rows], side='right')
-        candidates += [(h / len(s), tag, -float(s[r]), int(r)) for h, r in zip(higher, rows, strict=True)]
+        ordered = np.sort(s if ok is None else s[ok])  # among the papers that get ranked
+        higher = len(ordered) - np.searchsorted(ordered, s[rows], side='right')
+        candidates += [(h / len(ordered), tag, -float(s[r]), int(r)) for h, r in zip(higher, rows, strict=True)]
     picked, taken = {t: [] for t in want}, set()
     for _, tag, neg_score, r in sorted(candidates):
         if r not in taken and len(picked[tag]) < want[tag]:

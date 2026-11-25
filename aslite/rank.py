@@ -305,6 +305,15 @@ def fit(features, pos_pids, neg_pids=(), feats='auto', model='auto', C=None, ske
     neg = np.array(sorted({ptoi[p] for p in neg_pids if p in ptoi} - set(pos.tolist())), dtype=np.int64)
     if len(pos) == 0:
         return None, None
+    # papers still waiting for an embedding have zero rows there: as training examples they would teach
+    # the model that a zero embedding is what the tag likes (a "similar to" a brand-new paper came out
+    # random). they are left out; if no liked paper has one yet, the model goes by the words alone
+    ok = usable(features, feats)
+    if ok is not None:
+        if not ok[pos].any():
+            feats = 'tfidf'
+        else:
+            pos, neg = pos[ok[pos]], neg[ok[neg]]
 
     # deterministic random negatives for a given set of positives, so reloading
     # the page does not reshuffle the ranking
@@ -404,14 +413,19 @@ def holdout_ranks(features, pos_pids, neg_pids=(), folds=5, **kwargs):
     rest of the tag doesn't predict are mis-tagged or a side topic that a tag of its own
     would serve better. needs at least `folds` papers
     """
-    pos = sorted({p for p in pos_pids if p in features['ptoi']})
+    ptoi = features['ptoi']
+    # only papers the model can score, compared with those: one still waiting for its embedding would
+    # look like a misfit (its score lacks the embedding part)
+    ok = usable(features, resolve_feats(features, kwargs.get('feats')))
+    pos = sorted({p for p in pos_pids if p in ptoi and (ok is None or ok[ptoi[p]])})
     if len(pos) < max(folds, 2):
         return {}
     order = random.Random(zlib.crc32(','.join(pos).encode())).sample(pos, len(pos))
-    ptoi, n, out = features['ptoi'], len(features['pids']), {}
+    out = {}
     for k in range(folds):
         test = set(order[k::folds])
         s, _ = score(features, [p for p in pos if p not in test], neg_pids, **kwargs)
+        ranked = s if ok is None else s[ok]
         for p in test:
-            out[p] = (int((s > s[ptoi[p]]).sum()) + 1) / n  # its place in the ranking, without sorting
+            out[p] = (int((ranked > s[ptoi[p]]).sum()) + 1) / len(ranked)  # its place, without sorting
     return out

@@ -6,11 +6,13 @@
 // when the server can't be reached. votes, read marks and notes made offline wait in lib.js's
 // queue, and the pack on the device follows them (onPaperChange). the pack also has the rest of
 // the saved papers (closed, no summaries, thumbnails or PDFs), so the search box finds them offline.
+// tabs show one kind of list (the address /digest opens the digest), an order puts what can be read
+// here first, and each paper's references can be saved to a tag, offline too (queued in lib.js).
 // a PDF whose paper leaves the PDF set (read, out of the digest) but stays in the pack isn't deleted:
 // it becomes a light copy of ~200 kB (shrink.js: worse images, the reader's own fonts for the text,
 // rounded drawings, stored LZMA-packed; nothing left out), up to LIGHT_BUDGET for all of them, the
 // oldest let go of first
-import { html, useState, useEffect, store, api, me, offline, unsynced, flushChanges, refreshMe, onPaperChange, canEdit, pageReady } from 'app/lib';
+import { html, useState, useEffect, store, api, tagRequest, me, offline, unsynced, flushChanges, refreshMe, onPaperChange, canEdit, pageReady, location } from 'app/lib';
 import { Paper, Page } from 'app/papers';
 import { matcher } from 'app/highlight';
 
@@ -76,8 +78,10 @@ export async function pdfsOnDevice() {
 }
 
 const allPapers = pack => pack.sections.flatMap(s => s.papers);
-// the papers the pack is for; the extra sections are only there to be searched
-const mainPapers = pack => pack.sections.filter(s => !s.extra).flatMap(s => s.papers);
+const unique = papers => [...new Map(papers.map(p => [p.id, p])).values()];
+// the papers the pack is for, each once (the digest shows papers of To read again); the extra
+// sections are only there to be searched
+const mainPapers = pack => unique(pack.sections.filter(s => !s.extra).flatMap(s => s.papers));
 
 // a vote, read mark or note (sent or kept for later): the stored copy of the card follows
 const without = (l, t) => (l || []).filter(x => x !== t);
@@ -403,7 +407,66 @@ const Prepare = ({ pack, onDevice }) => {
 // a card whose PDF is on the device: its title and pdf link open that copy, its site gets a link of its own
 const onDeviceCard = p => ({ ...p, url: pdfPath(p.id), pdf: pdfPath(p.id), source_url: p.url });
 
-const PackPaper = ({ p, tag, onDevice }) => html`<div class="pack-paper">
+// what a paper cites, from the pack: the ones with a known id can be saved to a tag (then they are in
+// To read), offline too: /add for papers the site has, /import (it fetches the paper) for the others
+const refTag = store('');
+const PackRefs = ({ p, tag, tags, canEdit }) => {
+    const [open, setOpen] = useState(false);
+    const chosen = refTag.use();
+    const refs = p.refs || [];
+    if (!refs.length) return null;
+    const to = tags.includes(chosen) ? chosen : tag || p.utags.find(t => tags.includes(t)) || tags[0] || '';
+    return html`<div class="pack-refs">
+        <button class="linkbtn" aria-expanded=${open} onClick=${() => setOpen(!open)}
+                title="the papers this one cites; save the ones you want to read to a tag, offline too">
+            ${open ? '▾' : '▸'} References (${refs.length})</button>
+        ${open ? html`
+        ${canEdit && to ? html`<div class="pack-refs-to">
+            <label title="the tag “+ Save” puts a cited paper in; it then shows in To read">Save to
+                <select value=${to} onChange=${e => refTag.set(e.target.value)}>
+                    ${tags.map(t => html`<option key=${t} value=${t}>${t}</option>`)}
+                </select></label>
+            <span class="hint">saved papers go to To read; offline, they are sent when you're back online</span>
+        </div>` : null}
+        <ol class="pack-refs-list">${refs.map((r, i) => html`<${PackRef} key=${i} r=${r} to=${to} canEdit=${canEdit && to} />`)}</ol>` : null}
+    </div>`;
+};
+
+const PackRef = ({ r, to, canEdit }) => {
+    const [saved, setSaved] = useState(r.saved || []);
+    const [msg, setMsg] = useState('');
+    const keep = tag => updatePack(pack => allPapers(pack).forEach(q => (q.refs || []).forEach(x => {
+        if (x.id === r.id && !(x.saved || []).includes(tag)) x.saved = [...(x.saved || []), tag];
+    })));
+    const save = async () => {
+        const tag = to;
+        setSaved(s => [...s, tag]);
+        setMsg('');
+        try {
+            const res = r.here ? await tagRequest('/add/' + r.id + '/' + encodeURIComponent(tag))
+                : await api('/import', { text: r.id, tag });
+            const got = res && res.results && res.results[0];
+            if (got && !got.pid) throw new Error(got.status);
+            if (got && !/already here|added from/.test(got.status)) throw new Error(got.status); // over the limit, not reached
+            if (typeof res === 'string' && res.includes('kept on this device')) setMsg('sent when you are back online');
+            keep(tag);
+        } catch (e) {
+            setSaved(s => s.filter(t => t !== tag));
+            setMsg(e.message);
+        }
+    };
+    const title = r.url ? html`<a href=${r.url}>${r.title}</a>` : r.title;
+    return html`<li>
+        ${title}${r.id ? html` <span class="muted">${r.id}</span>` : null}
+        ${saved.length ? html` <span class="pack-ref-saved" title="saved to these tags of yours">✓ ${saved.join(', ')}</span>` : null}
+        ${canEdit && r.id && !saved.includes(to) ? html` <button class="btn btn-small" onClick=${save}
+                title=${'save it to ' + to + (r.here ? '' : '; the site fetches the paper first')}>+ Save</button>` : null}
+        ${!r.id ? html` <span class="muted" title="no arXiv or proceedings id was found for this reference">(not on a site we know)</span>` : null}
+        ${msg ? html` <span class="muted">${msg}</span>` : null}
+    </li>`;
+};
+
+const PackPaper = ({ p, tag, onDevice, tags, canEdit }) => html`<div class="pack-paper">
     ${onDevice.get(p.id) === 'full' ? html`<a class="btn btn-small btn-primary pack-read" href=${pdfPath(p.id)}
             title="the PDF, from this device">📄 Read the PDF</a>`
         : onDevice.get(p.id) === 'light' ? html`<a class="btn btn-small pack-read" href=${pdfPath(p.id)}
@@ -411,16 +474,77 @@ const PackPaper = ({ p, tag, onDevice }) => html`<div class="pack-paper">
         : p.offline_pdf === 'waiting' ? html`<span class="pack-pdf muted">PDF on its way to this device…</span>`
         : p.offline_pdf === 'failed' ? html`<span class="pack-pdf muted">no PDF for offline (the server couldn't get it)</span>` : null}
     <${Paper} paper=${onDevice.has(p.id) ? onDeviceCard(p) : p} quickTag=${tag || undefined} />
+    <${PackRefs} p=${p} tag=${tag} tags=${tags || []} canEdit=${canEdit} />
 </div>`;
 
-const PackSection = ({ s, onDevice }) => {
-    const [open, setOpen] = useState(!s.extra);
+const PackSection = ({ s, onDevice, order, page, alone }) => {
+    const [open, setOpen] = useState(!s.extra || alone);
     return html`<section class="pack-section">
         <h2 class="pack-heading"><button class="linkbtn" aria-expanded=${open} onClick=${() => setOpen(!open)}>
             ${open ? '▾' : '▸'} ${s.title}</button> <span class="muted">${s.papers.length}</span></h2>
         ${s.extra && !open ? html`<p class="hint pack-extra-hint">Kept for searching: no PDFs or thumbnails.</p>` : null}
-        ${open ? html`<div class="rel_papers">${s.papers.map(p => html`<${PackPaper} key=${p.id} p=${p} tag=${s.tag} onDevice=${onDevice} />`)}</div>` : null}
+        ${open ? html`<div class="rel_papers">${sorted(s.papers, order, onDevice).map(p => html`<${PackPaper} key=${p.id} p=${p} tag=${s.tag}
+            onDevice=${onDevice} tags=${page.userTags} canEdit=${page.canEdit} />`)}</div>` : null}
     </section>`;
+};
+
+// the order within each list. 'here': what can be read on this device first (the full PDF, then a
+// light copy, then the rest), otherwise as the site had it: To read and Saved newest first, the
+// digest and For you best first
+const ORDERS = [
+    ['here', 'PDF on this device first', 'papers you can read here, without a network, come first; otherwise as on the site'],
+    ['site', 'As on the site', 'To read and Saved newest first, the digest and For you best match first'],
+    ['newest', 'Newest papers first', 'by the date of the paper'],
+];
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const paperDate = p => { // "Nov 25 2026"
+    const m = String(p.time || '').match(/^(\w{3}) (\d+) (\d{4})/);
+    return m ? Number(m[3]) * 10000 + (MONTHS.indexOf(m[1]) + 1) * 100 + Number(m[2]) : 0;
+};
+function sorted(papers, order, onDevice) {
+    const key = order === 'here' ? p => ({ full: 0, light: 1 })[onDevice.get(p.id)] ?? 2
+        : order === 'newest' ? p => -paperDate(p) : null;
+    if (!key) return papers;
+    return papers.map((p, i) => [key(p), i, p]).sort((a, b) => a[0] - b[0] || a[1] - b[1]).map(x => x[2]);
+}
+const ORDER_KEY = 'resanity-pack-order';
+const packOrder = store((() => { try { return localStorage.getItem(ORDER_KEY) || 'here'; } catch (e) { return 'here'; } })());
+const setOrder = o => { packOrder.set(o); try { localStorage.setItem(ORDER_KEY, o); } catch (e) { /* not remembered */ } };
+
+// the lists of the pack as tabs; the address picks the first one (/digest: the digest)
+const VIEWS = [['all', 'Everything'], ['toread', 'To read'], ['digest', 'Digest'], ['foryou', 'For you'], ['saved', 'Saved']];
+const VIEW_TIPS = {
+    all: 'every list on this device', toread: 'saved papers not marked as read', digest: 'your latest digest, as it was sent',
+    foryou: 'the best new papers for your tags', saved: 'your other saved papers, read ones too: no PDFs or thumbnails',
+};
+const viewOf = path => (path === '/digest' ? 'digest' : 'all');
+
+const PackLists = ({ pack, onDevice, page }) => {
+    const url = location.use();
+    const [view, setView] = useState(viewOf(url.pathname));
+    useEffect(() => setView(viewOf(url.pathname)), [url.pathname]);
+    const order = packOrder.use();
+    const count = key => unique(pack.sections.filter(s => s.key === key).flatMap(s => s.papers)).length;
+    const shown = pack.sections.filter(s => view === 'all' || s.key === view);
+    return html`<div class="pack-lists">
+        <div class="tabrow">
+            <nav class="tabs pack-tabs" aria-label="lists on this device">
+                ${VIEWS.filter(([k]) => k === 'all' || count(k)).map(([k, label]) => html`<button key=${k} type="button"
+                    aria-pressed=${view === k} class=${view === k ? 'active' : ''} title=${VIEW_TIPS[k]}
+                    onClick=${() => setView(k)}>${label}${k === 'all' ? '' : ` (${count(k)})`}</button>`)}
+            </nav>
+            <label class="window" title=${ORDERS.find(o => o[0] === order)?.[2]}>
+                <select aria-label="order" value=${order} onChange=${e => setOrder(e.target.value)}>
+                    ${ORDERS.map(([k, label]) => html`<option key=${k} value=${k}>${label}</option>`)}
+                </select>
+            </label>
+        </div>
+        <p class="hint pack-order-hint">${ORDERS.find(o => o[0] === order)?.[2]}${view === 'digest' && pack.digest_time
+            ? `. Your digest of ${pack.digest_time}: 👍 👎 😐 work offline too and are sent when you're back online.` : '.'}</p>
+        ${view === 'digest' && !count('digest') ? html`<p class="muted">There was no digest when this device got its papers.</p>` : null}
+        ${shown.map(s => html`<${PackSection} key=${view + s.key + s.title} s=${s} onDevice=${onDevice} order=${order} page=${page}
+            alone=${view !== 'all'} />`)}
+    </div>`;
 };
 
 // searching the pack, without a network: like the site's search, every word the query has (at a
@@ -470,7 +594,8 @@ const PackSearch = ({ pack, onDevice, page, children }) => {
             onInput=${e => { setQ(e.target.value); setAll(false); }} onKeyDown=${e => { if (e.key === 'Escape') setQ(''); }} />
         ${res ? html`<p class="muted pack-search-count">${res.papers.length ? `${res.papers.length} of the ${new Set(allPapers(pack).map(p => p.id)).size} papers on this device match` : 'No paper on this device matches.'}</p>
             <${Page.Provider} value=${{ ...page, hl: matcher(res.terms) }}>
-                <div class="rel_papers">${shown.map(r => html`<${PackPaper} key=${r.p.id} p=${r.p} tag=${r.tag} onDevice=${onDevice} />`)}</div>
+                <div class="rel_papers">${shown.map(r => html`<${PackPaper} key=${r.p.id} p=${r.p} tag=${r.tag} onDevice=${onDevice}
+                    tags=${page.userTags} canEdit=${page.canEdit} />`)}</div>
             </${Page.Provider}>
             ${res.papers.length > shown.length ? html`<button class="btn" onClick=${() => setAll(true)}>Show all ${res.papers.length}</button>` : null}` : children}
     </div>`;
@@ -521,7 +646,7 @@ export const OfflinePage = () => {
         </section>` : html`<${Prepare} pack=${pack} onDevice=${onDevice} />`}
         ${pack ? html`<${PackSearch} pack=${pack} onDevice=${onDevice} page=${page}>
             <${Page.Provider} value=${page}>
-                ${pack.sections.map(s => html`<${PackSection} key=${s.key + s.title} s=${s} onDevice=${onDevice} />`)}
+                <${PackLists} pack=${pack} onDevice=${onDevice} page=${page} />
             </${Page.Provider}>
         </${PackSearch}>` : null}
     </div>`;

@@ -927,3 +927,21 @@ details.danger form { margin-top: 10px; }
 .pack-search > .form-control { width: 100%; }
 .pack-search-count { font-size: 13px; margin: 6px 0 8px; }
 .pack-extra-hint { font-size: 12px; color: var(--muted); margin: -4px 0 0; }
+
+/* the reading pack's lists (offline.js): tabs, order, the references of a paper */
+.pack-tabs button {
+    padding: 6px 14px; margin-bottom: -1px; background: none; border: 0; border-bottom: 2px solid transparent;
+    color: var(--muted); font: inherit; cursor: pointer; white-space: nowrap;
+}
+.pack-tabs button:hover { color: var(--text); }
+.pack-tabs button.active { color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }
+@media (max-width: 600px) { .pack-tabs button { padding: 6px 8px; font-size: 14px; } }
+.pack-lists .tabrow { margin-top: 14px; }
+.pack-order-hint { font-size: 12px; color: var(--muted); margin: 6px 0 0; }
+.pack-refs { font-size: 13px; margin: 2px 0 0; }
+.pack-refs > .linkbtn { font-size: 13px; }
+.pack-refs-to { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 6px 0 2px; }
+.pack-refs-to .hint { font-size: 12px; color: var(--muted); }
+.pack-refs-list { margin: 4px 0 8px; padding-left: 26px; display: grid; gap: 4px; }
+.pack-refs-list .btn-small { padding: 0 6px; font-size: 12px; }
+.pack-ref-saved { color: var(--tag); font-size: 12px; }

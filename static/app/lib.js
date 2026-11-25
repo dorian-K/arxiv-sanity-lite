@@ -68,7 +68,8 @@ export async function api(path, form, { keep = false } = {}) {
 // meanwhile, kept in localStorage and sent in order once it can
 
 export const offline = store(false);
-const QUEUEABLE = /^\/(add|sub|addneg|subneg|seen|unseen|read|unread|note)\//;
+// /import: a cited paper saved from the reading pack (offline.js), fetched once the server has the line
+const QUEUEABLE = /^\/(?:(?:add|sub|addneg|subneg|seen|unseen|read|unread|note)\/|import$)/;
 const QUEUE_KEY = 'resanity-queue';
 const readQueue = () => { try { return JSON.parse(localStorage.getItem(QUEUE_KEY)) || []; } catch (e) { return []; } };
 const writeQueue = q => { try { localStorage.setItem(QUEUE_KEY, JSON.stringify(q)); } catch (e) { /* full or blocked */ } };
@@ -106,7 +107,7 @@ export async function flushChanges() {
             } catch (e) {
                 break;
             }
-            if (r.status === 403 || r.status >= 500 || /not logged in/.test(text)) break;
+            if (r.status === 403 || r.status === 429 || r.status >= 500 || /not logged in/.test(text)) break;
             writeQueue(readQueue().slice(1));
         }
     } finally {

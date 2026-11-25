@@ -894,13 +894,34 @@ def test_reading_offline_pack_and_pdfs(client, corpus, monkeypatch):
         client.post(f'/add/{p}/cv')
     client.post(f'/read/{pids[0]}')
     client.post(f'/note/{pids[1]}', data={'text': 'for the flight'})
+    with db.get_refs_db() as rdb:  # what pids[1] cites: one paper here, one elsewhere, one without an id
+        rows = [
+            (1, pids[2], 'T', None, 'T'),
+            (2, '2401.00001', 'Elsewhere', None, 'E'),
+            (3, None, '', '10.1/x', 'A raw one'),
+        ]
+        rdb.put_refs(pids[1], 'ok', rows, 'html')
+    db.save_digest('alice', [{'tag': 'cv', 'papers': [(pids[1], 1.0)]}], 7)
     pack = client.get('/ui/offline').get_json()
+    digest = next(s for s in pack['sections'] if s['key'] == 'digest')
+    assert [p['id'] for p in digest['papers']] == [pids[1]] and pack['digest_time']  # as sent, though in To read too
     toread = next(s for s in pack['sections'] if s['key'] == 'toread')
     assert {p['id'] for p in toread['papers']} == set(pids[1:])
     assert {p['offline_pdf'] for p in toread['papers']} == {''}
     assert next(p for p in toread['papers'] if p['id'] == pids[1])['note'] == 'for the flight'
-    ids = [p['id'] for s in pack['sections'] for p in s['papers']]
-    assert len(ids) == len(set(ids))  # a paper is in one section only
+    ids = [p['id'] for s in pack['sections'] if s['key'] != 'digest' for p in s['papers']]
+    assert len(ids) == len(set(ids))  # a paper is in one section only (the digest shows them as sent)
+    refs = next(p for p in toread['papers'] if p['id'] == pids[1])['refs']
+    assert [(r['id'], r['here'], r['saved']) for r in refs] == [
+        (pids[2], True, ['cv']),
+        ('2401.00001', False, []),
+        (None, False, []),
+    ]
+    assert (
+        refs[0]['title'] == corpus[pids[2]]['title']
+        and refs[2]['title'] == 'A raw one'
+        and refs[2]['url'] == 'https://doi.org/10.1/x'
+    )
     # the other saved papers (read ones too) come along for searching offline, without thumbnails
     rest = next(s for s in pack['sections'] if s['key'] == 'saved')
     assert rest['extra'] and [p['id'] for p in rest['papers']] == [pids[0]] and not rest['papers'][0]['thumb_url']

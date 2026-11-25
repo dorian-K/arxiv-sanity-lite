@@ -2098,6 +2098,7 @@ def ui_page(name):
 OFFLINE_TO_READ = 40  # papers of To read in the pack, newest first
 OFFLINE_FOR_YOU = 20  # papers of For you (all tags, FOR_YOU_DAYS) besides those
 OFFLINE_SAVED_MAX = 1000  # the rest of the saved papers, read ones too, for searching offline (no thumbnails)
+OFFLINE_REFS_MAX = 150  # references per paper in the pack, for saving cited papers offline
 OFFLINE_PDF_MAX = 60  # PDFs on a user's device at once (the newest set replaces the last)
 OFFLINE_QUEUE_MAX = 500  # PDFs waiting for the daemon, everyone's together
 ENRICH_PAUSE = float(os.environ.get('ENRICH_PAUSE') or 20)  # the daemon's, for the time estimate
@@ -2132,8 +2133,9 @@ def ui_offline():
     sections, taken = [], set()
     papers = get_papers()
 
-    def add(key, title, pids, tag='', extra=False):
-        pids = [p for p in dict.fromkeys(pids) if p not in taken]
+    def add(key, title, pids, tag='', extra=False, again=False):
+        # again: the section shows its papers even if an earlier one has them (the digest, as it was sent)
+        pids = [p for p in dict.fromkeys(pids) if again or p not in taken]
         found = papers.get_many(pids)
         cards = [render_pid(p, found[p], thumb=not extra) for p in pids if p in found]
         taken.update(c['id'] for c in cards)
@@ -2145,7 +2147,7 @@ def ui_offline():
     d = db.get_digest(g.user)
     if d:
         for s in d['sections']:
-            add('digest', 'Digest: ' + s['tag'], [p for p, _ in s['papers']], tag=s['tag'])
+            add('digest', 'Digest: ' + s['tag'], [p for p, _ in s['papers']], tag=s['tag'], again=True)
     if get_tags() and features_exist():
         try:
             res = _ranked('tags', '', 'all', '', str(FOR_YOU_DAYS), 'yes', None, 'auto', 'auto', 'one', limit=200)
@@ -2154,11 +2156,15 @@ def ui_offline():
             print("offline pack, for you: %s" % (e,))
     add('saved', 'All other saved papers', saved_rank('all')[0][:OFFLINE_SAVED_MAX], extra=True)
     states = pdf_offline_states(list(taken))
+    refs = offline_refs([c['id'] for s in sections if not s['extra'] for c in s['papers']])
     for s in sections:
         for c in s['papers']:
             c['offline_pdf'] = states[c['id']]
+            if c['id'] in refs:
+                c['refs'] = refs[c['id']]
     return {
         'sections': sections,
+        'digest_time': time.strftime('%b %d', time.localtime(d['time'])) if d else '',
         'tags': sorted(own_tags(get_tags())),
         'made': time.time(),
         'pdfs_on': ENRICH_ON,
@@ -2167,6 +2173,42 @@ def ui_offline():
         'warm': offline_files(),
         'stopwords': sorted(ENGLISH_STOP_WORDS),  # for searching the pack as the site searches
     }
+
+
+def offline_refs(pids):
+    """
+    {pid: [reference]} of the pack's papers, so cited papers can be saved to a tag offline: each
+    {title, id (the paper's, if a site of ours knows it, else None), here (in papers.sqlite), url,
+    saved (the user's tags it is in)}. decorates the pack: an error leaves the references out
+    """
+    out = {}
+    try:
+        rdb = _refs_db()
+        rows = {p: rdb.references_of(p)[2][:OFFLINE_REFS_MAX] for p in dict.fromkeys(pids)}
+        cited = {r[1] for rs in rows.values() for r in rs if r[1]}
+        found = get_papers().get_many(cited)
+        tags = get_tags()
+        for pid, rs in rows.items():
+            if not rs:
+                continue
+            refs = []
+            for _, c, title, doi, raw in rs:
+                here = c in found
+                url = sources.links(c)['url'] if c else (f'https://doi.org/{doi}' if doi else '')
+                refs.append(
+                    {
+                        'title': found[c]['title'] if here else (title or raw)[:300],
+                        'id': c,
+                        'here': here,
+                        'url': url,
+                        'saved': [t for t, ps in tags.items() if c in ps] if c else [],
+                    }
+                )
+            out[pid] = refs
+    except Exception as e:  # the pack still has the papers
+        print("offline pack, references: %s" % (e,))
+        return {}
+    return out
 
 
 def offline_files():

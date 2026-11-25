@@ -204,6 +204,7 @@ class PapersDB:
         key = os.path.abspath(self.path)
         if key not in _papers_columns_done:
             self._add_columns()
+            self._add_indexes()
             _papers_columns_done.add(key)
 
     def _add_columns(self):
@@ -226,6 +227,28 @@ class PapersDB:
                 # one-time backfill, about 20 s for 465k papers
                 self.con.create_function('venue', 2, venue, deterministic=True)
                 self.con.execute('UPDATE papers SET venue = venue(comment, journal_ref)')
+            self.con.execute('COMMIT')
+        except BaseException:
+            self.con.execute('ROLLBACK')
+            raise
+
+    # covering indexes for times() and venues(), which every web worker reads after any change to the
+    # papers: without them each read scans the whole table, abstracts and all (0.9 s warm, 4-6 s cold on
+    # 657k papers; 0.4 s and 0.13 s with them). here, not in PAPERS_SCHEMA: `venue` may not exist yet there
+    INDEXES = {
+        'papers_id_time': 'ON papers(id, time)',
+        'papers_id_venue': "ON papers(id, venue) WHERE venue != ''",
+    }
+
+    def _add_indexes(self):
+        """the INDEXES a database from before them lacks (about a second for 657k papers), under the write lock"""
+        have = {r[0] for r in self.con.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
+        if set(self.INDEXES) <= have:
+            return
+        self.con.execute('BEGIN IMMEDIATE')
+        try:
+            for name, what in self.INDEXES.items():
+                self.con.execute(f'CREATE INDEX IF NOT EXISTS {name} {what}')
             self.con.execute('COMMIT')
         except BaseException:
             self.con.execute('ROLLBACK')

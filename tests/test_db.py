@@ -117,3 +117,27 @@ def test_opening_the_database_is_not_a_change(corpus):
         p = next(iter(corpus.values()))
         pdb.upsert([{**p, 'title': 'changed', '_version': 2}])
     assert db.db_mtime(path) != before
+
+
+def test_old_papers_db_gets_columns_and_covering_indexes(tmp_path):
+    import sqlite3
+
+    path = str(tmp_path / 'old_papers.sqlite')
+    con = sqlite3.connect(path)
+    con.execute(
+        """CREATE TABLE papers (n INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, version INTEGER NOT NULL,
+        time REAL NOT NULL, time_str TEXT NOT NULL, published TEXT NOT NULL, title TEXT NOT NULL,
+        summary TEXT NOT NULL, authors TEXT NOT NULL, categories TEXT NOT NULL, comment TEXT NOT NULL DEFAULT '')"""
+    )
+    con.execute(
+        "INSERT INTO papers (id, version, time, time_str, published, title, summary, authors, categories, comment)"
+        " VALUES ('2601.00001', 1, 5.0, '', '', 'a title', 'an abstract', '[]', '[\"cs.LG\"]', 'Accepted at ICML 2025')"
+    )
+    con.commit()
+    con.close()
+    with db.PapersDB(path) as pdb:
+        assert pdb.times() == {'2601.00001': 5.0}
+        assert pdb.venues() == {'2601.00001': 'Accepted at ICML 2025'}  # backfilled
+        plan = lambda q: ' '.join(str(r[-1]) for r in pdb.con.execute('EXPLAIN QUERY PLAN ' + q))  # noqa: E731
+        assert 'COVERING INDEX papers_id_time' in plan('SELECT id, time FROM papers')
+        assert 'COVERING INDEX papers_id_venue' in plan("SELECT id, venue FROM papers WHERE venue != ''")

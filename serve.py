@@ -929,6 +929,19 @@ def svm_rank(tags: str = '', pid: str = '', C=None, feats='auto', model='auto'):
     return m, unindexed, len(pos)
 
 
+def _model_ready(features, tags):
+    """whether the default model for these tags of the owner is trained (in memory or models.sqlite)"""
+    pos, neg = training_set(get_tags(), get_neg_tags(), tags)
+    key = _model_key(features, g.owner or '', tags, pos, neg, 'auto', 'auto', None)
+    with _models_lock:
+        if key in _models:
+            return True
+    try:
+        return bool(key[0]) and db.has_model(*key)
+    except Exception:
+        return False
+
+
 _row_times = (None, None, None, None)  # (features, times, time of each row, venue mask), see row_times
 
 
@@ -1584,10 +1597,21 @@ def ui_fit():
     ptoi = features['ptoi']
     have = [p for p in pids if p in ptoi]
     rows = np.array([ptoi[p] for p in have], dtype=np.int64)
-    best = {}
+    best, cold = {}, 0
     for t in names:
+        if not len(rows):
+            break
+        # a tag whose model isn't trained yet costs a fit: the call's own token pays for one, each further
+        # one takes a token too (a public profile with 30 tags was 30 fits for one token). those over the
+        # limit are left out of this answer and trained in the background for the next
+        if not _model_ready(features, t):
+            cold += 1
+            if cold > 1 and rate_limited('rank'):
+                if g.owner:
+                    prefit_later(g.owner, t)
+                continue
         m, _, _ = svm_rank(tags=t)
-        if m is None or not len(rows):
+        if m is None:
             continue
         ok = usable(features, m['feats'])
         keep = [i for i in range(len(have)) if ok is None or ok[rows[i]]]

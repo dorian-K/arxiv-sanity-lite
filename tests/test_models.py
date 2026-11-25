@@ -240,3 +240,33 @@ def test_a_page_with_its_models_stored_trains_nothing(client, corpus, monkeypatc
     client.post(f'/add/{vision[4]}/cv')  # a new training set, not trained yet (PREFIT=0)
     rank_json(client, '/?rank=tags&tags=all&skip_have=yes')
     assert calls == [1]
+
+
+def test_url_variants_dont_fill_the_model_store(client, corpus, monkeypatch):
+    """every svm_c in a url, or the same tags spelled differently, was one more model on disk"""
+    import serve
+
+    from aslite import db
+
+    login(client)
+    vision = vision_papers(corpus)
+    for p in vision[:4]:
+        client.post(f'/add/{p}/cv')
+        client.post(f'/add/{p}/vis')
+
+    def stored():
+        con = db._models_db()
+        try:
+            return con.execute('SELECT count(*) FROM models').fetchone()[0]
+        finally:
+            con.close()
+
+    rank_json(client, '/?rank=tags&tags=cv,vis')
+    n = stored()
+    for url in ('/?rank=tags&tags=vis,cv', '/?rank=tags&tags=cv,vis,cv', '/?rank=tags&tags=cv,vis&svm_c=0.37'):
+        rank_json(client, url)
+    assert stored() == n  # the same set once; a custom C stays in memory
+    calls = counting_fit(monkeypatch)
+    serve._rank_cache.clear()
+    rank_json(client, '/?rank=tags&tags=vis,cv')
+    assert calls == []  # served from the cache under the sorted key

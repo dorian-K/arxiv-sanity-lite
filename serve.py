@@ -53,6 +53,7 @@ from aslite.rank import (
     FEATS,
     MODELS,
     DEFAULT_C,
+    DEFAULTS,
 )
 
 # -----------------------------------------------------------------------------
@@ -740,10 +741,29 @@ def _drop_orphan_models(user, tags):
             db.delete_models(user, t)
 
 
+# the ranking settings models are trained with: retuning them (rank.py) makes new models, not old ones served
+_RANK_SETTINGS = hashlib.sha256(
+    json.dumps([DEFAULTS, sorted(map(list, DEFAULT_C.items()))], sort_keys=True, default=str).encode()
+).hexdigest()[:8]
+
+
 def _model_key(features, user, tags, pos, neg, feats, model, C):
+    """
+    the cache key of a model. only the site's own variant goes to models.sqlite (shared, on disk): one
+    picked under Advanced (C, features, model) stays in this worker's memory, since every distinct value
+    in a url would otherwise be one more stored model. the same tags in another order or twice are one key
+    """
+    default = (
+        C is None
+        and resolve_feats(features, feats) == resolve_feats(features, 'auto')
+        and resolve_model(features, model) == resolve_model(features, 'auto')
+    )
     feats, model = resolve_feats(features, feats), resolve_model(features, model)
-    stored = not tags.startswith('pid:')
-    return (user if stored else '', tags, f'{feats}|{model}|{C}', fingerprint(pos, neg), features['_version'])
+    if tags != 'all' and not tags.startswith('pid:'):
+        tags = ','.join(sorted(set(tags.split(','))))
+    stored = default and not tags.startswith('pid:')
+    variant = f'{feats}|{model}|{C}|{_RANK_SETTINGS}'
+    return (user if stored else '', tags, variant, fingerprint(pos, neg), features['_version'])
 
 
 def get_model(features, user, tags, pos, neg, feats='auto', model='auto', C=None):

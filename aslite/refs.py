@@ -189,8 +189,9 @@ class Matcher:
     def __init__(self, pdb, rdb):
         self.pdb, self.rdb = pdb, rdb
 
-    def _ours_by_title(self, title, min_words=3):
-        """our paper with exactly this title: a phrase query on the title column, shortest first"""
+    def _ours_by_title(self, title, min_words=3, arxiv_only=False):
+        """our paper with exactly this title: a phrase query on the title column, shortest first
+        (arxiv_only: only an arXiv paper, for finding another site's paper's twin: else it finds itself)"""
         words = norm(title).split()
         if len(words) < min_words:
             return None
@@ -200,7 +201,9 @@ class Matcher:
             'WHERE papers_fts MATCH ? ORDER BY length(p.title) LIMIT 50',
             (q,),
         ).fetchall()
-        return next((pid for pid, t in rows if norm(t) == ' '.join(words)), None)
+        return next(
+            (pid for pid, t in rows if norm(t) == ' '.join(words) and (not arxiv_only or ARXIV.owns(pid))), None
+        )
 
     def _ours_in_text(self, raw):
         """our paper whose whole title appears in the reference (bibliographies without labels)"""
@@ -263,7 +266,7 @@ def arxiv_twin(pdb, rdb, paper):
     title, authors = paper['title'], paper.get('authors') or []
     if not norm(title):
         return None
-    pid = rdb.lookup_title(title_hash(title)) or Matcher(pdb, rdb)._ours_by_title(title, min_words=1)
+    pid = rdb.lookup_title(title_hash(title)) or Matcher(pdb, rdb)._ours_by_title(title, min_words=1, arxiv_only=True)
     if not pid or not ARXIV.owns(pid):  # ours may be another site's paper itself
         return None
     if len(norm(title).split()) >= SHORT_TITLE:

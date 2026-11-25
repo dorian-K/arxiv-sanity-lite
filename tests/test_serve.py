@@ -413,6 +413,19 @@ def test_papers_that_reach_arxiv_later_are_merged_into_it(client, corpus):
     assert ours in db.get_reads('alice') and db.get_notes('alice', [ours]) == {ours: 'read this'}
 
 
+def test_arxiv_version_arriving_after_the_other_copy_is_found(client, corpus):
+    """the other site's copy has the same title and came first: the twin search must not find it instead"""
+    from aslite import db, refs
+
+    p = corpus[sorted(corpus)[0]]
+    title = 'A brand new title about merging twin papers'
+    acl, arx = '2024.acl-long.77', '2699.00001'
+    with db.get_papers_db() as pdb, db.get_refs_db() as rdb:
+        pdb.upsert([dict(p, _id=acl, _idv=acl + 'v1', title=title)])
+        pdb.upsert([dict(p, _id=arx, _idv=arx + 'v1', title=title)])
+        assert refs.merge_twins(pdb, rdb) == [(acl, arx)]
+
+
 def test_rate_limits(client, corpus, monkeypatch):
     import serve
 

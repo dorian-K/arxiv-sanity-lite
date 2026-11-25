@@ -384,6 +384,50 @@ function spellOutEncoding(context, font, file, kind) {
     return true;
 }
 
+// a composite font's characters, from its ToUnicode map, are all ones the standard fonts have (Latin,
+// punctuation, ligatures): else it keeps its program, as simple fonts with other glyphs do (LATIN).
+// a map that can't be read keeps it too
+const LATIN_CODE = c => c < 0x250 || (c >= 0x2000 && c <= 0x206f) || (c >= 0xfb00 && c <= 0xfb06) || c === 0x20ac || c === 0x2122;
+function latinToUnicode(font) {
+    try {
+        const cmap = font.lookup(N('ToUnicode'));
+        if (!(cmap instanceof PDFRawStream)) return false;
+        const text = new TextDecoder('latin1').decode(decodePDFRawStream(cmap).decode());
+        // the destinations of bfchar and bfrange: <src> <dst>, <lo> <hi> <dst> or <lo> <hi> [<dst> ...]
+        const sections = text.match(/begin(bfchar|bfrange)[\s\S]*?end\1/g) || [];
+        const ok = h => {
+            for (let i = 0; i + 4 <= h.length; i += 4) {
+                const c = parseInt(h.slice(i, i + 4), 16);
+                if ((c >= 0xd800 && c <= 0xdfff) || !LATIN_CODE(c)) return false; // surrogates: math alphanumerics, say
+            }
+            return true;
+        };
+        for (const sec of sections) {
+            const t = (sec.replace(/^begin\w+/, '').match(/<[0-9A-Fa-f\s]*>|\[|\]/g) || []).map(x => x.replace(/\s/g, ''));
+            if (sec.startsWith('beginbfchar')) {
+                for (let k = 1; k < t.length; k += 2) if (!ok(t[k].slice(1, -1))) return false;
+                continue;
+            }
+            for (let k = 0; k + 2 < t.length;) { // <lo> <hi> <dst> (counting up from dst) or <lo> <hi> [<dst> ...]
+                const lo = parseInt(t[k].slice(1, -1), 16), hi = parseInt(t[k + 1].slice(1, -1), 16);
+                if (t[k + 2] === '[') {
+                    k += 3;
+                    for (; k < t.length && t[k] !== ']'; k++) if (!ok(t[k].slice(1, -1))) return false;
+                    k++;
+                } else {
+                    const d = t[k + 2].slice(1, -1);
+                    const last = (parseInt(d.slice(-4), 16) + Math.max(0, hi - lo)).toString(16).padStart(4, '0');
+                    if (!ok(d) || !ok(last)) return false;
+                    k += 3;
+                }
+            }
+        }
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
 const fontName = font => {
     const base = font.lookup(N('BaseFont'));
     return base instanceof PDFName ? base.decodeText().replace(/^[A-Z]{6}\+/, '') : '';
@@ -402,7 +446,7 @@ function dropTextFonts(doc, all) {
                 const kids = font.lookup(N('DescendantFonts'));
                 const cid = kids instanceof PDFArray ? kids.lookup(0) : null;
                 const fd = cid instanceof PDFDict ? cid.lookup(N('FontDescriptor')) : null;
-                if (fd instanceof PDFDict && font.lookup(N('ToUnicode')) && !MATH_FONT.test(fontName(font))) {
+                if (fd instanceof PDFDict && latinToUnicode(font) && !MATH_FONT.test(fontName(font))) {
                     for (const k of FONT_FILES) fd.delete(N(k));
                 }
                 continue;
@@ -637,7 +681,8 @@ export async function unpackPdf(b) {
 // -----------------------------------------------------------------------------
 
 // the packed light copy (the first step whose copy fits in `target`, else the smallest it got),
-// or null when the PDF can't be read or it can't be packed safely. progress(text) says how far it is
+// 'not smaller' when no step makes it smaller than it is, or null when the PDF can't be read or it
+// can't be packed safely. progress(text) says how far it is
 export async function shrinkPdf(bytes, { target = TARGET, progress = () => {} } = {}) {
     let doc;
     try {
@@ -681,7 +726,7 @@ export async function shrinkPdf(bytes, { target = TARGET, progress = () => {} } 
             if (out.length <= target) break;
         }
     }
-    if (chosen.out.length >= bytes.byteLength) return null;
+    if (chosen.out.length >= bytes.byteLength) return 'not smaller'; // kept as it is (offline.js), not deleted
     // it must come back byte for byte, or it isn't kept
     const back = await unpackPdf(chosen.out);
     if (back.length !== chosen.p.pdf.length || back.some((v, k) => v !== chosen.p.pdf[k])) return null;

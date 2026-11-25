@@ -20,6 +20,7 @@ const PACK = 'pack-v1'; // as in sw.js
 const PACK_URL = '/ui/offline';
 const OPTS_KEY = 'resanity-pack-pdfs';
 const PDF_POLL = 10000; // ms between asking how far the PDFs are
+const PDF_POLL_FOR = 2 * 3600 * 1000; // ms it keeps asking, then stops (the server may be down for days)
 const PDF_TIMEOUT = 5 * 60000; // one PDF's download to the device
 const DEVICE_TRIES = 3; // downloads of one PDF to the device before giving it up
 const SUMMARY_ROUNDS = 60; // ~3 minutes of asking for AI summaries
@@ -230,13 +231,15 @@ export async function lighten(pids, inPack) {
         const head = `Making light copies of the PDFs you no longer need in full: ${i + 1} of ${pids.length}`;
         patchJob({ step: head + '…' });
         const bytes = new Uint8Array(await r.arrayBuffer());
-        let light = null;
+        let light = null, small = false;
         try {
             shrinkPdf = shrinkPdf || (await import('app/shrink')).shrinkPdf;
-            light = await shrinkPdf(bytes, { progress: t => patchJob({ step: `${head} (${t})…` }) });
+            const got = await shrinkPdf(bytes, { progress: t => patchJob({ step: `${head} (${t})…` }) });
+            if (got === 'not smaller') small = true; // compact already: it is its own light copy, whatever its size
+            else light = got;
         } catch (e) { /* kept as it is if it is small, else let go of */ }
         const out = light || bytes; // a light copy is kept even above shrink.js's TARGET: it never leaves anything out
-        if (!light && out.length > LIGHT_MAX_ONE) { await c.delete(pdfPath(pid)); continue; }
+        if (!light && !small && out.length > LIGHT_MAX_ONE) { await c.delete(pdfPath(pid)); continue; }
         try {
             await c.delete(pdfPath(pid)); // so the copy goes to the end of the order: the newest
             const headers = { 'Content-Type': 'application/pdf', 'Content-Length': String(out.length), [LIGHT]: String(out.length) };
@@ -298,6 +301,7 @@ export async function downloadPdfs(pids) {
     const run = ++pdfRun;
     const c = await caches.open(PACK);
     const tries = {};
+    const until = Date.now() + PDF_POLL_FOR;
     for (;;) {
         const res = await api('/ui/offline/pdfs?pids=' + encodeURIComponent(pids.join(',')));
         if (run !== pdfRun) return;
@@ -332,6 +336,10 @@ export async function downloadPdfs(pids) {
         patchJob({ pdfs: st, step: st.waiting ? 'The server is fetching PDFs…' : '' });
         await updatePack(pk => allPapers(pk).forEach(p => { if (res.pdfs[p.id] !== undefined) p.offline_pdf = res.pdfs[p.id]; }));
         if (!st.waiting && !pids.some(due)) return;
+        if (Date.now() > until) {
+            patchJob({ step: `The server hasn't got ${st.waiting} of the PDFs yet. “Update for offline” later asks again.` });
+            return;
+        }
         await sleep(PDF_POLL);
         if (run !== pdfRun) return;
     }
@@ -339,6 +347,9 @@ export async function downloadPdfs(pids) {
 
 async function removePack() {
     if (!hasCaches()) return;
+    pdfRun++; // the download loop stops
+    // and the server stops fetching PDFs for a pack that is gone
+    api('/offline/pdfs', { pids: '' }, { keep: true }).catch(() => {});
     await caches.delete(PACK);
     packStore.set(null);
     job.set(null);

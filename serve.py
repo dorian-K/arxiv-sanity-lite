@@ -566,6 +566,19 @@ def summary_info(pid):
         return None
 
 
+def summaries_info(pids):
+    """summary_info of many papers at once: {pid: summary} of those that have one"""
+    if not summary.enabled():
+        return {}
+    try:
+        known = _refs_db().summaries_of(pids)
+    except Exception as e:
+        print("summaries: %s" % (e,))
+        return {}
+    keys = (*db.SUMMARY_KEYS, 'model', 'source')
+    return {p: {k: s[k] for k in keys} for p, s in known.items() if s['status'] == 'ok'}
+
+
 # AI summaries of the papers a page shows that have none yet (search results, recommendations):
 # the page asks /summaries for them, they are made here in the background from the abstract
 # (the full text would take a request to arxiv.org per paper, at most one per 15 s; enrich_daemon.py
@@ -655,14 +668,15 @@ def summaries():
     return {'summaries': ready, 'pending': pending}
 
 
-def render_pid(pid, d=None, thumb=True):
-    # render a single paper with just the information we need for the UI (thumb=False: without its thumbnail)
+def render_pid(pid, d=None, thumb=True, ai=...):
+    # render a single paper with just the information we need for the UI (thumb=False: without its thumbnail;
+    # ai: its AI summary if the caller looked it up already, for many papers at once (summaries_info))
     tags = get_tags()
     neg_tags = get_neg_tags()
     d = d or get_papers()[pid]
     t_url, t_label, t_license = thumb_info(pid) if thumb else ('', '', '')
     return dict(
-        ai=summary_info(pid),
+        ai=summary_info(pid) if ai is ... else ai,
         weight=0.0,
         id=d['_id'],
         title=d['title'],
@@ -1015,6 +1029,25 @@ def cited_rank(tags: str = ''):
     pids = sorted(here, key=lambda c: (-len(here[c]), -times[c]))
     info = {'saved': len(saved), 'known': len(known), 'elsewhere': sum(1 for c in cited if c not in times)}
     return pids, [len(here[c]) for c in pids], info
+
+
+_cited_counts = OrderedDict()  # (owner, tags, their state, refs and papers versions) -> how many
+_cited_counts_lock = threading.Lock()
+
+
+def _cited_count(tags):
+    """the Cited tab's count, which every page of a tag shows: cited_rank looks up the references of
+    every saved paper, so it is kept until the tags, the references or the papers change"""
+    key = (g.owner, tags, _tags_fingerprint(), db.db_mtime(db.REFS_DB_FILE), db.db_mtime(PAPERS_DB_FILE))
+    with _cited_counts_lock:
+        n = _cited_counts.get(key)
+    if n is None:
+        n = len(cited_rank(tags)[0])
+        with _cited_counts_lock:
+            _cited_counts[key] = n
+            while len(_cited_counts) > 1000:
+                _cited_counts.popitem(last=False)
+    return n
 
 
 def _cited_notice(info):
@@ -1482,7 +1515,12 @@ def ui_list():
     context['n_down'] = len(saved_rank(opt_tags, neg=True)[0]) if context['tag_view'] else 0
     context['n_unread'] = len(unread_rank(opt_tags)[0]) if context['tag_view'] else 0
     try:
-        context['n_cited'] = len(cited_rank(opt_tags)[0]) if context['tag_view'] else 0
+        if not context['tag_view']:
+            context['n_cited'] = 0
+        elif opt_rank == 'cited':
+            context['n_cited'] = len(res['pids'])  # the list on this page is that one
+        else:
+            context['n_cited'] = _cited_count(opt_tags)
     except Exception as e:  # refs.sqlite trouble must never break the page itself
         print("counting cited papers failed: %s" % (e,))
         context['n_cited'] = 0
@@ -1803,6 +1841,16 @@ STAT_LABELS = {
 
 # the number of arXiv titles changes only with import_snapshot.py --titles, and counting 3M rows
 # takes seconds, so each worker counts once an hour
+_ref_counts = [0.0, None]
+
+
+def ref_counts(rdb):
+    """RefsDB.counts() for /stats, a public page: counted over the whole refs table, so once a few minutes"""
+    if _ref_counts[1] is None or time.time() - _ref_counts[0] > 300:
+        _ref_counts[:] = [time.time(), rdb.counts()]
+    return _ref_counts[1]
+
+
 _n_titles = [0.0, None]
 
 
@@ -1892,7 +1940,7 @@ def ui_stats():
     )
     try:
         with db.get_refs_db() as rdb:
-            enrich = rdb.counts()
+            enrich = dict(ref_counts(rdb))
             enrich['titles'] = n_titles(rdb)
     except Exception as e:
         print("reading refs failed: %s" % (e,))
@@ -2231,7 +2279,8 @@ def ui_offline():
         # again: the section shows its papers even if an earlier one has them (the digest, as it was sent)
         pids = [p for p in dict.fromkeys(pids) if again or p not in taken]
         found = papers.get_many(pids)
-        cards = [render_pid(p, found[p], thumb=not extra) for p in pids if p in found]
+        ais = summaries_info(list(found))  # one lookup, not one per paper (up to OFFLINE_SAVED_MAX of them)
+        cards = [render_pid(p, found[p], thumb=not extra, ai=ais.get(p)) for p in pids if p in found]
         taken.update(c['id'] for c in cards)
         if cards:
             # extra: there to be searched, so the page shows it closed and gets no summaries or PDFs for it

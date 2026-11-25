@@ -2049,6 +2049,8 @@ CREATE TABLE IF NOT EXISTS summaries (
     result TEXT NOT NULL DEFAULT '',
     caveat TEXT NOT NULL DEFAULT ''
 );
+-- summaries_since counts the day's summaries on every /summaries request: without it, a scan of every summary
+CREATE INDEX IF NOT EXISTS summaries_t ON summaries(t);
 """
 
 

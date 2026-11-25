@@ -297,10 +297,14 @@ export const GraphPage = () => {
     // the topic axis is the first paper's (root), so papers added later land on the same scale
     const fetchAround = id => api('/ui/graph?pid=' + encodeURIComponent(id) + '&root=' + encodeURIComponent(pid));
 
+    // every answer is checked against the graph it was asked for: a response that arrives after
+    // another paper's graph was opened (Back, "Start from here") must not be merged into that one
     const expand = id => {
+        const g = gRef.current;
         setBusy(true); setActionError('');
         return fetchAround(id).then(r => {
-            gRef.current.merge(r, id);
+            if (!g || gRef.current !== g) return;
+            g.merge(r, id);
             setRes(x => ({ ...x, queue: r.queue }));
             run();
         }).catch(e => setActionError(e.message)).finally(() => setBusy(false));
@@ -308,8 +312,9 @@ export const GraphPage = () => {
 
     const analyze = id => {
         setBusy(true); setActionError('');
+        const g = gRef.current;
         api('/graph/analyze', { pid: id }).then(r => {
-            const n = gRef.current && gRef.current.nodes.get(id);
+            const n = g && gRef.current === g && g.nodes.get(id);
             if (!n) return;
             if (r.same_as) { // on arXiv too: kept and read there, so this node stays as it is
                 setActionError('This paper is on arXiv too, as ' + r.same_as + ': its references are read there. Open its graph with “Start from here” on that paper, or the box at the top.');
@@ -327,8 +332,9 @@ export const GraphPage = () => {
         fitted.current = true;
         setRes(null); setError(''); setSelected(pid); setActionError('');
         if (!pid) return undefined;
+        const g = gRef.current;
         fetchAround(pid).then(r => {
-            const g = gRef.current;
+            if (gRef.current !== g) return; // another paper's graph by now
             g.merge(r, pid);
             setRes(r);
             const c = g.nodes.get(pid);
@@ -338,7 +344,7 @@ export const GraphPage = () => {
             // the paper this graph is about: read it right away if it hasn't been yet
             if (c.state === 'new' && r.enrich_on && me.get().logged_in) analyze(pid);
             run();
-        }).catch(e => setError(e.message));
+        }).catch(e => { if (gRef.current === g) setError(e.message); });
         return () => { gRef.current = null; };
     }, [pid]);
 
@@ -361,10 +367,11 @@ export const GraphPage = () => {
             if (!g) return;
             for (const n of [...g.nodes.values()].filter(x => x.state === 'queued').slice(0, 5)) {
                 fetchAround(n.id).then(r => {
+                    if (gRef.current !== g) return;
                     const now = r.nodes.find(x => x.id === n.id);
                     setRes(x => (x ? { ...x, queue: r.queue } : x));
                     if (now && now.state !== 'queued') {
-                        if (now.state === 'analyzed') gRef.current.merge(r, n.id);
+                        if (now.state === 'analyzed') g.merge(r, n.id);
                         else Object.assign(n, now);
                         run();
                     }

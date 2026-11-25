@@ -103,6 +103,9 @@ async function fromPack(req, deviceFirst) {
         const hit = await caches.match(req, { cacheName: PACK, ignoreVary: true, ignoreSearch: true });
         return hit && hit.headers.get(PACKED) ? unpack(hit) : hit;
     };
+    // cache: 'no-store' asks for the server's copy only (offline.js getting the full PDF, which must never
+    // turn out to be the light copy kept on the device), offline too
+    if (req.cache === 'no-store') return fetch(req);
     if (deviceFirst) {
         const hit = await stored();
         if (hit) return hit;

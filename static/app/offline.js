@@ -263,7 +263,8 @@ async function savePdf(c, pid, size, say) {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), PDF_TIMEOUT);
     try {
-        const r = await fetch(pdfPath(pid), { signal: ctl.signal });
+        // no-store: past sw.js, which would answer with the light copy on the device
+        const r = await fetch(pdfPath(pid), { signal: ctl.signal, cache: 'no-store' });
         if (!r.ok) throw new Error(`the server answered ${r.status}`);
         const total = Number(r.headers.get('Content-Length')) || size || 0;
         const chunks = [];

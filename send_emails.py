@@ -83,7 +83,7 @@ def _summarize(pid):
     """a summary from the paper's abstract (enrich_daemon.py didn't get to its text in time)"""
     with get_papers_db() as pdb, db.get_refs_db() as rdb:
         d = pdb.get_many([pid]).get(pid)
-        if d is None:
+        if d is None or _ready(rdb, [pid]):
             return
         try:
             fields = summary.summarize(' '.join(d['title'].split()), ' '.join(d['summary'].split()), '')
@@ -91,7 +91,15 @@ def _summarize(pid):
             print(f"no summary for {pid}: {type(e).__name__}: {e}")
             rdb.put_summary(pid, 'error')
             return
-        rdb.put_summary(pid, 'ok', summary.MODEL, 'abstract', fields)
+        if not _ready(rdb, [pid]):  # enrich_daemon.py may have written one from the full text meanwhile
+            rdb.put_summary(pid, 'ok', summary.MODEL, 'abstract', fields)
+
+
+def _ready(rdb, pids):
+    return {p for p, s in rdb.summaries_of(pids).items() if s['status'] == 'ok'}
+
+
+PENDING_WAIT = 180  # seconds to wait for summaries another process is writing (from the full text, often)
 
 
 def ensure_summaries(pids):
@@ -99,16 +107,28 @@ def ensure_summaries(pids):
     if not summary.enabled() or not pids:
         return {}
     with db.get_refs_db() as rdb:
-        missing = [p for p in pids if (rdb.summaries_of([p]).get(p) or {}).get('status') != 'ok']
-    if missing:
-        print(f"summarizing {len(missing)} papers from their abstracts")
+        missing = [p for p in pids if p not in _ready(rdb, pids)]
+        # claimed: nobody is writing them. the others are being written (enrich_daemon.py, a page): their
+        # summary comes soon, often from the full text, so it is waited for instead of paid for twice
+        claimed = rdb.claim_summaries(missing, retry=0, max_tries=1000) if missing else []
+    if claimed:
+        print(f"summarizing {len(claimed)} papers from their abstracts")
         with ThreadPoolExecutor(8) as ex:
-            list(ex.map(_summarize, missing))
+            list(ex.map(_summarize, claimed))
+    others = [p for p in missing if p not in claimed]
+    deadline = time.time() + PENDING_WAIT
+    while others and time.time() < deadline:
+        time.sleep(5)
+        with db.get_refs_db() as rdb:
+            others = [p for p in others if p not in _ready(rdb, others)]
+    if others:  # still not there: every paper in a mail has one
+        with ThreadPoolExecutor(8) as ex:
+            list(ex.map(_summarize, others))
     with db.get_refs_db() as rdb:
         return {p: s for p, s in rdb.summaries_of(pids).items() if s['status'] == 'ok'}
 
 
-def prepare(features, times, emails, now, per_tag=digest.PER_TAG, **kw):
+def prepare(features, times, emails, now, per_tag=digest.PER_TAG, time_delta=0, **kw):
     """makes the digests of the coming slot ahead of it, once; returns how many"""
     slot = next_slot(now)
     if now < slot - PREPARE:
@@ -118,9 +138,11 @@ def prepare(features, times, emails, now, per_tag=digest.PER_TAG, **kw):
         d = db.get_digest(user)
         if d and d['time'] >= slot - PREPARE:
             continue  # done already
-        days = db.get_digest_days(user)
-        db.save_digest(user, digest.compute_for(user, features, times, days, per_tag, **kw), days)
-        n += 1
+        days = time_delta or db.get_digest_days(user)  # as the send without summaries would
+        sections = digest.compute_for(user, features, times, days, per_tag, **kw)
+        if sections:  # an empty one would replace last week's on /digest, which the send never does
+            db.save_digest(user, sections, days)
+            n += 1
     return n
 
 
@@ -243,7 +265,7 @@ def main(args, started=None):
         if not summary.enabled() or db.get_last_digest() is None or not db.features_exist():
             raise SystemExit(0)  # nothing to summarize, or the schedule hasn't started
         if started >= next_slot(started) - PREPARE:
-            n = prepare(load_features(), get_papers_db().times(), get_emails(), started, args.per_tag)
+            n = prepare(load_features(), get_papers_db().times(), get_emails(), started, args.per_tag, args.time_delta)
             if n:
                 print(f"prepared {n} digests for the next slot, so their papers get summaries in time")
         raise SystemExit(0)

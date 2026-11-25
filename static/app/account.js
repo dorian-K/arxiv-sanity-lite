@@ -249,7 +249,7 @@ export const ImportPage = () => {
     if (!d) return error ? html`<${LoadError} error=${error} reload=${reload} />` : null;
     const submit = e => {
         e.preventDefault();
-        run(() => api('/import', new FormData(e.target)), "Adding papers… ones that aren't here yet are fetched from arXiv (a few seconds per 100) or the site they are published on (a few seconds each).")
+        run(() => api('/import', new FormData(e.target), { queue: false }), "Adding papers… ones that aren't here yet are fetched from arXiv (a few seconds per 100) or the site they are published on (a few seconds each).")
             .then(r => { if (r) { setRes(r); reload(); } });
     };
     const q = res && encodeURIComponent(res.tag);

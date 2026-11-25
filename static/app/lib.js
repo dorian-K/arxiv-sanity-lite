@@ -33,21 +33,31 @@ export function store(value) {
 
 export class ApiError extends Error {}
 
-// keep: a POST that changes nothing a page shows (summaries, the card setting), so the cache stays
-export async function api(path, form, { keep = false } = {}) {
+// keep: a POST that changes nothing a page shows (summaries, the card setting), so the cache stays.
+// queue: false for a POST whose caller needs the server's answer (the import pages show what each
+// line became), so it is never kept on the device to send later
+export async function api(path, form, { keep = false, queue = true } = {}) {
     const opts = { headers: { Accept: 'application/json' } };
     const changes = form !== undefined && !keep;
+    const queueable = form !== undefined && queue && QUEUEABLE.test(path);
     if (form !== undefined) {
         opts.method = 'POST';
         opts.body = new URLSearchParams(form);
     }
     if (changes) changed();
+    // changes kept on the device still wait to be sent: this one goes behind them, so an older one
+    // sent later can't undo it (a save kept offline, then removed online, saved again by the flush)
+    if (queueable && readQueue().length) {
+        queueChange(path, form);
+        flushChanges();
+        return 'ok, kept on this device until the earlier changes are sent';
+    }
     let r;
     try {
         r = await fetch(path, opts);
     } catch (e) {
         // offline (on a plane): votes, read marks and notes wait on the device, see queueChange
-        if (form !== undefined && QUEUEABLE.test(path)) {
+        if (queueable) {
             queueChange(path, form);
             return 'ok, kept on this device until you are online';
         }
@@ -82,7 +92,8 @@ const paperChanged = (path, form) => paperListeners.forEach(f => { try { f(path,
 
 function queueChange(path, form) {
     const q = readQueue();
-    q.push([path, { ...form }]);
+    // a FormData spreads to {}: its entries are what is sent
+    q.push([path, form instanceof FormData ? Object.fromEntries(form) : { ...form }]);
     writeQueue(q);
     unsynced.set(q.length);
     paperChanged(path, form);
@@ -91,10 +102,15 @@ function queueChange(path, form) {
 // sends what was kept, oldest first; stops at the first that doesn't reach the server. an answer
 // that isn't "ok" (a tag deleted meanwhile) won't get better by sending it again, so it is dropped,
 // unless the session has ended: then it waits for the next login
-let flushing = false;
+let flushing = false, retry = null;
 export async function flushChanges() {
     if (flushing || !readQueue().length) return;
     flushing = true;
+    // one tab at a time: two tabs sending the same queue sent every change twice, in any order
+    if (navigator.locks) await navigator.locks.request('resanity-flush', sendQueue);
+    else await sendQueue();
+}
+async function sendQueue() {
     try {
         for (;;) {
             const q = readQueue();
@@ -107,7 +123,12 @@ export async function flushChanges() {
             } catch (e) {
                 break;
             }
-            if (r.status === 403 || r.status === 429 || r.status >= 500 || /not logged in/.test(text)) break;
+            if (r.status === 429) { // rate limited: again when it says, not only at the next page load
+                clearTimeout(retry);
+                retry = setTimeout(flushChanges, Math.min(120, Number(r.headers.get('Retry-After')) || 30) * 1000);
+                break;
+            }
+            if (r.status === 403 || r.status >= 500 || /not logged in/.test(text)) break;
             writeQueue(readQueue().slice(1));
         }
     } finally {

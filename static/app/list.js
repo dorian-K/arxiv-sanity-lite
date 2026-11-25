@@ -248,7 +248,7 @@ const MissingPaper = ({ miss, editable, userTags }) => {
         f.set('text', miss.pid);
         f.set('tag', tag.trim());
         setMsg('');
-        run(() => api('/import', f), 'Fetching the paper from ' + miss.source + '…').then(r => {
+        run(() => api('/import', f, { queue: false }), 'Fetching the paper from ' + miss.source + '…').then(r => {
             if (!r) return;
             const got = r.results[0];
             if (got && got.pid) navigate('/?q=' + encodeURIComponent(got.pid), { replace: true });

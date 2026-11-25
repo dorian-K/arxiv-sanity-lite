@@ -103,7 +103,8 @@ export function matchRef(refs, text) {
         const cover = hit.length / rw.length;
         if (cover < 0.7) continue;
         const score = cover - (0.5 * Math.min(...hit.map(w => pos.get(w)))) / (tw.length + 1);
-        if (!best || score > best.score) best = { r, score };
+        // ties (a short generic title, "Deep learning", is all there in many entries): the longer match wins
+        if (!best || score > best.score || (score === best.score && hit.length > best.n)) best = { r, score, n: hit.length };
     }
     return best ? best.r : null;
 }

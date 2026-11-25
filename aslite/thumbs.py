@@ -169,7 +169,10 @@ def from_pdf(data, size=SIZE):
     pdf = _pdf(data)
     try:
         page = pdf[0]
-        scale = size[0] / max(page.get_width(), 1)
+        w, h = max(page.get_width(), 1), max(page.get_height(), 1)
+        # by width, as the card shows it, but never a bitmap past MAX_PIXELS: an untrusted PDF's first page
+        # may be 10 x 14400 pt, which by width alone asked pdfium for billions of pixels
+        scale = min(size[0] / w, (MAX_PIXELS / (w * h)) ** 0.5)
         return _jpeg(page.render(scale=scale).to_pil(), size)
     finally:
         pdf.close()

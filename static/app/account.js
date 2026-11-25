@@ -48,7 +48,8 @@ const LoginForm = ({ user }) => {
 const logout = () => {
     const n = unsynced.get();
     if (n && !confirm(`${n} change${n > 1 ? 's' : ''} made offline (votes, read marks, notes) haven't reached the server yet and will be lost. Log out anyway?`)) return undefined;
-    return api('/logout', {}).then(forgetDevice).then(refreshMe);
+    return api('/logout', {}).then(forgetDevice).then(refreshMe)
+        .catch(e => alert(e.message + ' Logging out needs a connection: try again once you are online.'));
 };
 
 // -----------------------------------------------------------------------------

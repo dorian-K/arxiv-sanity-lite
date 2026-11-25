@@ -1,6 +1,6 @@
 // paper cards and what goes with them: votes, tags, notes, the AI summary tabs, the digest's
 // sections, the tag check and the model's words. used by the list, the digest and inspect
-import { html, useState, useEffect, useRef, useContext, createContext, store, api, load, tagRequest, me } from 'app/lib';
+import { html, useState, useEffect, useRef, useContext, createContext, store, api, load, tagRequest, me, navigate } from 'app/lib';
 import { MathText } from 'app/math';
 import { markdown, plainText } from 'app/markdown';
 import { mark } from 'app/highlight';
@@ -536,7 +536,7 @@ export const ViewSwitch = ({ share }) => {
     const doShare = () => {
         if (!page.viewing && !m.sharing) {
             if (confirm('Your profile is private, so a link to your pages shows nothing to others. Make it public in your profile?')) {
-                window.location.assign('/profile#sharing');
+                navigate('/profile#sharing', { own: true });
             }
             return;
         }

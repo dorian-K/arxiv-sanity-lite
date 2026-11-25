@@ -953,7 +953,8 @@ details.danger form { margin-top: 10px; }
     padding: 6px 8px; background: var(--bg); border-bottom: 1px solid var(--border);
 }
 .reader-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; font-size: 14px; }
-.reader-raw { font-size: 12px; white-space: nowrap; }
+.reader-raw { white-space: nowrap; }
+.reader-bar { flex-wrap: wrap; }
 .reader-hint { font-size: 12px; color: var(--muted); text-align: center; margin: 6px 8px; }
 .pdf-pages { display: flex; flex-direction: column; align-items: center; gap: 10px; overflow-x: auto; }
 .pdf-page { position: relative; background: #fff; box-shadow: 0 1px 4px rgb(0 0 0 / .25); flex: none; }
@@ -985,3 +986,5 @@ details.danger form { margin-top: 10px; }
 .textLayer .endOfContent { display: block; position: absolute; inset: 100% 0 0; z-index: 0; cursor: default; user-select: none; }
 @media (max-width: 500px) { .reader-title { display: none; } .reader-bar { justify-content: flex-end; } .reader-bar > a:first-child { margin-right: auto; } }
 .cite-text.muted { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.pack-read-more { display: inline-flex; gap: 10px; align-items: baseline; margin-left: 10px; font-size: 13px; }
+.pack-read-more .linkbtn { font-size: 13px; }

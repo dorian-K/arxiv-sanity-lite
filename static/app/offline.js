@@ -12,7 +12,7 @@
 // it becomes a light copy of ~200 kB (shrink.js: worse images, the reader's own fonts for the text,
 // rounded drawings, stored LZMA-packed; nothing left out), up to LIGHT_BUDGET for all of them, the
 // oldest let go of first
-import { html, useState, useEffect, store, api, tagRequest, me, offline, unsynced, flushChanges, refreshMe, onPaperChange, canEdit, pageReady, location } from 'app/lib';
+import { html, useState, useEffect, store, api, tagRequest, CopyLink, me, offline, unsynced, flushChanges, refreshMe, onPaperChange, canEdit, pageReady, location } from 'app/lib';
 import { Paper, Page } from 'app/papers';
 import { matcher } from 'app/highlight';
 
@@ -483,6 +483,12 @@ const PackPaper = ({ p, tag, onDevice, tags, canEdit }) => html`<div class="pack
             title="the PDF, from this device; tap a citation in it to see the reference and save it to a tag">📄 Read the PDF</a>`
         : onDevice.get(p.id) === 'light' ? html`<a class="btn btn-small pack-read" href=${readerPath(p.id)}
             title="kept small to save space on this device: every page, with lower-quality images and standard fonts for the text">📄 Read the PDF (light copy)</a>`
+        : null}
+    ${onDevice.has(p.id) ? html`<span class="pack-read-more">
+        <a href=${pdfPath(p.id)} target="_blank" rel="noopener" title="the same PDF in your browser's own PDF viewer (citations can't be saved there)">browser viewer</a>
+        <${CopyLink} href=${readerPath(p.id)} label="copy link" className="linkbtn"
+            title="copy a link to this PDF in the reader; it opens for you only (the PDF is on your devices, not public)" />
+    </span>`
         : p.offline_pdf === 'waiting' ? html`<span class="pack-pdf muted">PDF on its way to this device…</span>`
         : p.offline_pdf === 'failed' ? html`<span class="pack-pdf muted">no PDF for offline (the server couldn't get it)</span>` : null}
     <${Paper} paper=${onDevice.has(p.id) ? onDeviceCard(p) : p} quickTag=${tag || undefined} />

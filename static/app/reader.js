@@ -5,7 +5,7 @@
 // paper jump, with a way back; a link to an arXiv paper can be saved the same way. pages are
 // drawn when they come near the screen and let go of far from it (a phone has no memory for 60
 // canvases). text can be selected, and the browser's find works on drawn pages
-import { html, useState, useEffect, useRef, location, me, offline, canEdit, pageReady } from 'app/lib';
+import { html, useState, useEffect, useRef, location, me, offline, canEdit, pageReady, api, CopyLink } from 'app/lib';
 import { readPack, packPaper, pdfPath, refTag, refTagFor, saveRef } from 'app/offline';
 
 const PDFJS = '/static/vendor/pdfjs-dist-4.10.38/'; // as in index.html's import map and update_vendor.py
@@ -226,7 +226,15 @@ export const ReaderPage = () => {
     const box = useRef(null);
     const linkTo = useRef(null); // the pages' links call the current onLink (it sees the latest paper and doc)
 
-    useEffect(() => { readPack().then(pk => { setPack(pk); setPaper(packPaper(pk, pid)); }); }, [pid]);
+    useEffect(() => {
+        readPack().then(pk => {
+            setPack(pk);
+            const p = packPaper(pk, pid);
+            if (p) setPaper(p);
+            // a copied link opened on a device without the pack: the title and the PDF's own address
+            else if (!offline.get()) api('/ui/inspect?pid=' + encodeURIComponent(pid)).then(d => d && d.paper && setPaper(d.paper)).catch(() => {});
+        });
+    }, [pid]);
     useEffect(() => {
         const measure = () => box.current && setWidth(box.current.clientWidth);
         measure();
@@ -240,7 +248,7 @@ export const ReaderPage = () => {
         (async () => {
             const L = await pdfjs();
             const r = await fetch(pdfPath(pid));
-            if (!r.ok) throw new Error(r.status === 404 ? "This PDF isn't on this device." : `The PDF couldn't be opened (the server answered ${r.status}).`);
+            if (!r.ok) throw new Error(r.status === 404 ? "This PDF isn't on this device, and the server doesn't keep it for you (it keeps a PDF for a week after you last got ready for offline)." : `The PDF couldn't be opened (the server answered ${r.status}).`);
             const data = new Uint8Array(await r.arrayBuffer());
             task = L.getDocument({ data, isEvalSupported: false, standardFontDataUrl: PDFJS + 'standard_fonts/' });
             const pdf = await task.promise;
@@ -297,7 +305,8 @@ export const ReaderPage = () => {
             ${back.length ? html`<button class="btn btn-small" onClick=${goBack} title="back to where you were before following a link">↩ Back</button>` : null}
             <button class="btn btn-small" disabled=${zoom <= ZOOMS[0]} onClick=${() => setZoom(ZOOMS[Math.max(0, ZOOMS.indexOf(zoom) - 1)])} aria-label="zoom out" title="smaller">−</button>
             <button class="btn btn-small" disabled=${zoom >= ZOOMS[ZOOMS.length - 1]} onClick=${() => setZoom(ZOOMS[Math.min(ZOOMS.length - 1, ZOOMS.indexOf(zoom) + 1)])} aria-label="zoom in" title="bigger">+</button>
-            <a class="reader-raw" href=${pdfPath(pid)} target="_blank" rel="noopener" title="the same PDF in your browser's own viewer (citations can't be saved there)">browser viewer</a>
+            <${CopyLink} href=${'/read?pid=' + encodeURIComponent(pid)} label="Copy link" title="copy a link to this PDF in the reader; it opens for you only (the PDF is on your devices, not public)" />
+            <a class="btn btn-small reader-raw" href=${pdfPath(pid)} target="_blank" rel="noopener" title="the same PDF in your browser's own PDF viewer (citations can't be saved there)">Browser viewer</a>
         </div>
         <p class="hint reader-hint">Tap a citation to see the reference and save it to a tag; works offline too.</p>
         ${error ? html`<section class="card"><p class="form-error">${error}</p>

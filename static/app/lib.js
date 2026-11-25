@@ -233,6 +233,17 @@ export const forgetDevice = () => {
         ? Promise.all(['pack-v1', KEPT].map(n => caches.delete(n))).catch(() => {})
         : Promise.resolve();
 };
+// a button that copies a link (made absolute) to the clipboard, and says so for a moment
+export const CopyLink = ({ href, label = '🔗 Copy link', title = 'copy a link to this', className = 'btn btn-small' }) => {
+    const [copied, setCopied] = useState(false);
+    const copy = () => {
+        const url = new URL(href, window.location.href).href;
+        const done = () => { setCopied(true); setTimeout(() => setCopied(false), 2000); };
+        if (navigator.clipboard) navigator.clipboard.writeText(url).then(done, () => window.prompt('Copy this link:', url));
+        else window.prompt('Copy this link:', url);
+    };
+    return html`<button type="button" class=${className} onClick=${copy} title=${title}>${copied ? '✓ Link copied' : label}</button>`;
+};
 export const canEdit = (m, page) => Boolean(m && m.user) && !m.readonly && !(page && page.viewing);
 
 // -----------------------------------------------------------------------------

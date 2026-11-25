@@ -30,7 +30,7 @@ from flask import Blueprint, g, jsonify, redirect, render_template, request, url
 
 from aslite import db
 from aslite.arxiv import categories_text
-from aslite.sources import abs_url, find_paper_id, source_of
+from aslite.sources import ARXIV, abs_url, find_paper_id, source_of
 
 bp = Blueprint('agents', __name__)
 site = None  # the serve module, set by register()
@@ -233,15 +233,33 @@ def get_papers(ids, abstracts=True):
 
 
 SUMMARY_IDS = 20  # papers per get_summaries call
+# papers from sites other than arXiv fetched per call: each is a request to its site (seconds apart) plus
+# an arXiv title search, all while the call waits, holding one of the few web threads; 50 took minutes
+FETCH_OTHERS_PER_CALL = 3
+
+
+def _fetch(pids):
+    """
+    site.fetch_missing for an agent's call, with at most FETCH_OTHERS_PER_CALL papers from other sites
+    (arXiv's come in batches, one quick request each). returns its answer plus the ids left for a next call
+    """
+    others = [p for p in pids if source_of(p) is not ARXIV]
+    later = set(others[FETCH_OTHERS_PER_CALL:]) - set(site.get_papers().get_many(others[FETCH_OTHERS_PER_CALL:]))
+    return (*site.fetch_missing([p for p in pids if p not in later]), sorted(later))
+
+
+LATER = f'not fetched yet (at most {FETCH_OTHERS_PER_CALL} papers from sites other than arXiv per call): call again with these'
+
 SUMMARY_RETRY = 10  # seconds to suggest before asking again for pending ones (one takes a few)
 
 
 @tool(
     f"""AI summaries of papers: the problem, approach, result and caveat, written by a model from
     the paper's full text (papers saved or in digests here) or else its abstract. Any paper: with
-    the user's token, ones without a summary get one started now (from the abstract, a few seconds
-    each) and ones not on this site are fetched first (arXiv or the site it was published on, within
-    daily limits; one that is on arXiv too comes back under its arXiv id, see same_as). Without a token
+    the user's token (and over MCP or a POST; a GET only reads), ones without a summary get one started
+    now (from the abstract, a few seconds each) and ones not on this site are fetched first (arXiv or the
+    site it was published on, within daily limits, at most {FETCH_OTHERS_PER_CALL} from other sites per
+    call; one that is on arXiv too comes back under its arXiv id, see same_as). Without a token
     you get the summaries that exist. Answers at once: papers whose summary is still being written are
     in pending; call again for them after retry_after seconds (about {SUMMARY_RETRY}).""",
     {'ids': _ids(SUMMARY_IDS)},
@@ -257,14 +275,22 @@ def get_summaries(ids):
     pids, bad = _norm_ids(ids)
     out = {}
     here = set(site.get_papers().get_many(pids))
-    if g.user and len(here) < len(pids):  # a user's call: papers that aren't here yet are fetched
-        have, fetched, over, failed, twins = site.fetch_missing([p for p in pids if p not in here])
+    # a GET only reads (it may come from a link or a prefetch): fetching and starting summaries need a POST
+    # (MCP calls are POSTs)
+    acting = g.user and request.method == 'POST'
+    if acting and len(here) < len(pids):  # a user's call: papers that aren't here yet are fetched
+        have, fetched, over, failed, twins, later = _fetch([p for p in pids if p not in here])
         if twins:
             out['same_as'] = twins
+        if later:
+            out['not_fetched_yet'] = later
+            out['why_not_fetched'] = LATER
         pids = list(dict.fromkeys(twins.get(p, p) for p in pids))
         here = set(site.get_papers().get_many(pids))
     # never waits here: a waiting call would hold one of the few web threads every page needs
-    ready, pending, left = site.request_summaries([p for p in pids if p in here])
+    ready, pending, left = site.request_summaries(
+        [p for p in pids if p in here], start=bool(acting), charge=False
+    )  # (call() spent the rate limit)
     out['summaries'] = {
         p: {k: s[k] for k in db.SUMMARY_KEYS if s[k]} | {'from': s['source'], 'model': s['model']}
         for p, s in ready.items()
@@ -277,6 +303,8 @@ def get_summaries(ids):
         out['why_not_made'] = (
             'no summary yet, and only a user\'s token starts one'
             if not g.user
+            else 'no summary yet, and a GET only reads: POST the call to start them'
+            if not acting
             else 'the daily limit of summaries, the rate limit, or the model failed: try again later'
         )
     not_here = [p for p in pids if p not in here]
@@ -524,10 +552,12 @@ def _check_new_tag(tag):
 def save_papers(ids, tag):
     tag = _check_new_tag(_writable_tag(tag))
     pids, bad = _norm_ids(ids)
-    have, fetched, over, failed, twins = site.fetch_missing(pids)
-    status = {}
+    have, fetched, over, failed, twins, later = _fetch(pids)
+    status = {p: LATER for p in later}
     with db.action(g.user, 'save', tag):  # one entry in the user's history per call
         for asked in pids:
+            if asked in later:
+                continue
             p = twins.get(asked, asked)  # on arXiv too: saved as the arXiv paper
             twin = f'on arXiv too, as {p}: ' if p != asked else ''
             if p in have or p in fetched:

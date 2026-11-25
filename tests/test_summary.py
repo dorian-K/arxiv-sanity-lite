@@ -267,8 +267,11 @@ def test_agents_get_summaries_of_any_paper(client, corpus, monkeypatch, summarie
 
     token = make_token(client)  # read-only is enough: a summary changes nothing of the user's
     auth = {'Authorization': 'Bearer ' + token}
-    # started, and answered at once with them pending; asked again, they are there, made once
+    # a GET only reads, even with a token (no fetching or model calls from a GET)
     r = client.get(f'/api/get_summaries?ids={",".join(pids)}', headers=auth).get_json()
+    assert r['not_made'] == pids and 'POST' in r['why_not_made'] and summaries_on == []
+    # a POST starts them, answered at once with them pending; asked again, they are there, made once
+    r = client.post('/api/get_summaries', json={'ids': pids}, headers=auth).get_json()
     assert sorted(r['pending']) == pids and r['summaries'] == {} and r['retry_after'] > 0
     assert wait_for(
         lambda: len(client.get(f'/api/get_summaries?ids={",".join(pids)}', headers=auth).get_json()['summaries']) == 2
@@ -285,6 +288,15 @@ def test_agents_get_summaries_of_any_paper(client, corpus, monkeypatch, summarie
     got, err = call(client, 'get_summaries', token, ids=[f'https://aclanthology.org/{acl}/'])
     assert err is None and got['pending'] == [acl]
     assert wait_for(lambda: acl in call(client, 'get_summaries', token, ids=[acl])[0]['summaries'])
+    # at most a few papers from other sites per call: the rest are left for the next one
+    import agents
+
+    more = [f'2024.acl-long.{i}' for i in range(20, 26)]
+    monkeypatch.setattr(
+        sources.ACL, 'fetch', lambda ids: {i: dict(paper, _id=i, _idv=i + 'v1', title='T ' + i) for i in ids}
+    )
+    got, err = call(client, 'get_summaries', token, ids=more)
+    assert err is None and got['not_fetched_yet'] == more[agents.FETCH_OTHERS_PER_CALL :]
     tools = {t['name']: t for t in rpc(client, 'tools/list', token=token)['result']['tools']}
     assert tools['get_summaries']['annotations']['openWorldHint']
     assert 'get_summaries' in rpc(client, 'initialize', {'protocolVersion': '2025-06-18'})['result']['instructions']

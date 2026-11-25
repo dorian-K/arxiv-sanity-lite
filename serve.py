@@ -605,7 +605,7 @@ def _summaries_later(pids):
         _summary_pool.submit(_summarize_abstract, pid)
 
 
-def request_summaries(pids, start=True):
+def request_summaries(pids, start=True, charge=True):
     """
     the AI summaries of pids (papers on the site): (ready {pid: fields}, pending [pids being made],
     left out [pids not started: the daily cap, the rate limit, or no logged-in user]). with start,
@@ -621,11 +621,14 @@ def request_summaries(pids, start=True):
     started = []
     # only logged-in users start model calls (they cost money); others see the ones that exist
     may_start = start and g.user is not None and not (g.readonly and not g.get('token'))
+    # the rate limit is spent only on asking for new ones: a page polling for those being written
+    # (every few seconds) mustn't use it up. charge=False: the caller spent it already (agents.call)
+    new = [p for p in missing if (known.get(p) or {}).get('status') != 'pending']
     if (
         missing
         and may_start
         and rdb.summaries_since(time.time() - 86400) < SUMMARY_MAX_DAY
-        and not rate_limited('summary')
+        and not (new and charge and rate_limited('summary'))
     ):
         left = SUMMARY_MAX_DAY - rdb.summaries_since(time.time() - 86400)
         started = rdb.claim_summaries(missing[: max(0, left)])

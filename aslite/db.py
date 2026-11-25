@@ -27,6 +27,7 @@ import shutil
 import sqlite3
 import secrets
 import threading
+import contextvars
 from contextlib import contextmanager
 
 import numpy as np
@@ -507,6 +508,20 @@ CREATE TABLE IF NOT EXISTS digest_sizes (
     n INTEGER NOT NULL,
     PRIMARY KEY (user, tag)
 ) WITHOUT ROWID;
+-- what changed in the user's data, by them or their agents, for the /history page and undo:
+-- changes is a json list of [table, key, row before, row after] (see HISTORY_TABLES)
+CREATE TABLE IF NOT EXISTS history (
+    id INTEGER PRIMARY KEY,
+    user TEXT NOT NULL,
+    time REAL NOT NULL,
+    actor TEXT NOT NULL,  -- '': the user on the site, else the name of the agent's access token
+    kind TEXT NOT NULL,
+    tag TEXT NOT NULL DEFAULT '',
+    detail TEXT NOT NULL DEFAULT '',
+    changes TEXT NOT NULL,
+    undone REAL  -- when it was undone
+);
+CREATE INDEX IF NOT EXISTS history_user ON history(user, id);
 """
 
 
@@ -585,7 +600,8 @@ def get_user(name):
 
 def set_public(name, public):
     """whether others may view this user's tags read-only, without the password"""
-    _run('UPDATE users SET public = ? WHERE name = ?', (int(bool(public)), name))
+    if _run('UPDATE users SET public = ? WHERE name = ? AND public != ?', (int(bool(public)), name, int(bool(public)))):
+        log_event(name, 'public profile', 'Made the profile public' if public else 'Made the profile private')
 
 
 DIGEST_DAYS = 7  # the digest's window where the user picked none; it is sent weekly either way
@@ -636,19 +652,27 @@ def request_email(name, email):
 
 def confirm_email(name, email):
     """the owner clicked the confirmation link: the address gets digests from now on"""
-    return (
+    ok = (
         _run(
             "UPDATE users SET email = ?, email_confirmed = ?, pending_email = '' WHERE name = ? AND pending_email = ?",
             (email, time.time(), name, email),
         )
         > 0
     )
+    if ok:
+        log_event(name, 'email', 'Confirmed an email address for the digest')
+    return ok
 
 
 def set_email(name, email):
     """only for removing an address ('', e.g. unsubscribe); new ones go through request_email"""
     assert email == '', 'new addresses must be confirmed first, see request_email'
-    _run("UPDATE users SET email = '', email_confirmed = NULL, pending_email = '' WHERE name = ?", (name,))
+    if _run(
+        "UPDATE users SET email = '', email_confirmed = NULL, pending_email = '' WHERE name = ? AND email != ''",
+        (name,),
+    ):
+        log_event(name, 'email', 'Removed the email address (no more digests)')
+    _run("UPDATE users SET pending_email = '' WHERE name = ?", (name,))
 
 
 def get_emails():
@@ -671,6 +695,7 @@ def delete_user(name):
                 ('offline_pdfs', 'user'),
                 ('tokens', 'user'),
                 ('oauth_codes', 'user'),
+                ('history', 'user'),
                 ('users', 'name'),
             ):
                 con.execute(f'DELETE FROM {table} WHERE {col} = ?', (name,))
@@ -716,6 +741,10 @@ def export_user(name):
             for p, t in _query('SELECT pid, asked FROM offline_pdfs WHERE user = ? ORDER BY asked', (name,))
         ],
         'digest_papers_per_tag': get_digest_sizes(name),
+        'history': [
+            {'time': e['time'], 'by': e['actor'] or 'you', 'what': describe(e), 'changes': e['changes']}
+            for e in get_history(name, limit=100000)
+        ],
         'arxiv_fetches_last_two_days': [
             {'time': t, 'pid': p} for t, p in _query('SELECT time, pid FROM fetches WHERE user = ?', (name,))
         ],
@@ -882,10 +911,12 @@ def get_all_tags(neg=False):
 
 def tag_paper(user, pid, tag, neg=False):
     """likes (downvotes, marks as seen) pid for tag, replacing whichever of those it was"""
-    _run(
-        'INSERT INTO tags (user, tag, pid, neg) VALUES (?, ?, ?, ?) ON CONFLICT DO UPDATE SET neg = excluded.neg',
-        (user, tag, pid, int(neg)),
-    )
+    with action(user, 'vote', tag):
+        _touch('tags', (user, tag, pid))
+        _run(
+            'INSERT INTO tags (user, tag, pid, neg) VALUES (?, ?, ?, ?) ON CONFLICT DO UPDATE SET neg = excluded.neg',
+            (user, tag, pid, int(neg)),
+        )
 
 
 def move_paper(old, new):
@@ -916,22 +947,28 @@ def untag_paper(user, pid, tag, neg=False):
     paper deletes the tag, with its downvotes and settings (delete_tag): an emptied tag is gone,
     instead of lingering in the tag pickers on downvotes alone
     """
-    removed = (
-        _run('DELETE FROM tags WHERE user = ? AND tag = ? AND pid = ? AND neg = ?', (user, tag, pid, int(neg))) > 0
-    )
-    if (
-        removed
-        and not neg
-        and not _query('SELECT 1 FROM tags WHERE user = ? AND tag = ? AND neg = 0 LIMIT 1', (user, tag))
-    ):
-        delete_tag(user, tag)
+    with action(user, 'vote', tag):
+        _touch('tags', (user, tag, pid))
+        removed = (
+            _run('DELETE FROM tags WHERE user = ? AND tag = ? AND pid = ? AND neg = ?', (user, tag, pid, int(neg))) > 0
+        )
+        if (
+            removed
+            and not neg
+            and not _query('SELECT 1 FROM tags WHERE user = ? AND tag = ? AND neg = 0 LIMIT 1', (user, tag))
+        ):
+            delete_tag(user, tag)
     return removed
 
 
 def delete_tag(user, tag):
     """removes a tag with all its likes and downvotes; returns whether it existed"""
-    _run('DELETE FROM digest_sizes WHERE user = ? AND tag = ?', (user, tag))
-    existed = _run('DELETE FROM tags WHERE user = ? AND tag = ?', (user, tag)) > 0
+    with action(user, 'delete tag', tag):
+        _touch('digest_sizes', (user, tag))
+        for pid, neg in _query('SELECT pid, neg FROM tags WHERE user = ? AND tag = ?', (user, tag)):
+            _touch('tags', (user, tag, pid), neg)
+        _run('DELETE FROM digest_sizes WHERE user = ? AND tag = ?', (user, tag))
+        existed = _run('DELETE FROM tags WHERE user = ? AND tag = ?', (user, tag)) > 0
     delete_models(user, tag)
     return existed
 
@@ -942,10 +979,12 @@ def get_reads(user):
 
 
 def set_read(user, pid, read=True):
-    if read:
-        _run('INSERT OR IGNORE INTO reads (user, pid, time) VALUES (?, ?, ?)', (user, pid, time.time()))
-    else:
-        _run('DELETE FROM reads WHERE user = ? AND pid = ?', (user, pid))
+    with action(user, 'read'):
+        _touch('reads', (user, pid))
+        if read:
+            _run('INSERT OR IGNORE INTO reads (user, pid, time) VALUES (?, ?, ?)', (user, pid, time.time()))
+        else:
+            _run('DELETE FROM reads WHERE user = ? AND pid = ?', (user, pid))
 
 
 NOTE_MAX = 5000
@@ -971,14 +1010,226 @@ def notes_by_time(user):
 def set_note(user, pid, text):
     """the user's note on a paper; empty deletes it"""
     text = (text or '').strip()[:NOTE_MAX]
-    if text:
-        _run(
-            'INSERT INTO notes (user, pid, text, time) VALUES (?, ?, ?, ?) '
-            'ON CONFLICT DO UPDATE SET text = excluded.text, time = excluded.time',
-            (user, pid, text, time.time()),
-        )
+    with action(user, 'note'):
+        _touch('notes', (user, pid))
+        if text:
+            _run(
+                'INSERT INTO notes (user, pid, text, time) VALUES (?, ?, ?, ?) '
+                'ON CONFLICT DO UPDATE SET text = excluded.text, time = excluded.time',
+                (user, pid, text, time.time()),
+            )
+        else:
+            _run('DELETE FROM notes WHERE user = ? AND pid = ?', (user, pid))
+
+
+# -----------------------------------------------------------------------------
+# history: what changed in a user's data, by them on the site or by one of their agents, each
+# entry undoable (the /history page). every write to tags, reads, notes and digest_sizes goes
+# through _touch, which takes the row as it was; the entry stores each row before and after, so
+# undoing puts back the rows before, as long as nothing changed them since
+
+HISTORY_DAYS = 90  # entries older than this are deleted
+HISTORY_TABLES = {  # table: (key columns, value columns)
+    'tags': (('user', 'tag', 'pid'), ('neg',)),
+    'reads': (('user', 'pid'), ('time',)),
+    'notes': (('user', 'pid'), ('text', 'time')),
+    'digest_sizes': (('user', 'tag'), ('n',)),
+}
+# who makes the changes of this request: '' the user on the site (or a script), else the name of
+# the agent's access token (serve.py sets it per request)
+_actor = contextvars.ContextVar('history_actor', default='')
+_group = contextvars.ContextVar('history_group', default=None)
+
+
+def set_actor(name):
+    _actor.set(name or '')
+
+
+def _row(con, table, key):
+    """a row's values (one value alone, several as a list), None if there is none"""
+    keys, vals = HISTORY_TABLES[table]
+    r = con.execute(
+        f'SELECT {", ".join(vals)} FROM {table} WHERE {" AND ".join(k + " = ?" for k in keys)}', key
+    ).fetchone()
+    if r is None:
+        return None
+    return r[0] if len(vals) == 1 else list(r)
+
+
+def _put_row(con, table, key, value):
+    keys, vals = HISTORY_TABLES[table]
+    if value is None:
+        con.execute(f'DELETE FROM {table} WHERE {" AND ".join(k + " = ?" for k in keys)}', key)
     else:
-        _run('DELETE FROM notes WHERE user = ? AND pid = ?', (user, pid))
+        value = value if isinstance(value, list) else [value]
+        cols = keys + vals
+        con.execute(
+            f'INSERT OR REPLACE INTO {table} ({", ".join(cols)}) VALUES ({", ".join("?" * len(cols))})',
+            (*key, *value),
+        )
+
+
+def _touch(table, key, before=...):
+    """a row about to change: its value now goes into the open action (before, if known already)"""
+    grp = _group.get()
+    if grp is None or (table, key) in grp['rows']:
+        return
+    if before is ...:
+        con = users_db()
+        try:
+            before = _row(con, table, key)
+        finally:
+            con.close()
+    grp['rows'][(table, key)] = before
+
+
+@contextmanager
+def action(user, kind, tag='', detail=''):
+    """
+    the changes made inside become one entry of the user's history, undone together (an import, a
+    copied tag). writes outside of one are an entry each; an action inside another joins it
+    """
+    if _group.get() is not None:
+        yield
+        return
+    grp = {'rows': {}}
+    token = _group.set(grp)
+    try:
+        yield
+    finally:
+        _group.reset(token)
+        _record(user, kind, tag, detail, grp['rows'])
+
+
+def _record(user, kind, tag, detail, rows):
+    con = users_db()
+    try:
+        changes = []
+        for (table, key), before in rows.items():
+            after = _row(con, table, key)
+            if after != before:
+                changes.append([table, list(key), before, after])
+        if not changes and not detail:
+            return None
+        now = time.time()
+        with con:
+            hid = con.execute(
+                'INSERT INTO history (user, time, actor, kind, tag, detail, changes) VALUES (?, ?, ?, ?, ?, ?, ?)',
+                (user, now, _actor.get(), kind, tag, detail, json.dumps(changes, ensure_ascii=False)),
+            ).lastrowid
+            if hid % 100 == 0:  # now and then is enough
+                con.execute('DELETE FROM history WHERE time < ?', (now - HISTORY_DAYS * 86400,))
+        return hid
+    finally:
+        con.close()
+
+
+def log_event(user, kind, detail=''):
+    """an account change that isn't undone from the history (public profile, email, access tokens)"""
+    _record(user, kind, '', detail or kind, {})
+
+
+def get_history(user, before=None, limit=50):
+    """[{id, time, actor, kind, tag, detail, changes, undone}] of the user, newest first, older than id before"""
+    q = 'SELECT id, time, actor, kind, tag, detail, changes, undone FROM history WHERE user = ?'
+    args = [user]
+    if before:
+        q += ' AND id < ?'
+        args.append(int(before))
+    rows = _query(q + ' ORDER BY id DESC LIMIT ?', (*args, limit))
+    keys = ('id', 'time', 'actor', 'kind', 'tag', 'detail', 'changes', 'undone')
+    out = [dict(zip(keys, r, strict=True)) for r in rows]
+    for e in out:
+        e['changes'] = json.loads(e['changes'])
+    return out
+
+
+def undo(user, hid):
+    """
+    puts back what entry hid of the user changed, as one new entry (which can be undone in turn);
+    rows changed again since are left alone. returns {restored, skipped, tags} or None if no such entry
+    """
+    r = _query('SELECT changes, tag FROM history WHERE id = ? AND user = ?', (int(hid), user))
+    if not r:
+        return None
+    changes, tag = json.loads(r[0][0]), r[0][1]
+    restored, skipped, tags = 0, 0, set()
+    with action(user, 'undo', tag):
+        con = users_db()
+        try:
+            with con:
+                for table, key, before, after in changes:
+                    key = tuple(key)
+                    now = _row(con, table, key)
+                    if now != after:
+                        skipped += 1
+                        continue
+                    _touch(table, key, now)
+                    _put_row(con, table, key, before)
+                    restored += 1
+                    if table in ('tags', 'digest_sizes'):
+                        tags.add(key[1])
+                con.execute('UPDATE history SET undone = ? WHERE id = ?', (time.time(), int(hid)))
+        finally:
+            con.close()
+    for t in tags:
+        delete_models(user, t)  # (models are keyed by their training set anyway; this frees the space)
+    return {'restored': restored, 'skipped': skipped, 'tags': sorted(tags)}
+
+
+def _n(k):
+    return f'{k} paper' if k == 1 else f'{k} papers'
+
+
+# how a change of a tags row reads, by its value after (or before, when the row is gone)
+_TAG_SET = {0: 'saved {n} to {tag}', 1: "marked {n} 'not for {tag}'", 2: 'marked {n} neutral in {tag}'}
+_TAG_GONE = {0: 'removed {n} from {tag}', 1: "took back 'not for {tag}' on {n}", 2: 'took back neutral on {n} in {tag}'}
+
+
+def describe(e):
+    """what a history entry did, in words: 'Saved 2 papers to cv; marked 1 paper read'"""
+    if not e['changes']:
+        return e['detail'] or e['kind']
+    if e['kind'] == 'delete tag':
+        gone = [c[2] for c in e['changes'] if c[0] == 'tags' and c[3] is None]
+        nots = gone.count(1)
+        extra = f", {nots} 'not for'" if nots else ''
+        return f"Deleted the tag {e['tag']} ({_n(gone.count(0))} saved{extra})"
+    groups = {}  # (words, tag): papers, in the order they came
+
+    def add(what, tag=''):
+        groups[(what, tag)] = groups.get((what, tag), 0) + 1
+
+    for table, key, before, after in e['changes']:
+        if table == 'tags':
+            add(_TAG_SET[after] if after is not None else _TAG_GONE[before], key[1])
+        elif table == 'reads':
+            add('marked {n} read' if after is not None else 'marked {n} unread')
+        elif table == 'notes':
+            add(
+                'wrote a note on {n}'
+                if before is None
+                else 'deleted the note on {n}'
+                if after is None
+                else 'edited the note on {n}'
+            )
+        elif table == 'digest_sizes':
+            add(
+                f'set the digest size of {{tag}} to {after}' if after is not None else 'reset the digest size of {tag}',
+                key[1],
+            )
+    text = '; '.join(w.format(n=_n(k), tag=t) for (w, t), k in groups.items())
+    text = text[:1].upper() + text[1:]
+    return 'Undo: ' + text if e['kind'] == 'undo' else text
+
+
+def history_pids(e, limit=5):
+    """the papers an entry changed, the first few"""
+    out = []
+    for table, key, _, _ in e['changes']:
+        if table != 'digest_sizes' and key[-1] not in out:
+            out.append(key[-1])
+    return out[:limit], max(0, len(out) - limit)
 
 
 TOKEN_PREFIX = 'asr_'
@@ -1011,7 +1262,11 @@ def create_token(user, name, scope='read', client=''):
             )
     finally:
         con.close()
+    log_event(user, 'token', f'Made the access token "{name}" ({TOKEN_SCOPE_LABELS.get(scope, scope)})')
     return token
+
+
+TOKEN_SCOPE_LABELS = {'read': 'read only', 'agent': 'its own agent: tags', 'write': 'everything'}
 
 
 OAUTH_CODE_SECONDS = 600  # time to copy it to another machine, too
@@ -1099,22 +1354,26 @@ def list_tokens(user):
 
 
 def revoke_token(user, token_id):
-    return _run('DELETE FROM tokens WHERE user = ? AND hash = ?', (user, token_id)) > 0
+    r = _query('SELECT name FROM tokens WHERE user = ? AND hash = ?', (user, token_id))
+    if not r or not _run('DELETE FROM tokens WHERE user = ? AND hash = ?', (user, token_id)):
+        return False
+    log_event(user, 'token', f'Revoked the access token "{r[0][0]}"')
+    return True
 
 
 def check_token(token, touch_every=300):
-    """(user, scope: read | agent | write) of a valid token, else None"""
+    """(user, scope: read | agent | write, its name) of a valid token, else None"""
     if not token.startswith(TOKEN_PREFIX):
         return None
     h = _token_hash(token)
-    r = _query('SELECT user, write, last_used FROM tokens WHERE hash = ?', (h,))
+    r = _query('SELECT user, write, last_used, name FROM tokens WHERE hash = ?', (h,))
     if not r:
         return None
-    user, write, last = r[0]
+    user, write, last, name = r[0]
     now = time.time()
     if now - last > touch_every:
         _run('UPDATE tokens SET last_used = ? WHERE hash = ?', (now, h))
-    return user, TOKEN_SCOPE_NAMES.get(write, 'read')
+    return user, TOKEN_SCOPE_NAMES.get(write, 'read'), name
 
 
 def get_digest_sizes(user):
@@ -1124,10 +1383,12 @@ def get_digest_sizes(user):
 
 def set_digest_size(user, tag, n):
     """n papers of this tag in the digest, None for the default"""
-    if n is None:
-        _run('DELETE FROM digest_sizes WHERE user = ? AND tag = ?', (user, tag))
-    else:
-        _run('INSERT OR REPLACE INTO digest_sizes (user, tag, n) VALUES (?, ?, ?)', (user, tag, n))
+    with action(user, 'digest size', tag):
+        _touch('digest_sizes', (user, tag))
+        if n is None:
+            _run('DELETE FROM digest_sizes WHERE user = ? AND tag = ?', (user, tag))
+        else:
+            _run('INSERT OR REPLACE INTO digest_sizes (user, tag, n) VALUES (?, ?, ?)', (user, tag, n))
 
 
 def save_digest(user, sections, days):

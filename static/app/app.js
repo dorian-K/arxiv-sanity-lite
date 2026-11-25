@@ -5,7 +5,7 @@ import { html, useEffect, useRef, me, refreshMe, api, load, location, shared, se
 import { initAbout } from 'app/papers';
 import { ListPage, listPath } from 'app/list';
 import { DigestPage, InspectPage, StatsPage, TextPage } from 'app/pages';
-import { ProfilePage, ImportPage, AgentsPage } from 'app/account';
+import { ProfilePage, ImportPage, AgentsPage, HistoryPage } from 'app/account';
 import { GraphPage } from 'app/graph';
 import { OfflinePage } from 'app/offline';
 import { ReaderPage } from 'app/reader';
@@ -18,6 +18,7 @@ const PAGES = {
     '/profile': ProfilePage,
     '/import': ImportPage,
     '/agents': AgentsPage,
+    '/history': HistoryPage,
     '/graph': GraphPage,
     '/offline': OfflinePage,
     '/read': ReaderPage,

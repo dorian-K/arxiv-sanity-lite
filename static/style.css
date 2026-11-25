@@ -993,3 +993,10 @@ details.danger form { margin-top: 10px; }
 main:has(> .reader) { max-width: none; padding: 0 0 40px; }
 .reader .reader-hint { margin: 4px 8px; }
 .reader .pdf-pages { gap: 6px; }
+
+/* the history page (account.js) */
+.history { list-style: none; padding: 0; margin: 12px 0; }
+.history-entry { padding: 10px 0; border-top: 1px solid var(--border, #e5e2dc); }
+.history-entry.undone > div:not(.history-head) { opacity: .55; }
+.history-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.history-papers { margin: 4px 0 0; padding-left: 18px; }

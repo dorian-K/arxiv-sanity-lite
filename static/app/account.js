@@ -222,13 +222,16 @@ export const ProfilePage = () => {
             <h1>AI agents</h1>
             <p class="muted">Let Claude Code or another agent search this site and read (or organize) your tags,
                 with an access token you can revoke any time.</p>
-            <p><a class="btn" href="/agents">Access tokens for agents</a></p>
+            <p><a class="btn" href="/agents">Access tokens for agents</a>
+                ${' '}<a class="btn" href="/history" title="every change an agent made, undoable">What agents changed</a></p>
         </section>
         <section class="card">
             <h1>Your data</h1>
             <p class="muted">Everything stored about you: your account, tags, votes, digests and email address
                 (<a href="/privacy">privacy policy</a>).</p>
-            <p><a class="btn" href="/export" download>Download my data</a></p>
+            <p><a class="btn" href="/history" title="what changed in your tags, read marks and notes, by you or your agents">History, and undo</a>
+                ${' '}<a class="btn" href="/export" download>Download my data</a></p>
+            <p class="muted small">The history lists every change to your tags, read marks and notes, yours and your agents', and undoes any of them.</p>
             <${DeleteAccount} onDeleted=${() => setDeleted(true)} />
         </section>
     </div>`;
@@ -426,6 +429,69 @@ export const AgentsPage = () => {
                 ${d.tools.map(([name, access, desc]) => html`<tr key=${name}><td><code>${name}</code></td><td>${NEEDS[access]}</td><td>${desc}</td></tr>`)}
             </table>
             </div>
+        </section>
+    </div>`;
+};
+
+// -----------------------------------------------------------------------------
+// the history: what changed in the user's tags, read marks, notes and digest sizes, by them or
+// one of their agents, each undoable (an undo is an entry too, so it can be undone in turn)
+
+const fmtWhen = t => new Date(t * 1000).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+const HistoryEntry = ({ e, onUndo, busy }) => html`
+    <li class=${'history-entry' + (e.undone ? ' undone' : '')}>
+        <div class="history-head">
+            <span class="muted small" title=${e.by ? 'made through the access token named ' + e.by : 'made by you on the site'}>
+                ${fmtWhen(e.time)} · ${e.by ? html`agent <b>${e.by}</b>` : 'you'}</span>
+            ${e.can_undo ? html`<button type="button" class="btn btn-small" disabled=${busy || e.undone}
+                title=${e.undone ? 'undone already (the undo is in the list, and can be undone itself)' : e.kind === 'undo' ? 'make this change again' : 'put back how it was before this change'}
+                onClick=${() => onUndo(e)}>${e.undone ? 'Undone' : e.kind === 'undo' ? 'Redo' : 'Undo'}</button>` : null}
+        </div>
+        <div>${e.text}</div>
+        ${e.papers.length ? html`<ul class="history-papers small">
+            ${e.papers.map(p => html`<li key=${p.id}><a href=${'/inspect?pid=' + encodeURIComponent(p.id)}>${p.title || p.id}</a></li>`)}
+            ${e.more_papers ? html`<li class="muted">and ${e.more_papers} more</li>` : null}
+        </ul>` : null}
+    </li>`;
+
+export const HistoryPage = () => {
+    const m = me.use();
+    const mine = m.user && !m.readonly;
+    const { data: d, error, reload } = useData(mine ? '/ui/history?' + m.user : null);
+    const [older, setOlder] = useState({ entries: [], more: null });
+    const [state, run] = useAction();
+    const [said, setSaid] = useState('');
+    if (!mine) {
+        return html`<div class="page"><section class="card"><h1>History</h1>
+            <p><a href="/profile">Log in</a> to see what changed in your tags and notes, and undo it.</p></section></div>`;
+    }
+    if (!d) return error ? html`<${LoadError} error=${error} reload=${reload} />` : null;
+    const entries = [...d.entries, ...older.entries];
+    const more = older.more === null ? d.more : older.more;
+    const loadOlder = () => run(() => api('/ui/history?before=' + entries[entries.length - 1].id), 'Loading older changes…')
+        .then(r => r && setOlder(o => ({ entries: [...o.entries, ...r.entries], more: r.more })));
+    const undo = e => run(() => api('/history/undo', { id: e.id }), e.kind === 'undo' ? 'Redoing…' : 'Undoing…').then(r => {
+        if (!r) return;
+        setSaid(r.skipped
+            ? `Put back ${r.restored} of ${r.restored + r.skipped}: the rest changed again since, so they were left as they are.`
+            : 'Done. The undo is at the top of the list, in case you want it back.');
+        setOlder({ entries: [], more: null });
+        reload();
+    });
+    return html`
+    <div id="historywrap" class="page">
+        <section class="card">
+            <h1>History</h1>
+            <p class="muted">What changed in your tags, read marks, notes and digest settings in the last ${d.days} days,
+                by you or by an AI agent with one of your access tokens, newest first. <b>Undo</b> puts back how
+                things were before a change; papers changed again since are left alone. Changes to your account
+                (public profile, email, tokens) are listed too.</p>
+            <${Err} msg=${state.error} />
+            ${said ? html`<p class="notice" role="status">${said}</p>` : null}
+            ${entries.length ? html`<ul class="history">${entries.map(e => html`<${HistoryEntry} key=${e.id} e=${e} onUndo=${undo} busy=${state.busy} />`)}</ul>`
+                : html`<p class="muted">Nothing yet.</p>`}
+            ${more ? html`<button type="button" class="btn" disabled=${state.busy} onClick=${loadOlder}>Show older changes</button>` : null}
         </section>
     </div>`;
 };

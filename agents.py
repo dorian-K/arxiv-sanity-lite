@@ -14,7 +14,9 @@ named agent:..., so the user's own tags stay theirs) or write. These endpoints n
 visitor. Tools only call into serve.py's rankings, so they behave like the site's pages.
 
 Titles, abstracts, comments and references are written by strangers, and notes may be written
-by agents: the instructions tell agents to treat them as data, and the tools never delete tags.
+by agents: the instructions tell agents to treat them as data. Everything a token changes goes into the
+user's history (/history, db.action), where it can be undone; account settings are out of a token's reach
+(serve.ACCOUNT_ENDPOINTS).
 """
 
 import json
@@ -524,25 +526,28 @@ def save_papers(ids, tag):
     pids, bad = _norm_ids(ids)
     have, fetched, over, failed, twins = site.fetch_missing(pids)
     status = {}
-    for asked in pids:
-        p = twins.get(asked, asked)  # on arXiv too: saved as the arXiv paper
-        twin = f'on arXiv too, as {p}: ' if p != asked else ''
-        if p in have or p in fetched:
-            db.tag_paper(g.user, p, tag)
-            status[asked] = twin + ('saved' if p in have else f'fetched from {source_of(p).label} and saved')
-        elif p in over:
-            status[asked] = twin + 'over the daily fetch limit, try tomorrow'
-        elif p in failed:
-            status[asked] = twin + f'{source_of(p).label} could not be reached, try later'
-        else:
-            status[asked] = f'not found on {source_of(p).label}'
+    with db.action(g.user, 'save', tag):  # one entry in the user's history per call
+        for asked in pids:
+            p = twins.get(asked, asked)  # on arXiv too: saved as the arXiv paper
+            twin = f'on arXiv too, as {p}: ' if p != asked else ''
+            if p in have or p in fetched:
+                db.tag_paper(g.user, p, tag)
+                status[asked] = twin + ('saved' if p in have else f'fetched from {source_of(p).label} and saved')
+            elif p in over:
+                status[asked] = twin + 'over the daily fetch limit, try tomorrow'
+            elif p in failed:
+                status[asked] = twin + f'{source_of(p).label} could not be reached, try later'
+            else:
+                status[asked] = f'not found on {source_of(p).label}'
     site.prefit_later(g.user, tag, 'all')
     return {'tag': tag, 'status': status, **({'not_arxiv_ids': bad} if bad else {})}
 
 
 @tool(
-    """Removes papers from one of the user's tags (only the saves; the tag stays). If the token only
-    allows agent tags, the tag is always one named agent:... (the prefix is added if missing).""",
+    """Removes papers from one of the user's tags (only the saves). Removing a tag's last saved paper
+    removes the tag, with its 'not for' marks; the user can undo any change from their history on the
+    site. If the token only allows agent tags, the tag is always one named agent:... (the prefix is
+    added if missing).""",
     {'ids': _ids(), 'tag': {'type': 'string', 'maxLength': 100}},
     required=('ids', 'tag'),
     access='agent',
@@ -553,7 +558,8 @@ def save_papers(ids, tag):
 def unsave_papers(ids, tag):
     tag = _writable_tag(tag)
     pids, _ = _norm_ids(ids)
-    removed = [p for p in pids if db.untag_paper(g.user, p, tag)]
+    with db.action(g.user, 'unsave', tag):
+        removed = [p for p in pids if db.untag_paper(g.user, p, tag)]
     site.prefit_later(g.user, tag, 'all')
     return {'tag': tag, 'removed': removed, 'were_not_saved': [p for p in pids if p not in removed]}
 
@@ -573,13 +579,15 @@ def mark_not_for(ids, tag, undo=False):
     tag = _writable_tag(tag)
     pids, _ = _norm_ids(ids)
     if undo:
-        done = [p for p in pids if db.untag_paper(g.user, p, tag, neg=True)]
+        with db.action(g.user, 'not for', tag):
+            done = [p for p in pids if db.untag_paper(g.user, p, tag, neg=True)]
     else:
         tag = _check_new_tag(tag)
         here = site.get_papers().get_many(pids)
         done = [p for p in pids if p in here]
-        for p in done:
-            db.tag_paper(g.user, p, tag, neg=True)
+        with db.action(g.user, 'not for', tag):
+            for p in done:
+                db.tag_paper(g.user, p, tag, neg=True)
     site.prefit_later(g.user, tag, 'all')
     return {'tag': tag, 'changed': done, 'unchanged': [p for p in pids if p not in done]}
 
@@ -595,9 +603,10 @@ def mark_not_for(ids, tag, undo=False):
 def mark_read(ids, read=True):
     pids, _ = _norm_ids(ids)
     here = site.get_papers().get_many(pids)
-    for p in pids:
-        if p in here:
-            db.set_read(g.user, p, read)
+    with db.action(g.user, 'read'):
+        for p in pids:
+            if p in here:
+                db.set_read(g.user, p, read)
     return {
         'read' if read else 'unread': [p for p in pids if p in here],
         'not_here': [p for p in pids if p not in here],
@@ -665,10 +674,11 @@ ACCESS_CHOICES = [
     ),
     (
         'write',
-        'it can save papers to any of your tags, mark them as not for a tag or as read, and write notes; '
-        'it can never delete a tag',
+        'it can save papers to any of your tags and remove them, mark them as not for a tag or as read, and '
+        'write notes; never your account settings (public profile, email). You can undo any of it from your history',
         'Everything',
-        'any of your tags, read marks and notes (it can never delete a tag).',
+        'any of your tags, read marks and notes, but not your account settings. Every change can be undone '
+        'from your history.',
     ),
 ]
 

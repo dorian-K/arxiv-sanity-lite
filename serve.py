@@ -340,6 +340,8 @@ def _start_session(user, readonly=False):
 
 
 SHAREABLE = ('ui_list', 'ui_digest', 'digest_more', 'tag_check', 'ui_fit')  # data a ?u= link can show of another user
+# what only the user, logged in on the site, may change: never an agent's token, whatever its scope
+ACCOUNT_ENDPOINTS = ('sharing', 'register_email', 'delete_account', 'history_undo')
 AGENT_ENDPOINTS = (
     'agents.mcp',
     'agents.mcp_me',
@@ -353,6 +355,7 @@ AGENT_ENDPOINTS = (
 @app.before_request
 def before_request():
     g.t0 = time.perf_counter()  # for /stats, see record_timing
+    db.set_actor('')  # who the history says made this request's changes (a thread serves many requests)
     if request.endpoint in COOKIELESS:
         return
     # everything that changes state is a POST. SameSite=Lax already keeps the session
@@ -376,6 +379,7 @@ def before_request():
         # agent-tags token changes things through the agent tools alone, which check its tags
         g.user, g.token, g.scope = found[0], True, found[1]
         g.readonly = g.scope != 'write'
+        db.set_actor(found[2] or 'agent')
     elif request.endpoint in AGENT_ENDPOINTS:
         g.user, g.readonly = None, False
 
@@ -400,6 +404,10 @@ def before_request():
             if g.token:
                 return "error, this access token is read-only", 403
             return "error, this is a read-only view: log in with the password to make changes", 403
+    if g.token and request.endpoint in ACCOUNT_ENDPOINTS:
+        # the account itself is the user's own: an agent may change any tag (the history undoes
+        # that), but not who sees the profile, where mail goes, the account, or the history
+        return {'error': "an access token can't change account settings: log in on the site"}, 403
     elif g.user:
         # record activity on this user so we can reserve periodic
         # recommendations heavy compute only for active users
@@ -1606,6 +1614,52 @@ def not_logged_in():
     return {'error': 'Please log in first.'}, 403
 
 
+HISTORY_PAGE = 50
+
+
+@app.route('/ui/history')
+def ui_history():
+    """the history page (/history): what changed in the user's data, by them or their agents, newest first"""
+    if g.user is None or g.readonly or g.token:
+        return not_logged_in()
+    entries = db.get_history(g.user, request.args.get('before', type=int), HISTORY_PAGE + 1)
+    more = len(entries) > HISTORY_PAGE
+    entries = entries[:HISTORY_PAGE]
+    shown = {e['id']: db.history_pids(e) for e in entries}
+    titles = get_papers().get_many({p for pids, _ in shown.values() for p in pids})
+    return {
+        'entries': [
+            {
+                'id': e['id'],
+                'time': e['time'],
+                'by': e['actor'],  # '': the user on the site, else the agent's token
+                'text': db.describe(e),
+                'kind': e['kind'],
+                'papers': [{'id': p, 'title': titles[p]['title'] if p in titles else ''} for p in shown[e['id']][0]],
+                'more_papers': shown[e['id']][1],
+                'can_undo': bool(e['changes']),
+                'undone': e['undone'],
+            }
+            for e in entries
+        ],
+        'more': more,
+        'days': db.HISTORY_DAYS,
+    }
+
+
+@app.route('/history/undo', methods=['POST'])
+def history_undo():
+    """puts back what a history entry changed (as a new entry, so an undo can be undone too)"""
+    if g.user is None:
+        return not_logged_in()
+    r = db.undo(g.user, request.form.get('id', 0, type=int))
+    if r is None:
+        return {'error': 'There is no such change in your history.'}, 404
+    if r['tags']:
+        prefit_later(g.user, *r['tags'], 'all')
+    return {'ok': True, **r}
+
+
 @app.route('/digest_sizes', methods=['POST'])
 def digest_sizes():
     """papers per tag in the user's digest (0 = leave the tag out)"""
@@ -2297,6 +2351,7 @@ APP_PAGES = (
     '/inspect',
     '/stats',
     '/agents',
+    '/history',
     '/graph',
     '/offline',
     '/read',
@@ -2474,10 +2529,11 @@ def copy_tag():
     if rate_limited('copy'):
         return too_many('copy')
     mine = db.get_tags(g.user).get(new, set())
-    for pid in likes:
-        db.tag_paper(g.user, pid, new)
-    for pid in db.get_tags(owner, neg=True).get(tag, set()) - likes - mine:
-        db.tag_paper(g.user, pid, new, neg=True)  # downvotes too, unless the user likes the paper there
+    with db.action(g.user, 'copy tag', new):  # one entry in the history, undone at once
+        for pid in likes:
+            db.tag_paper(g.user, pid, new)
+        for pid in db.get_tags(owner, neg=True).get(tag, set()) - likes - mine:
+            db.tag_paper(g.user, pid, new, neg=True)  # downvotes too, unless the user likes the paper there
     prefit_later(g.user, new, 'all')
     print("user %s copied tag %s of %s as %s" % (g.user, tag, owner, new))
     return {'ok': True, 'url': '/?rank=tags&tags=%s&skip_have=yes' % quote(new, safe='')}
@@ -2617,6 +2673,29 @@ def import_papers():
     pdb = get_papers()
     have, fetched, over, failed, twins = fetch_missing(wanted)
 
+    with db.action(g.user, 'import', tag):  # one entry in the history, undone at once
+        _import_results(results, have, fetched, over, failed, twins, tag)
+    prefit_later(g.user, tag, 'all')
+    found = pdb.get_many([r[1] for r in results if r[1]])
+    indexed = load_features()['ptoi'] if features_exist() else {}
+    return {
+        'results': [
+            {
+                'line': line,
+                'pid': pid,
+                'status': status,
+                'title': found[pid]['title'] if pid in found else '',
+                'indexed': pid in indexed,  # else it counts for recommendations after the next update
+            }
+            for line, pid, status in results
+        ],
+        'n_new': len(fetched),
+        'tag': tag,
+    }
+
+
+def _import_results(results, have, fetched, over, failed, twins, tag):
+    """what became of each line of an import (in place), saving the papers that are here to the tag"""
     for r in results:
         if r[1] is None:
             continue
@@ -2636,23 +2715,6 @@ def import_papers():
             r[1] = None
         if r[1] in have or r[1] in fetched:  # not the ones over the limit or not reached: they'd have no paper
             db.tag_paper(g.user, pid, tag)
-    prefit_later(g.user, tag, 'all')
-    found = pdb.get_many([r[1] for r in results if r[1]])
-    indexed = load_features()['ptoi'] if features_exist() else {}
-    return {
-        'results': [
-            {
-                'line': line,
-                'pid': pid,
-                'status': status,
-                'title': found[pid]['title'] if pid in found else '',
-                'indexed': pid in indexed,  # else it counts for recommendations after the next update
-            }
-            for line, pid, status in results
-        ],
-        'n_new': len(fetched),
-        'tag': tag,
-    }
 
 
 # results of /tag_check per (user, tag, its papers, features version); a tag's check only

@@ -482,3 +482,46 @@ def test_papers_from_other_sources_are_found_in_references_and_read_from_their_o
         status, src, rows = rdb.references_of(acl)
         assert (status, src, rows[0][1], rdb.thumb_license(acl)) == ('ok', 'pdf', b, 'by/4.0')
     assert client.get(f'/thumb/page/{acl}').status_code == 200
+
+
+def test_daemon_never_stalls_on_graph_requests_and_pdfs(client, corpus, monkeypatch):
+    """a graph request with an offline PDF waiting, or more graph requests than a batch holds, once
+    stopped every batch before its first paper: the daemon spun without doing anything"""
+    import enrich_daemon
+
+    pids = sorted(corpus)
+    requested = pids[:12]  # more than one batch of 10
+    pdfs = ['pdf-wanted']
+    done, pdfs_fetched = [], []
+    monkeypatch.setattr(
+        enrich_daemon, 'requested_due', lambda pdb, rdb, now=None: [p for p in requested if p not in done]
+    )
+    monkeypatch.setattr(enrich_daemon, 'queue', lambda pdb, rdb, now=None: [p for p in requested if p not in done])
+    monkeypatch.setattr(enrich_daemon.db, 'pdfs_wanted', lambda now=None: list(pdfs))
+
+    def fetch_pdfs(fetch, limit=5):
+        pdfs_fetched.extend(pdfs)
+        n = len(pdfs)
+        pdfs.clear()
+        return n
+
+    monkeypatch.setattr(enrich_daemon, 'fetch_pdfs', fetch_pdfs)
+    monkeypatch.setattr(enrich_daemon, 'paper_license', lambda pid, fetch, rdb: '')
+    turns = []
+
+    def process(pid, fetch, matcher, license):
+        assert not pdfs_fetched  # graph requests first
+        done.append(pid)
+        return [], '', False, False, ''
+
+    monkeypatch.setattr(enrich_daemon, 'process', process)
+    orig_queue = enrich_daemon.queue
+
+    def counted_queue(pdb, rdb, now=None):
+        turns.append(1)
+        assert len(turns) < 50, 'the daemon spins without progress'
+        return orig_queue(pdb, rdb, now)
+
+    monkeypatch.setattr(enrich_daemon, 'queue', counted_queue)
+    run_daemon(monkeypatch)
+    assert done == requested and pdfs_fetched == ['pdf-wanted']

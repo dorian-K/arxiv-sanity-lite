@@ -255,6 +255,18 @@ def requested_due(pdb, rdb, now=None):
     return out
 
 
+def interrupted(asked, pdb, rdb):
+    """
+    whether a batch stops for something more urgent that came up while it ran: a paper asked for on the
+    graph page since (asked: those due when the batch began, which it may not all hold), or PDFs to read
+    offline once no graph request waits (those go first, and fetch_pdfs isn't run while they do). comparing
+    with the batch itself, or stopping for PDFs while a graph request waits, stopped every batch before its
+    first paper, forever
+    """
+    due = requested_due(pdb, rdb)
+    return any(p not in asked for p in due) or (not due and bool(db.pdfs_wanted()))
+
+
 def queue(pdb, rdb, now=None):
     """the papers to process, best first"""
     now = now or time.time()
@@ -454,11 +466,11 @@ def main():
             print(f"{len(todo)} papers to enrich", flush=True)
             t0, n, n_refs, n_matched, n_thumbs, n_summaries = time.time(), 0, 0, 0, 0, 0
             batch = todo[:10]  # then look at the queue again: newly saved papers go first
+            asked = set(requested_due(pdb, rdb))
             for pid in batch:
                 if args.max and total + n >= args.max:
                     break
-                # a paper asked for on the graph page meanwhile: it goes before the rest of this batch
-                if any(p not in batch for p in requested_due(pdb, rdb)) or db.pdfs_wanted():
+                if interrupted(asked, pdb, rdb):
                     break
                 try:
                     license = paper_license(pid, fetch, rdb)

@@ -81,7 +81,10 @@ class Graph {
     }
 
     // how often each paper is cited here, and who cites whom
+    // edges are only ever added, so their count says whether the stats (and the reach sets made from
+    // them) are still those of the graph: the layout asks every frame, the page every render
     stats() {
+        if (this._stats && this._stats.n === this.edges.size) return this._stats;
         const cited = new Map(), out = new Map(), inn = new Map();
         for (const [a, b] of this.edges.values()) {
             cited.set(b, (cited.get(b) || 0) + 1);
@@ -90,19 +93,27 @@ class Graph {
             if (!inn.has(b)) inn.set(b, []);
             inn.get(b).push(a);
         }
-        return { cited, out, inn };
+        this._stats = { cited, out, inn, n: this.edges.size, reach: new Map() };
+        return this._stats;
+    }
+
+    // what is reachable from a paper by citations (dir: 'out' what it builds on, 'inn' what came of it)
+    reach(start, dir) {
+        const st = this.stats(), key = dir + '\n' + start;
+        if (!st.reach.has(key)) st.reach.set(key, reach(start, st[dir]));
+        return st.reach.get(key);
     }
 
     // one step of the layout: each paper is pulled to its year, papers push each other apart
     // vertically, and citations pull related papers to similar heights
     // push apart any two papers whose dots overlap, whatever the forces say: no paper may hide another
     collide(ns, cited) {
-        const r = n => (n.ghost ? 7 : radius(n.id, cited, n.id === this.root)) + 5;
+        const rs = ns.map(n => (n.ghost ? 7 : radius(n.id, cited, n.id === this.root)) + 5); // once, not per pair
         for (let pass = 0; pass < 2; pass++) {
             for (let i = 0; i < ns.length; i++) {
-                const a = ns[i], ra = r(a);
+                const a = ns[i], ra = rs[i];
                 for (let j = i + 1; j < ns.length; j++) {
-                    const b = ns[j], min = ra + r(b);
+                    const b = ns[j], min = ra + rs[j];
                     let dx = a.x - b.x, dy = a.y - b.y;
                     if (Math.abs(dx) > min || Math.abs(dy) > min) continue;
                     let d = Math.hypot(dx, dy);
@@ -467,7 +478,7 @@ export const GraphPage = () => {
     const center = g && g.nodes.get(pid);
     const { cited, out, inn } = g ? g.stats() : { cited: new Map(), out: new Map(), inn: new Map() };
     // which side of the center a paper is on, for its color
-    const ancestors = g ? reach(pid, out) : new Set(), descendants = g ? reach(pid, inn) : new Set();
+    const ancestors = g ? g.reach(pid, 'out') : new Set(), descendants = g ? g.reach(pid, 'inn') : new Set();
     const side = id => (id === pid ? 'center' : ancestors.has(id) ? 'past' : descendants.has(id) ? 'future' : 'other');
     const all = g ? [...g.nodes.values()] : [];
     const nodes = all.filter(n => !n.ghost);
@@ -476,11 +487,11 @@ export const GraphPage = () => {
     const sim = new Map((alikeOf.current.get(subject) || []).map(x => [x.id, x.similarity]));
     const alike = g ? [...sim.keys()].map(id => g.nodes.get(id)).filter(Boolean) : [];
     const ghostList = all.filter(n => n.ghost);
-    const picks = g ? lensPicks(lens, { g, pid: subject, cited, out, ancestors: reach(subject, out), descendants: reach(subject, inn), alike, sim }) : [];
+    const picks = g ? lensPicks(lens, { g, pid: subject, cited, out, ancestors: g.reach(subject, 'out'), descendants: g.reach(subject, 'inn'), alike, sim }) : [];
     const rank = new Map(picks.map((p, i) => [p.n.id, i + 1]));
     const focus = hover;
-    const up_ = focus && g ? reach(focus, out) : null;
-    const down_ = focus && g ? reach(focus, inn) : null;
+    const up_ = focus && g ? g.reach(focus, 'out') : null;
+    const down_ = focus && g ? g.reach(focus, 'inn') : null;
     const lit = id => (focus ? up_.has(id) || down_.has(id) : id === pid || id === subject || rank.has(id));
     const top = nodes.filter(n => (cited.get(n.id) || 0) >= 2 && n.id !== pid).sort((a, b) => cited.get(b.id) - cited.get(a.id));
     // labels: the paper itself, the hovered and selected ones, then the most cited, then (zoomed in)

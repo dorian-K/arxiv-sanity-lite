@@ -490,13 +490,23 @@ const PackRef = ({ r, to, canEdit }) => {
     </li>`;
 };
 
-const PackPaper = ({ p, tag, onDevice, tags, canEdit }) => html`<div class="pack-paper">
+// how much new work builds on it: cited by how many of the newest digests' papers (everyone's), and by
+// how many papers at all, of those whose references the site has read (not all of science)
+const Cites = ({ p, of }) => {
+    const parts = [
+        p.digest_cites ? `cited by ${p.digest_cites} of the ${of} newest digest papers` : '',
+        p.cites ? `${p.cites} ${p.cites === 1 ? 'citation' : 'citations'} here in all` : '',
+    ].filter(Boolean);
+    return parts.length ? html`<span class="pack-cites muted" title="the newest digest papers: everyone's latest digest, those whose references were read; in all: every bibliography this site has read (digests, saved papers, the graph page), not all of science">${parts.join(' · ')}</span>` : null;
+};
+
+const PackPaper = ({ p, tag, onDevice, tags, canEdit, digestPapers }) => html`<div class="pack-paper">
     ${onDevice.get(p.id) === 'full' ? html`<a class="btn btn-small btn-primary pack-read" href=${readerPath(p.id)}
             title="the PDF, from this device; tap a citation in it to see the reference and save it to a tag">📄 Read the PDF</a>`
         : onDevice.get(p.id) === 'light' ? html`<a class="btn btn-small pack-read" href=${readerPath(p.id)}
             title="kept small to save space on this device: every page, with lower-quality images and standard fonts for the text">📄 Read the PDF (light copy)</a>`
         : null}
-    ${p.cites ? html`<span class="pack-cites muted" title="how many papers cite it, of all whose references this site has read: everyone's digests, saved papers and the graph page's (not all of science, so new papers are rarely cited yet)">cited by ${p.cites} ${p.cites === 1 ? 'paper' : 'papers'} here</span>` : null}
+    <${Cites} p=${p} of=${digestPapers} />
     ${onDevice.has(p.id) ? html`<span class="pack-read-more">
         <a href=${pdfPath(p.id)} target="_blank" rel="noopener" title="the same PDF in your browser's own PDF viewer (citations can't be saved there)">browser viewer</a>
         <${CopyLink} href=${readerPath(p.id)} label="copy link" className="linkbtn"
@@ -508,26 +518,27 @@ const PackPaper = ({ p, tag, onDevice, tags, canEdit }) => html`<div class="pack
     <${PackRefs} p=${p} tag=${tag} tags=${tags || []} canEdit=${canEdit} />
 </div>`;
 
-const PackSection = ({ s, onDevice, order, page, alone }) => {
+const PackSection = ({ s, onDevice, order, page, alone, digestPapers }) => {
     const [open, setOpen] = useState(!s.extra || alone);
     return html`<section class="pack-section">
         <h2 class="pack-heading"><button class="linkbtn" aria-expanded=${open} onClick=${() => setOpen(!open)}>
             ${open ? '▾' : '▸'} ${s.title}</button> <span class="muted">${s.papers.length}</span></h2>
         ${s.extra && !open ? html`<p class="hint pack-extra-hint">Kept for searching: no PDFs or thumbnails.</p>` : null}
         ${open ? html`<div class="rel_papers">${sorted(s.papers, order, onDevice).map(p => html`<${PackPaper} key=${p.id} p=${p} tag=${s.tag}
-            onDevice=${onDevice} tags=${page.userTags} canEdit=${page.canEdit} />`)}</div>` : null}
+            onDevice=${onDevice} tags=${page.userTags} canEdit=${page.canEdit} digestPapers=${digestPapers} />`)}</div>` : null}
     </section>`;
 };
 
 // the order within each list. 'here': what can be read on this device first (the full PDF, then a
 // light copy, then the rest), otherwise as the site had it: To read and Saved newest first, the
-// digest and For you best first. 'cited': To read by its papers' citations on this site (cites; the
-// other lists have none, so they stay as on the site, as do ties)
+// digest and For you best first. 'cited': To read by how many of the newest digests' papers cite it
+// (digest_cites), then by all citations the site knows (cites); the other lists have none, so they
+// stay as on the site, as do ties
 const ORDERS = [
     ['here', 'PDF on this device first', 'papers you can read here, without a network, come first; otherwise as on the site'],
     ['site', 'As on the site', 'To read and Saved newest first, the digest and For you best match first'],
     ['newest', 'Newest papers first', 'by the date of the paper'],
-    ['cited', 'Most cited first', 'To read by how many papers cite it, of all whose references this site has read; other lists as on the site'],
+    ['cited', 'What new papers build on first', 'To read by how many of the newest digest papers (everyone\'s) cite it, then by all citations this site knows; other lists as on the site'],
 ];
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const paperDate = p => { // "Nov 25 2026"
@@ -537,7 +548,7 @@ const paperDate = p => { // "Nov 25 2026"
 function sorted(papers, order, onDevice) {
     const key = order === 'here' ? p => ({ full: 0, light: 1 })[onDevice.get(p.id)] ?? 2
         : order === 'newest' ? p => -paperDate(p)
-        : order === 'cited' ? p => -(p.cites || 0) : null;
+        : order === 'cited' ? p => -((p.digest_cites || 0) * 1e6 + (p.cites || 0)) : null;
     if (!key) return papers;
     return papers.map((p, i) => [key(p), i, p]).sort((a, b) => a[0] - b[0] || a[1] - b[1]).map(x => x[2]);
 }
@@ -577,7 +588,7 @@ const PackLists = ({ pack, onDevice, page }) => {
             ? `. Your digest of ${pack.digest_time}: 👍 👎 😐 work offline too and are sent when you're back online.` : '.'}</p>
         ${view === 'digest' && !count('digest') ? html`<p class="muted">There was no digest when this device got its papers.</p>` : null}
         ${shown.map(s => html`<${PackSection} key=${view + s.key + s.title} s=${s} onDevice=${onDevice} order=${order} page=${page}
-            alone=${view !== 'all'} />`)}
+            alone=${view !== 'all'} digestPapers=${pack.digest_papers || 0} />`)}
     </div>`;
 };
 

@@ -2323,7 +2323,7 @@ def ui_offline():
             print("offline pack, for you: %s" % (e,))
     add('saved', 'All other saved papers', saved_rank('all')[0][:OFFLINE_SAVED_MAX], extra=True)
     states = pdf_offline_states(list(taken))
-    offline_cites([c for s in sections if s['key'] == 'toread' for c in s['papers']])
+    digest_papers = offline_cites([c for s in sections if s['key'] == 'toread' for c in s['papers']])
     refs = offline_refs([c['id'] for s in sections if not s['extra'] for c in s['papers']])
     for s in sections:
         for c in s['papers']:
@@ -2332,6 +2332,7 @@ def ui_offline():
                 c['refs'] = refs[c['id']]
     return {
         'sections': sections,
+        'digest_papers': digest_papers,
         'digest_time': time.strftime('%b %d', time.localtime(d['time'])) if d else '',
         'tags': sorted(own_tags(get_tags())),
         'made': time.time(),
@@ -2345,16 +2346,23 @@ def ui_offline():
 
 def offline_cites(cards):
     """
-    each card's 'cites': how many papers cite it, of all whose references the site read (the To read
-    list's "Most cited" order). decorates the pack: an error leaves the counts out
+    what the To read list's "Most relied on" order sorts by, on each card: 'digest_cites', how many
+    papers of the newest digests (everyone's latest, no names) cite it, then 'cites', how many papers
+    cite it of all whose references the site read. the papers nearly every new paper builds on come
+    first. returns how many of those digest papers' references are known (0 on an error: the counts
+    only decorate the pack, so they are left out)
     """
     try:
-        n = _refs_db().cited_counts([c['id'] for c in cards])
+        rdb = _refs_db()
+        n = rdb.cited_counts([c['id'] for c in cards])
+        by, known = rdb.cited_by(db.all_digest_pids())
     except Exception as e:
         print("offline pack, citations: %s" % (e,))
-        return
+        return 0
     for c in cards:
         c['cites'] = n.get(c['id'], 0)
+        c['digest_cites'] = len(by.get(c['id'], set()) - {c['id']})
+    return len(known)
 
 
 def offline_refs(pids):

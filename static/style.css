@@ -912,6 +912,7 @@ details.danger form { margin-top: 10px; }
 .pack-paper { margin-bottom: 10px; }
 .pack-read { display: inline-block; margin: 0 0 4px; }
 .pack-pdf { display: block; font-size: 12px; margin: 0 0 4px; }
+.pack-cites { display: block; font-size: 12px; margin: 0 0 4px; }
 .nav-unsynced { font-weight: 600; }
 
 /* a slow connection: the page is the copy kept on the device until the server's arrives (lib.js) */

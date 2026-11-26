@@ -2260,6 +2260,22 @@ class RefsDB:
                 cited.setdefault(c, set()).add(p)
         return cited, known
 
+    def cited_counts(self, pids):
+        """
+        {pid: how many papers whose references we read cite it}: every bibliography the site has
+        (digests of all users, saved papers, the graph page's), so a paper's own isn't counted
+        """
+        pids = list(dict.fromkeys(pids))
+        out = dict.fromkeys(pids, 0)
+        for i in range(0, len(pids), 500):
+            chunk = pids[i : i + 500]
+            q = (
+                'SELECT cited, count(DISTINCT citing) FROM refs WHERE cited IN '
+                f"({','.join('?' * len(chunk))}) AND citing != cited GROUP BY cited"
+            )
+            out.update(self.con.execute(q, chunk))
+        return out
+
     def references_of(self, pid):
         """(status, where from, [(pos, cited arXiv id or None, title, doi, raw)]) of one paper's
         bibliography; status None if enrich_daemon.py hasn't processed it"""

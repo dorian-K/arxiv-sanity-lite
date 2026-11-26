@@ -914,6 +914,14 @@ def test_reading_offline_pack_and_pdfs(client, corpus, monkeypatch):
             (3, None, '', '10.1/x', 'A raw one'),
         ]
         rdb.put_refs(pids[1], 'ok', rows, 'html')
+        # someone else's paper cites pids[2] twice and itself: one citation
+        other = sorted(corpus)[10]
+        rdb.put_refs(
+            other,
+            'ok',
+            [(1, pids[2], 'T', None, 'T'), (2, pids[2], 'T', None, 'T'), (3, other, 'O', None, 'O')],
+            'html',
+        )
     db.save_digest('alice', [{'tag': 'cv', 'papers': [(pids[1], 1.0)]}], 7)
     pack = client.get('/ui/offline').get_json()
     digest = next(s for s in pack['sections'] if s['key'] == 'digest')
@@ -922,6 +930,7 @@ def test_reading_offline_pack_and_pdfs(client, corpus, monkeypatch):
     assert {p['id'] for p in toread['papers']} == set(pids[1:])
     assert {p['offline_pdf'] for p in toread['papers']} == {''}
     assert next(p for p in toread['papers'] if p['id'] == pids[1])['note'] == 'for the flight'
+    assert {p['id']: p['cites'] for p in toread['papers']} == {pids[1]: 0, pids[2]: 2}  # every bibliography we have
     ids = [p['id'] for s in pack['sections'] if s['key'] != 'digest' for p in s['papers']]
     assert len(ids) == len(set(ids))  # a paper is in one section only (the digest shows them as sent)
     refs = next(p for p in toread['papers'] if p['id'] == pids[1])['refs']

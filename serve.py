@@ -2323,6 +2323,7 @@ def ui_offline():
             print("offline pack, for you: %s" % (e,))
     add('saved', 'All other saved papers', saved_rank('all')[0][:OFFLINE_SAVED_MAX], extra=True)
     states = pdf_offline_states(list(taken))
+    offline_cites([c for s in sections if s['key'] == 'toread' for c in s['papers']])
     refs = offline_refs([c['id'] for s in sections if not s['extra'] for c in s['papers']])
     for s in sections:
         for c in s['papers']:
@@ -2340,6 +2341,20 @@ def ui_offline():
         'warm': offline_files(),
         'stopwords': sorted(ENGLISH_STOP_WORDS),  # for searching the pack as the site searches
     }
+
+
+def offline_cites(cards):
+    """
+    each card's 'cites': how many papers cite it, of all whose references the site read (the To read
+    list's "Most cited" order). decorates the pack: an error leaves the counts out
+    """
+    try:
+        n = _refs_db().cited_counts([c['id'] for c in cards])
+    except Exception as e:
+        print("offline pack, citations: %s" % (e,))
+        return
+    for c in cards:
+        c['cites'] = n.get(c['id'], 0)
 
 
 def offline_refs(pids):

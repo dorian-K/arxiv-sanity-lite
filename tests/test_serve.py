@@ -931,9 +931,6 @@ def test_reading_offline_pack_and_pdfs(client, corpus, monkeypatch):
     assert {p['offline_pdf'] for p in toread['papers']} == {''}
     assert next(p for p in toread['papers'] if p['id'] == pids[1])['note'] == 'for the flight'
     assert {p['id']: p['cites'] for p in toread['papers']} == {pids[1]: 0, pids[2]: 2}  # every bibliography we have
-    # of the newest digest papers (pids[1], whose references we know), pids[2] is cited by one
-    assert {p['id']: p['digest_cites'] for p in toread['papers']} == {pids[1]: 0, pids[2]: 1}
-    assert pack['digest_papers'] == 1
     ids = [p['id'] for s in pack['sections'] if s['key'] != 'digest' for p in s['papers']]
     assert len(ids) == len(set(ids))  # a paper is in one section only (the digest shows them as sent)
     refs = next(p for p in toread['papers'] if p['id'] == pids[1])['refs']

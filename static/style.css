@@ -993,6 +993,21 @@ details.danger form { margin-top: 10px; }
 main:has(> .reader) { max-width: none; padding: 0 0 40px; }
 .reader .reader-hint { margin: 4px 8px; }
 .reader .pdf-pages { gap: 6px; }
+/* a phone held sideways: the site's header and footer go, the reader's bar becomes a column on the
+   left, so the paper gets the whole height */
+@media (orientation: landscape) and (max-height: 520px) {
+    body:has(.reader) #header, body:has(.reader) #footer, .reader .reader-hint, .reader .reader-title { display: none; }
+    main:has(> .reader) { --rail: 84px; padding: 0 0 0 var(--rail); }
+    .reader { padding: 0; }
+    .reader-bar {
+        position: fixed; top: 0; bottom: 0; left: 0; width: var(--rail); box-sizing: border-box;
+        flex-direction: column; flex-wrap: nowrap; align-items: stretch; justify-content: flex-start;
+        padding: 6px 5px; overflow-y: auto; border-bottom: none; border-right: 1px solid var(--border);
+    }
+    .reader-bar .btn { white-space: normal; text-align: center; font-size: 12px; padding: 4px; line-height: 1.25; }
+    .reader .pdf-pages { padding: 6px 0 24px; }
+    .cite-pop { left: calc(50% + var(--rail, 84px) / 2); width: min(560px, calc(100vw - 108px)); max-height: 80vh; }
+}
 
 /* the history page (account.js) */
 .history { list-style: none; padding: 0; margin: 12px 0; }

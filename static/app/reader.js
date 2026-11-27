@@ -173,6 +173,21 @@ const drawSharp = (el, page, scale) => {
     return { canvas, task };
 };
 
+// the whole screen for the paper, without the browser's bars (Android; iPhones can't, there the site
+// added to the home screen opens without them)
+const FullScreen = () => {
+    const [on, setOn] = useState(!!document.fullscreenElement);
+    useEffect(() => {
+        const set = () => setOn(!!document.fullscreenElement);
+        document.addEventListener('fullscreenchange', set);
+        return () => document.removeEventListener('fullscreenchange', set);
+    }, []);
+    if (!document.fullscreenEnabled) return null;
+    const toggle = () => Promise.resolve(on ? document.exitFullscreen() : document.documentElement.requestFullscreen({ navigationUI: 'hide' })).catch(() => {});
+    return html`<button class="btn btn-small" onClick=${toggle} aria-pressed=${on}
+        title=${on ? 'back to the browser\'s bars' : 'the whole screen for the paper, without the browser\'s bars'}>${on ? 'Exit full screen' : '⛶ Full screen'}</button>`;
+};
+
 const PdfPage = ({ doc, i, scale, onLink, dpr, view }) => {
     const ref = useRef(null);
     const vp = doc.sizes[i];
@@ -395,6 +410,7 @@ export const ReaderPage = () => {
             <button class="btn btn-small" disabled=${zoom >= ZOOMS[ZOOMS.length - 1]} onClick=${() => setZoom(ZOOMS[Math.min(ZOOMS.length - 1, ZOOMS.indexOf(zoom) + 1)])} aria-label="zoom in" title="bigger">+</button>
             <${CopyLink} href=${'/read?pid=' + encodeURIComponent(pid)} label="Copy link" title="copy a link to this PDF in the reader; it opens for you only (the PDF is on your devices, not public)" />
             <a class="btn btn-small reader-raw" href=${pdfPath(pid)} target="_blank" rel="noopener" title="the same PDF in your browser's own PDF viewer (citations can't be saved there)">Browser viewer</a>
+            <${FullScreen} />
         </div>
         <p class="hint reader-hint">Tap a citation to see the reference and save it to a tag; works offline too.</p>
         ${error ? html`<section class="card"><p class="form-error">${error}</p>

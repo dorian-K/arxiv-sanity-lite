@@ -344,10 +344,16 @@ export const Paper = ({ paper: p, quickTag, tagFit }) => {
         setRead(!was);
         tagRequest((was ? '/unread/' : '/read/') + p.id).catch(() => setRead(was));
     };
-    // on saved papers (and any already marked): the To read tab is made of saved ones
+    // on saved papers (and any already marked): the To read tab is made of saved ones. where the card
+    // has votes (the offline digest), unsaved ones show it grayed out, and a tap says to save it first
+    const [readHint, setReadHint] = useState(false);
     const readBox = canEdit && (utags.length || read) ? html`
         <label class="rel_read" title="tick it once you've read the paper: it leaves your To read list">
-            <input type="checkbox" checked=${read} onChange=${toggleRead} /> read</label>` : null;
+            <input type="checkbox" checked=${read} onChange=${toggleRead} /> read</label>`
+        : canEdit && quickTag ? html`
+        <label class="rel_read rel_read_off" title="save it with 👍 first: read marks are for saved papers (they leave To read)"
+                onClick=${() => setReadHint(true)}>
+            <input type="checkbox" disabled /> read${readHint ? html` <span class="rel_read_hint">👍 it first</span>` : null}</label>` : null;
     const unsave = tag => change('/sub/' + enc(tag), () => setUtags(u => without(u, tag)));
     const undoNeg = tag => change('/subneg/' + enc(tag), () => setNtags(n => without(n, tag)));
     const toggle = mode => setPicker(x => (x === mode ? null : mode));

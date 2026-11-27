@@ -441,6 +441,9 @@ input:focus, select:focus, .btn:focus-visible, .iconbtn:focus-visible {
 .rel_note_c { flex: 0 1 auto; max-width: 35%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--muted); cursor: help; }
 .rel_read { display: inline-flex; align-items: center; gap: 4px; flex: none; font-size: 13px; color: var(--muted); cursor: pointer; white-space: nowrap; }
 .rel_read input { margin: 0; cursor: pointer; }
+.rel_read_off { opacity: .55; cursor: help; }
+.rel_read_off input { cursor: help; }
+.rel_read_hint { color: var(--text); }
 .rel_links { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 8px; font-size: 14px; }
 
 .rel_img { float: right; margin: 0 0 8px 16px; }

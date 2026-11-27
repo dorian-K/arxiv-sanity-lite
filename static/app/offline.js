@@ -552,13 +552,26 @@ const VIEW_TIPS = {
 };
 const viewOf = path => (path === '/digest' ? 'digest' : 'all');
 
+// one tag's papers: its digest section, and in the other lists the papers saved to it (For you's
+// papers aren't saved anywhere, so it has none)
+const TAG_KEY = 'resanity-pack-tag';
+const packTag = store((() => { try { return localStorage.getItem(TAG_KEY) || ''; } catch (e) { return ''; } })());
+const setPackTag = t => { packTag.set(t); try { localStorage.setItem(TAG_KEY, t); } catch (e) { /* not remembered */ } };
+const ofTag = (sections, tag) => sections
+    .map(s => (s.tag ? (s.tag === tag ? s : null) : { ...s, papers: s.papers.filter(p => (p.utags || []).includes(tag)) }))
+    .filter(s => s && s.papers.length);
+
 const PackLists = ({ pack, onDevice, page }) => {
     const url = location.use();
     const [view, setView] = useState(viewOf(url.pathname));
     useEffect(() => setView(viewOf(url.pathname)), [url.pathname]);
     const order = packOrder.use();
-    const count = key => unique(pack.sections.filter(s => s.key === key).flatMap(s => s.papers)).length;
-    const shown = pack.sections.filter(s => view === 'all' || s.key === view);
+    const tags = [...new Set([...(pack.tags || []), ...pack.sections.map(s => s.tag).filter(Boolean)])].sort();
+    const chosen = packTag.use();
+    const tag = tags.includes(chosen) ? chosen : '';
+    const sections = tag ? ofTag(pack.sections, tag) : pack.sections;
+    const count = key => unique(sections.filter(s => s.key === key).flatMap(s => s.papers)).length;
+    const shown = sections.filter(s => view === 'all' || s.key === view);
     return html`<div class="pack-lists">
         <div class="tabrow">
             <nav class="tabs pack-tabs" aria-label="lists on this device">
@@ -571,10 +584,18 @@ const PackLists = ({ pack, onDevice, page }) => {
                     ${ORDERS.map(([k, label]) => html`<option key=${k} value=${k}>${label}</option>`)}
                 </select>
             </label>
+            ${tags.length > 1 ? html`<label class="window" title="only one tag's papers: its digest, and the papers saved to it">
+                <select aria-label="tag" value=${tag} onChange=${e => setPackTag(e.target.value)}>
+                    <option value="">All tags</option>
+                    ${tags.map(t => html`<option key=${t} value=${t}>${t}</option>`)}
+                </select>
+            </label>` : null}
         </div>
         <p class="hint pack-order-hint">${ORDERS.find(o => o[0] === order)?.[2]}${view === 'digest' && pack.digest_time
             ? `. Your digest of ${pack.digest_time}: 👍 👎 😐 work offline too and are sent when you're back online.` : '.'}</p>
-        ${view === 'digest' && !count('digest') ? html`<p class="muted">There was no digest when this device got its papers.</p>` : null}
+        ${tag && !shown.length ? html`<p class="muted">Nothing of ${tag} here${view === 'foryou' ? ' (For you isn\'t sorted by tag)' : ''}.
+            <button class="linkbtn" onClick=${() => setPackTag('')}>Show all tags</button></p>`
+        : view === 'digest' && !count('digest') ? html`<p class="muted">There was no digest when this device got its papers.</p>` : null}
         ${shown.map(s => html`<${PackSection} key=${view + s.key + s.title} s=${s} onDevice=${onDevice} order=${order} page=${page}
             alone=${view !== 'all'} />`)}
     </div>`;

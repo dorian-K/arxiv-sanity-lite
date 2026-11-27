@@ -932,6 +932,15 @@ def test_reading_offline_pack_and_pdfs(client, corpus, monkeypatch):
     assert {p['offline_pdf'] for p in toread['papers']} == {''}
     assert next(p for p in toread['papers'] if p['id'] == pids[1])['note'] == 'for the flight'
     assert {p['id']: p['cites'] for p in toread['papers']} == {pids[1]: 0, pids[2]: 2}  # every bibliography we have
+    # every card shows the count, and links it to the papers citing it, newest first
+    cards = client.get('/ui/list?rank=saved&tags=cv').get_json()['papers']
+    assert {p['id']: p['cites'] for p in cards}[pids[2]] == 2
+    times = {p: corpus[p]['_time'] for p in (pids[1], other)}
+    d = client.get(f'/ui/list?rank=citing&pid={pids[2]}').get_json()
+    assert [p['id'] for p in d['papers']] == sorted(times, key=lambda p: -times[p])
+    assert d['heading'] == 'Citing: ' + corpus[pids[2]]['title'] and 'likely cited more' in d['notice']
+    digest_cards = client.get('/ui/digest').get_json()['sections'][0]['papers']
+    assert digest_cards[0]['cites'] == 0
     ids = [p['id'] for s in pack['sections'] if s['key'] != 'digest' for p in s['papers']]
     assert len(ids) == len(set(ids))  # a paper is in one section only (the digest shows them as sent)
     refs = next(p for p in toread['papers'] if p['id'] == pids[1])['refs']

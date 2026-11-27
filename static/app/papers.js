@@ -448,6 +448,8 @@ export const Paper = ({ paper: p, quickTag, tagFit }) => {
             ${p.source_url ? html`<a href=${p.source_url} title="the paper's page on its site (needs a network)">${p.source || 'arXiv'}</a>` : null}
             <a class="rel_more" href=${'/?rank=pid&pid=' + p.id}>similar</a>
             <a href=${'/graph?pid=' + p.id} title="what it cites and what cites it, as a graph to explore">graph</a>
+            ${p.cites ? html`<a class="rel_cites" href=${'/?rank=citing&pid=' + p.id}
+                title=${`cited by at least ${p.cites} ${p.cites === 1 ? 'paper' : 'papers'}: only those whose references this site has read, so a lower bound; click for the list`}>❝ ${p.cites}+</a>` : null}
             ${canEdit && !note && !editingNote ? html`<button class="linkbtn" title="a note for yourself on this paper (only you see it)"
                 onClick=${() => setEditingNote(true)}>+ note</button>` : null}
             ${readBox}
@@ -461,6 +463,7 @@ const EMPTY = {
     down: 'Nothing marked as not for this tag.',
     tags: 'Nothing new to recommend here. Try a longer time window, or save a few more papers.',
     search: 'No papers match this search.',
+    citing: 'No paper here cites it yet, of those whose references this site has read.',
 };
 
 // search results: how well each fits the tags (/ui/fit), asked for once the results show.

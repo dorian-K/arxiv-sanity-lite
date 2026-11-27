@@ -496,7 +496,6 @@ const PackPaper = ({ p, tag, onDevice, tags, canEdit }) => html`<div class="pack
         : onDevice.get(p.id) === 'light' ? html`<a class="btn btn-small pack-read" href=${readerPath(p.id)}
             title="kept small to save space on this device: every page, with lower-quality images and standard fonts for the text">📄 Read the PDF (light copy)</a>`
         : null}
-    ${p.cites ? html`<span class="pack-cites muted" title="how many papers cite it, of all whose references this site has read: everyone's digests, saved papers and the graph page's (not all of science, so new papers are rarely cited yet)">cited by ${p.cites} ${p.cites === 1 ? 'paper' : 'papers'} here</span>` : null}
     ${onDevice.has(p.id) ? html`<span class="pack-read-more">
         <a href=${pdfPath(p.id)} target="_blank" rel="noopener" title="the same PDF in your browser's own PDF viewer (citations can't be saved there)">browser viewer</a>
         <${CopyLink} href=${readerPath(p.id)} label="copy link" className="linkbtn"
@@ -521,13 +520,13 @@ const PackSection = ({ s, onDevice, order, page, alone }) => {
 
 // the order within each list. 'here': what can be read on this device first (the full PDF, then a
 // light copy, then the rest), otherwise as the site had it: To read and Saved newest first, the
-// digest and For you best first. 'cited': To read by its papers' citations on this site (cites; the
-// other lists have none, so they stay as on the site, as do ties)
+// digest and For you best first. 'cited': by the papers' citations on this site (cites, on every
+// card; ties stay as on the site)
 const ORDERS = [
     ['here', 'PDF on this device first', 'papers you can read here, without a network, come first; otherwise as on the site'],
     ['site', 'As on the site', 'To read and Saved newest first, the digest and For you best match first'],
     ['newest', 'Newest papers first', 'by the date of the paper'],
-    ['cited', 'Most cited first', 'To read by how many papers cite it, of all whose references this site has read; other lists as on the site'],
+    ['cited', 'Most cited first', 'by how many papers cite it (❝ on the card), of all whose references this site has read'],
 ];
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const paperDate = p => { // "Nov 25 2026"

@@ -555,6 +555,21 @@ def _refs_db():
     return g.refs_db
 
 
+def add_cites(cards):
+    """
+    each card's 'cites': how many papers cite it, of all whose references the site has read
+    (everyone's digests and saved papers, the graph page's), so a lower bound; the card links it to
+    the list of them (rank=citing). decorates the cards: an error leaves the counts out
+    """
+    try:
+        n = _refs_db().cited_counts([c['id'] for c in cards])
+    except Exception as e:
+        print("counting citations failed: %s" % (e,))
+        return
+    for c in cards:
+        c['cites'] = n.get(c['id'], 0)
+
+
 def summary_info(pid):
     """the paper's AI summary for its card ({problem, approach, result, caveat, model, source}), or None"""
     if not summary.enabled():
@@ -1044,6 +1059,20 @@ def cited_rank(tags: str = ''):
     return pids, [len(here[c]) for c in pids], info
 
 
+def citing_rank(pid):
+    """(pids, scores): the papers here that cite pid, newest first (score = time), among the papers
+    whose references the site has read: the list behind a card's citation count"""
+    try:
+        with db.get_refs_db() as rdb:
+            citing = set(rdb.citing(pid)) - {pid}
+    except Exception as e:  # refs.sqlite trouble: an empty list, not a broken page
+        print("reading citations failed: %s" % (e,))
+        return [], []
+    times = get_times()[0]
+    pids = sorted((c for c in citing if c in times), key=lambda c: -times[c])
+    return pids, [times[c] for c in pids]
+
+
 _cited_counts = OrderedDict()  # (owner, tags, their state, refs and papers versions) -> how many
 _cited_counts_lock = threading.Lock()
 
@@ -1164,7 +1193,7 @@ def default_context():
     return context
 
 
-RANKS = ('search', 'tags', 'saved', 'unread', 'down', 'cited', 'pid', 'time', 'random')
+RANKS = ('search', 'tags', 'saved', 'unread', 'down', 'cited', 'citing', 'pid', 'time', 'random')
 # rankings that train a model, seconds on a big corpus unless it is cached: the app shows a
 # skeleton of the list meanwhile (static/app/papers.js)
 SLOW_RANKS = ('tags', 'pid')
@@ -1315,6 +1344,8 @@ def _ranked(
         pids, scores = saved_rank(tags=opt_tags, neg=opt_rank == 'down')
     elif opt_rank == 'unread':
         pids, scores = unread_rank(tags=opt_tags)
+    elif opt_rank == 'citing':
+        pids, scores = citing_rank(opt_pid)
     elif opt_rank == 'time':
         pids, scores = time_rank(opt_time_filter, opt_skip_have == 'yes', opt_published, limit)
         opt_time_filter, opt_skip_have, opt_published = '', 'no', False  # done
@@ -1322,7 +1353,7 @@ def _ranked(
         pids, scores = random_rank(opt_time_filter)
         opt_time_filter = ''
 
-    skip_have = opt_skip_have == 'yes' and opt_rank not in ('saved', 'unread', 'down', 'cited')
+    skip_have = opt_skip_have == 'yes' and opt_rank not in ('saved', 'unread', 'down', 'cited', 'citing')
     if opt_time_filter or skip_have or opt_published:
         keep = _filtered(pids, opt_time_filter, skip_have, published=opt_published)
         pids, scores = [pids[i] for i in keep], [scores[i] for i in keep]
@@ -1496,6 +1527,7 @@ def ui_list():
         if res['for_tag']:
             p['for_tag'] = res['for_tag'][i]  # picked by this tag (see _ranked_tags_in_turns)
         papers.append(p)
+    add_cites(papers)
     words = res['words']
     g.metric_name = f"list:{opt_rank}"  # the kind of list, for /stats
 
@@ -1539,12 +1571,13 @@ def ui_list():
         context['n_cited'] = 0
     # what the other lists are, as their page's title
     days = f" of the last {opt_time_filter} days" if opt_time_filter else ''
-    similar_to = get_papers().get_many([opt_pid]).get(opt_pid) if opt_rank == 'pid' else None
+    about = get_papers().get_many([opt_pid]).get(opt_pid) if opt_rank in ('pid', 'citing') else None
     context['heading'] = {
         'time': 'Newest papers' + (f" (last {opt_time_filter} days)" if opt_time_filter else ''),
         'random': 'Random papers' + days,
         'search': f'Search: {corrected or opt_q}',
-        'pid': f"Similar to: {similar_to['title']}" if similar_to else 'Similar papers',
+        'pid': f"Similar to: {about['title']}" if about else 'Similar papers',
+        'citing': f"Citing: {about['title']}" if about else 'Citing papers',
     }.get(opt_rank, '')
     context['gvars'] = {}
     context['gvars']['rank'] = opt_rank
@@ -1571,6 +1604,11 @@ def ui_list():
     context['gvars']['has_emb'] = features_ok and has_embeddings(load_features())
     context['gvars']['page_number'] = str(page_number)
     context['has_next'] = has_next
+    if opt_rank == 'citing':
+        notice = (
+            "Only papers whose references this site has read (papers its users saved or got in a digest, "
+            "and the graph page's), so the paper is likely cited more often than this."
+        )
     context['notice'] = notice
     context['missing'] = missing_paper(opt_q) if opt_rank == 'search' else None
     context['for_you_days'] = FOR_YOU_DAYS
@@ -2331,7 +2369,7 @@ def ui_offline():
             print("offline pack, for you: %s" % (e,))
     add('saved', 'All other saved papers', saved_rank('all')[0][:OFFLINE_SAVED_MAX], extra=True)
     states = pdf_offline_states(list(taken))
-    offline_cites([c for s in sections if s['key'] == 'toread' for c in s['papers']])
+    add_cites([c for s in sections for c in s['papers']])
     refs = offline_refs([c['id'] for s in sections if not s['extra'] for c in s['papers']])
     for s in sections:
         for c in s['papers']:
@@ -2349,20 +2387,6 @@ def ui_offline():
         'warm': offline_files(),
         'stopwords': sorted(ENGLISH_STOP_WORDS),  # for searching the pack as the site searches
     }
-
-
-def offline_cites(cards):
-    """
-    each card's 'cites': how many papers cite it, of all whose references the site read (the To read
-    list's "Most cited" order). decorates the pack: an error leaves the counts out
-    """
-    try:
-        n = _refs_db().cited_counts([c['id'] for c in cards])
-    except Exception as e:
-        print("offline pack, citations: %s" % (e,))
-        return
-    for c in cards:
-        c['cites'] = n.get(c['id'], 0)
 
 
 def offline_refs(pids):
@@ -2930,6 +2954,7 @@ def ui_digest():
                 if pid in found:
                     papers.append(dict(render_pid(pid, found[pid]), weight=score))
             sections.append({'tag': s['tag'], 'papers': papers})
+        add_cites([c for s in sections for c in s['papers']])
         context.update(
             sections=sections,
             digest_time=time.strftime('%b %d', time.localtime(d['time'])),
@@ -2970,6 +2995,7 @@ def digest_more():
     ]
     found = get_papers().get_many(p for p, _ in picked[:DIGEST_MORE])
     papers = [dict(render_pid(p, found[p]), weight=round(sc, 4)) for p, sc in picked[:DIGEST_MORE] if p in found]
+    add_cites(papers)
     return {'papers': papers, 'more': len(picked) > DIGEST_MORE}
 
 

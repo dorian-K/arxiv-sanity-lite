@@ -9,7 +9,7 @@ import { Page, PaperList, Skeleton, ViewSwitch, WordList, TagCheck, ViewBanner, 
 export const listPath = url => '/ui/list' + url.search;
 // on hover, only lists that cost nothing to make: a hovered Recommended chip would train a model
 // (and use up the user's rate limit) for a page they may never open
-const CHEAP = ['saved', 'unread', 'down', 'cited', 'time'];
+const CHEAP = ['saved', 'unread', 'down', 'cited', 'citing', 'time'];
 prefetchOnHover(url => (url.pathname === '/' && CHEAP.includes(url.searchParams.get('rank')) && !url.searchParams.get('q') ? listPath(url) : null));
 
 const TABS = ['saved', 'unread', 'down', 'cited'];

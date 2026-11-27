@@ -1898,6 +1898,9 @@ def fmt_ago(t):
     return fmt_seconds(max(0.0, time.time() - t)) + ' ago'
 
 
+STATS_ACTIVE_DAYS = 30  # /stats counts the accounts used in this many days
+
+
 @app.route('/ui/stats')
 def ui_stats():
     context = {}
@@ -1908,6 +1911,11 @@ def ui_stats():
     context['latest_paper'] = tstr(tarr.max()) if len(tarr) else 'N/A'
     tnow = time.time()
     context['new_papers'] = [(h, int((tarr > tnow - h * 3600).sum())) for h in (1, 6, 12, 24, 48, 72, 96)]
+    try:  # statistics only
+        context['users'], context['active_users'] = db.count_users(tnow - STATS_ACTIVE_DAYS * 86400)
+        context['active_days'] = STATS_ACTIVE_DAYS
+    except Exception as e:
+        print("counting users failed: %s" % (e,))
 
     # how long pages took over the last day, every worker together (aslite/metrics.py)
     try:

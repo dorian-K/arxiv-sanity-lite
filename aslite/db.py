@@ -904,6 +904,11 @@ def expire_pdfs(now=None):
     return len(gone)
 
 
+def count_users(active_since):
+    """(accounts, of them active since then) for /stats"""
+    return tuple(_query('SELECT count(*), count(CASE WHEN last_active >= ? THEN 1 END) FROM users', (active_since,))[0])
+
+
 def touch_user(name, every=300):
     """records activity; writes at most once per `every` seconds per user"""
     now = int(time.time())

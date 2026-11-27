@@ -790,6 +790,7 @@ def test_stats_show_page_speed_and_background_work(client, corpus):
     client.get('/ui/list?rank=tags&tags=cv')
     db.put_job('embed', 12.0, papers=8, left=400)
     stats = client.get('/ui/stats').get_json()
+    assert (stats['users'], stats['active_users']) == (1, 1)
     labels = [p['label'] for p in stats['pages']]
     for label in ('Search', 'Vote: save', 'Recommendations', 'Training a model (after a vote, or while a page waits)'):
         assert label in labels

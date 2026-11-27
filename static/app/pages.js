@@ -94,6 +94,13 @@ export const StatsPage = () => {
                 <div><span class="statnum">${d.latest_paper}</span><span class="muted">latest paper</span></div>
             </div>
         </section>
+        ${d.users != null ? html`<section class="card">
+            <h1>Users</h1>
+            <div class="statgrid">
+                <div><span class="statnum">${d.users}</span><span class="muted">accounts</span></div>
+                <div><span class="statnum">${d.active_users}</span><span class="muted">active in the last ${d.active_days} days</span></div>
+            </div>
+        </section>` : null}
         <section class="card">
             <h1>New papers</h1>
             <table class="stattable">
